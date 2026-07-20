@@ -140,6 +140,27 @@ export const DEFAULT_PARAMS: TaskParams = {
   transparent_output: false,
 }
 
+export interface AfternoonTeaItem {
+  displayName: string
+  tags: string[]
+}
+
+export interface AfternoonTeaOrderResult {
+  titles: string[]
+  items: AfternoonTeaItem[]
+}
+
+export interface AfternoonTeaPosterPrompt {
+  title: string
+  prompt: string
+}
+
+export interface AfternoonTeaPosterBatchItem extends AfternoonTeaPosterPrompt {
+  id: string
+  taskId?: string
+  setupError?: string
+}
+
 // ===== 输入图片（UI 层面） =====
 
 export interface InputImage {
