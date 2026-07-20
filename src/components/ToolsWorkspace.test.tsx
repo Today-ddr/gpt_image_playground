@@ -26,6 +26,7 @@ function renderForm(overrides: Partial<Parameters<typeof DishAnalysisFormView>[0
     onRemoveImage={noop}
     onUserPromptChange={noop}
     onSystemPromptChange={noop}
+    onResetSystemPrompt={noop}
     onSubmit={noop}
     onCancel={noop}
     onClear={noop}
@@ -45,6 +46,7 @@ describe('DishAnalysisFormView', () => {
     expect(html).toContain('餐品图片（可选）')
     expect(html).toContain('用户输入')
     expect(html).toContain('系统提示词')
+    expect(html).toContain('恢复默认')
     expect(html).toContain('文本输出')
     expect(html).toContain('开始解析')
   })

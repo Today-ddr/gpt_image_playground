@@ -4,23 +4,10 @@ import { useStore } from '../store'
 import { getActiveApiProfile } from '../lib/apiProfiles'
 import { analyzeDish } from '../lib/dishAnalysisApi'
 import { fileToDataUrl } from '../lib/dataUrl'
+import { DEFAULT_DISH_SYSTEM_PROMPT, DEFAULT_DISH_USER_PROMPT, DISH_SYSTEM_PROMPT_STORAGE_KEY } from '../lib/dishAnalysisPrompts'
 import { CloseIcon, ImportIcon } from './icons'
 
 export const MAX_DISH_IMAGE_BYTES = 20 * 1024 * 1024
-
-export const DEFAULT_DISH_USER_PROMPT = '请解析这张餐品图片'
-
-export const DEFAULT_DISH_SYSTEM_PROMPT = `你是专业的餐品分析助手。请根据用户提供的餐品图片和补充说明，输出清晰、实用的中文分析。
-
-请尽量包含：
-1. 餐品名称或可能的类型
-2. 可见的主要食材
-3. 可能的烹饪方式
-4. 份量与热量、蛋白质、脂肪、碳水化合物的合理估算
-5. 可能包含的常见过敏原
-6. 需要用户进一步确认的信息
-
-无法从图片确定的内容必须明确标注为估算或不确定，不要把猜测写成事实。`
 
 export function validateDishImageFile(file: Pick<File, 'type' | 'size'>) {
   if (!file.type.startsWith('image/')) throw new Error('请选择图片文件')
@@ -88,6 +75,7 @@ type DishAnalysisFormViewProps = {
   onRemoveImage: () => void
   onUserPromptChange: (value: string) => void
   onSystemPromptChange: (value: string) => void
+  onResetSystemPrompt: () => void
   onSubmit: () => void
   onCancel: () => void
   onClear: () => void
@@ -152,7 +140,12 @@ export function DishAnalysisFormView(props: DishAnalysisFormViewProps) {
           </label>
 
           <label className="block">
-            <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">系统提示词</span>
+            <div className="mb-1.5 flex items-center justify-between gap-3">
+              <span className="block text-sm text-gray-600 dark:text-gray-300">系统提示词</span>
+              <button type="button" onClick={props.onResetSystemPrompt} disabled={props.loading} className="shrink-0 text-xs text-gray-500 transition hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:text-blue-300">
+                恢复默认
+              </button>
+            </div>
             <textarea
               value={props.systemPrompt}
               onChange={(event) => props.onSystemPromptChange(event.target.value)}
@@ -212,7 +205,34 @@ export default function ToolsWorkspace() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
+  useEffect(() => {
+    try {
+      const savedPrompt = window.localStorage.getItem(DISH_SYSTEM_PROMPT_STORAGE_KEY)
+      if (savedPrompt !== null) setSystemPrompt(savedPrompt)
+    } catch {
+      // localStorage 不可用时继续使用源码默认提示词。
+    }
+  }, [])
+
   useEffect(() => () => coordinatorRef.current.dispose(), [])
+
+  const updateSystemPrompt = (value: string) => {
+    setSystemPrompt(value)
+    try {
+      window.localStorage.setItem(DISH_SYSTEM_PROMPT_STORAGE_KEY, value)
+    } catch {
+      // localStorage 不可用时只保留当前页面的编辑结果。
+    }
+  }
+
+  const resetSystemPrompt = () => {
+    setSystemPrompt(DEFAULT_DISH_SYSTEM_PROMPT)
+    try {
+      window.localStorage.removeItem(DISH_SYSTEM_PROMPT_STORAGE_KEY)
+    } catch {
+      // localStorage 不可用时仍恢复当前页面的源码默认值。
+    }
+  }
 
   const handleImageChange = async (file: File | null) => {
     if (!file) return
@@ -289,7 +309,8 @@ export default function ToolsWorkspace() {
           onImageChange={(file) => void handleImageChange(file)}
           onRemoveImage={removeImage}
           onUserPromptChange={setUserPrompt}
-          onSystemPromptChange={setSystemPrompt}
+          onSystemPromptChange={updateSystemPrompt}
+          onResetSystemPrompt={resetSystemPrompt}
           onSubmit={() => void submit()}
           onCancel={() => coordinatorRef.current.cancelRequest()}
           onClear={clear}

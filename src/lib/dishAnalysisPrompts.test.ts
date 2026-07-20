@@ -3,8 +3,9 @@ import { DEFAULT_DISH_SYSTEM_PROMPT, DEFAULT_DISH_USER_PROMPT } from './dishAnal
 
 describe('dish analysis prompts', () => {
   it('keeps editable source defaults in the project', () => {
-    expect(DEFAULT_DISH_USER_PROMPT).toBe('请解析这张餐品图片')
-    expect(DEFAULT_DISH_SYSTEM_PROMPT).toContain('餐品分析助手')
-    expect(DEFAULT_DISH_SYSTEM_PROMPT).toContain('不要把猜测写成事实')
+    expect(DEFAULT_DISH_USER_PROMPT).toBe('标题数量：5\n\n下午茶订单：')
+    expect(DEFAULT_DISH_SYSTEM_PROMPT).toContain('公司下午茶图片设计助手')
+    expect(DEFAULT_DISH_SYSTEM_PROMPT).toContain('生成 {{titleCount}} 个不同标题')
+    expect(DEFAULT_DISH_SYSTEM_PROMPT).toContain('必须只返回纯 JSON')
   })
 })
