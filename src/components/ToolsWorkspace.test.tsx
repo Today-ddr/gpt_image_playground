@@ -9,6 +9,7 @@ import {
   validateDishImageFile,
 } from './ToolsWorkspace'
 import appSource from '../App.tsx?raw'
+import workspaceSource from './ToolsWorkspace.tsx?raw'
 
 const noop = () => {}
 
@@ -44,7 +45,7 @@ describe('DishAnalysisFormView', () => {
     expect(html).toContain('餐品解析')
     expect(html).toContain('上传餐品图片')
     expect(html).toContain('餐品图片（可选）')
-    expect(html).toContain('用户输入')
+    expect(html).toContain('下午茶订单')
     expect(html).toContain('系统提示词')
     expect(html).toContain('恢复默认')
     expect(html).toContain('文本输出')
@@ -73,6 +74,11 @@ describe('dish analysis coordination', () => {
     expect(getDishAnalysisProfile(normalizeSettings({ profiles: [openai, fal], activeProfileId: openai.id }))?.id).toBe(openai.id)
     expect(getDishAnalysisProfile(normalizeSettings({ profiles: [openai, fal], activeProfileId: fal.id }))).toBeNull()
     expect(getDishAnalysisProfile(normalizeSettings({ profiles: [{ ...openai, understandingModel: '' }], activeProfileId: openai.id }))).toBeNull()
+  })
+
+  it('builds both dynamic prompts with the same default title count before submitting', () => {
+    expect(workspaceSource).toContain('systemPrompt: buildDishAnalysisSystemPrompt(systemPrompt, DEFAULT_DISH_TITLE_COUNT)')
+    expect(workspaceSource).toContain('userPrompt: buildDishAnalysisUserPrompt(userPrompt, DEFAULT_DISH_TITLE_COUNT)')
   })
 
   it('suppresses stale image conversions and duplicate requests', () => {

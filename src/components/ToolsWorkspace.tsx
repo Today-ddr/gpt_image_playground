@@ -4,7 +4,14 @@ import { useStore } from '../store'
 import { getActiveApiProfile } from '../lib/apiProfiles'
 import { analyzeDish } from '../lib/dishAnalysisApi'
 import { fileToDataUrl } from '../lib/dataUrl'
-import { DEFAULT_DISH_SYSTEM_PROMPT, DEFAULT_DISH_USER_PROMPT, DISH_SYSTEM_PROMPT_STORAGE_KEY } from '../lib/dishAnalysisPrompts'
+import {
+  buildDishAnalysisSystemPrompt,
+  buildDishAnalysisUserPrompt,
+  DEFAULT_DISH_SYSTEM_PROMPT,
+  DEFAULT_DISH_TITLE_COUNT,
+  DEFAULT_DISH_USER_PROMPT,
+  DISH_SYSTEM_PROMPT_STORAGE_KEY,
+} from '../lib/dishAnalysisPrompts'
 import { CloseIcon, ImportIcon } from './icons'
 
 export const MAX_DISH_IMAGE_BYTES = 20 * 1024 * 1024
@@ -130,7 +137,7 @@ export function DishAnalysisFormView(props: DishAnalysisFormViewProps) {
           </div>
 
           <label className="block">
-            <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">用户输入</span>
+            <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">下午茶订单</span>
             <textarea
               value={props.userPrompt}
               onChange={(event) => props.onUserPromptChange(event.target.value)}
@@ -267,8 +274,8 @@ export default function ToolsWorkspace() {
       const result = await analyzeDish({
         profile,
         imageDataUrl,
-        userPrompt,
-        systemPrompt,
+        userPrompt: buildDishAnalysisUserPrompt(userPrompt, DEFAULT_DISH_TITLE_COUNT),
+        systemPrompt: buildDishAnalysisSystemPrompt(systemPrompt, DEFAULT_DISH_TITLE_COUNT),
         signal: request.signal,
       })
       if (coordinatorRef.current.isCurrentRequest(request)) setOutput(result)

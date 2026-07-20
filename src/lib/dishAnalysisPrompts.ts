@@ -1,6 +1,8 @@
 export const DISH_SYSTEM_PROMPT_STORAGE_KEY = 'gpt-image-playground.dish-analysis.system-prompt'
 
-export const DEFAULT_DISH_USER_PROMPT = '下午茶订单：'
+export const DEFAULT_DISH_TITLE_COUNT = 5
+
+export const DEFAULT_DISH_USER_PROMPT = ''
 
 export const DEFAULT_DISH_SYSTEM_PROMPT = `你是一个公司下午茶图片设计助手。
 
@@ -107,5 +109,5 @@ export function buildDishAnalysisSystemPrompt(systemPrompt: string, count: numbe
 }
 
 export function buildDishAnalysisUserPrompt(orderText: string, count: number) {
-  return `标题数量：${count}\n\n${DEFAULT_DISH_USER_PROMPT}\n${orderText.trim()}`
+  return `标题数量：${count}\n\n下午茶订单：\n${orderText.trim()}`
 }

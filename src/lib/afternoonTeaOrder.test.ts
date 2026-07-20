@@ -33,6 +33,19 @@ ${JSON.stringify(validResult)}
     expect(() => parseAfternoonTeaOrderResult(text, 2)).toThrow('下午茶订单解析结果格式无效')
   })
 
+  it('rejects malformed JSON with a fixed message', () => {
+    expect(() => parseAfternoonTeaOrderResult('{', 2)).toThrow('下午茶订单解析结果格式无效')
+  })
+
+  it.each([
+    [[123, '暖心时光'], 'non-string title'],
+    [['  ', '暖心时光'], 'blank title'],
+  ])('rejects an invalid title: %s', (titles, _label) => {
+    const text = JSON.stringify({ ...validResult, titles })
+
+    expect(() => parseAfternoonTeaOrderResult(text, 2)).toThrow('下午茶订单解析结果格式无效')
+  })
+
   it.each([
     [['午后茶歇'], 2],
     [['午后茶歇', '暖心时光', '轻松一刻'], 2],
@@ -55,6 +68,17 @@ ${JSON.stringify(validResult)}
     const text = JSON.stringify({ ...validResult, items: [] })
 
     expect(() => parseAfternoonTeaOrderResult(text, 2)).toThrow('下午茶订单解析结果格式无效')
+  })
+
+  it('rejects a scalar item', () => {
+    const text = JSON.stringify({ ...validResult, items: [1] })
+
+    expect(() => parseAfternoonTeaOrderResult(text, 2)).toThrow('下午茶订单解析结果格式无效')
+  })
+
+  it.each([0, -1, 1.5, Number.NaN])('rejects an invalid expected title count: %s', (count) => {
+    expect(() => parseAfternoonTeaOrderResult(JSON.stringify(validResult), count))
+      .toThrow('下午茶订单解析结果格式无效')
   })
 
   it.each([
