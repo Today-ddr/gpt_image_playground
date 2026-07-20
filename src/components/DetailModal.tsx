@@ -12,6 +12,7 @@ import { downloadImageEntriesAsZip, downloadImageIds, getImageZipEntries } from 
 import { isAgentTaskPromptPending } from '../lib/taskPromptDisplay'
 import { replaceImageMentionsForApi } from '../lib/promptImageMentions'
 import { CloseIcon, CodeIcon, CopyIcon, DownloadIcon, EditIcon, LinkIcon, TrashIcon } from './icons'
+import { WandAnimation } from './wand-animation-react'
 
 import ViewportTooltip from './ViewportTooltip'
 
@@ -659,10 +660,10 @@ export default function DetailModal() {
                     />
                   ) : null}
                   {(!currentStreamPreviewSrc || !streamPreviewLoaded) && (
-                    <svg className="w-10 h-10 text-blue-400 animate-spin" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                    </svg>
+                    <div className="flex flex-col items-center gap-2">
+                      <WandAnimation size={40} className="dark:invert" />
+                      <p role="status" className="text-xs text-gray-500 dark:text-gray-400">正在生成图片</p>
+                    </div>
                   )}
                   {streamPreviewLoaded && (
                     <span className="absolute top-4 right-4 flex items-center gap-1 rounded bg-blue-500 px-2 py-0.5 text-xs font-medium text-white backdrop-blur-sm">
@@ -695,10 +696,10 @@ export default function DetailModal() {
                 </>
               )}
               {task.status === 'running' && streamPreviewLen === 0 && (
-                <svg className="w-10 h-10 text-blue-400 animate-spin" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
+                <div className="flex flex-col items-center gap-2">
+                  <WandAnimation size={40} className="dark:invert" />
+                  <p role="status" className="text-xs text-gray-500 dark:text-gray-400">正在生成图片</p>
+                </div>
               )}
             </>
           )}

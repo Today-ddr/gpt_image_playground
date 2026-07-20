@@ -1,7 +1,7 @@
 // ===== 设置 =====
 
 export type ApiMode = 'images' | 'responses'
-export type AppMode = 'gallery' | 'agent'
+export type AppMode = 'tools' | 'gallery' | 'agent'
 export type AgentApiConfigMode = 'off' | 'native' | 'hybrid'
 export type ReferenceImageEditAction = 'ask' | 'replace-reference' | 'add-mask'
 export const ZIP_DOWNLOAD_ROUTE_VALUES = [
@@ -74,6 +74,7 @@ export interface ApiProfile {
   baseUrl: string
   apiKey: string
   model: string
+  understandingModel?: string
   timeout: number
   apiMode: ApiMode
   codexCli: boolean
@@ -81,7 +82,7 @@ export interface ApiProfile {
   responseFormatB64Json?: boolean
   streamImages?: boolean
   streamPartialImages?: number
-  providerDrafts?: Partial<Record<ApiProvider, Partial<Pick<ApiProfile, 'baseUrl' | 'model' | 'apiMode' | 'codexCli' | 'apiProxy' | 'responseFormatB64Json' | 'streamImages' | 'streamPartialImages'>>>>
+  providerDrafts?: Partial<Record<ApiProvider, Partial<Pick<ApiProfile, 'baseUrl' | 'model' | 'understandingModel' | 'apiMode' | 'codexCli' | 'apiProxy' | 'responseFormatB64Json' | 'streamImages' | 'streamPartialImages'>>>>
 }
 
 export interface AppSettings {
@@ -219,7 +220,7 @@ export interface TaskRecord {
   /** 所属收藏夹 ID 列表 */
   favoriteCollectionIds?: string[]
   /** 来源模式：画廊 / Agent */
-  sourceMode?: AppMode
+  sourceMode?: Exclude<AppMode, 'tools'>
   /** Agent 对话 ID */
   agentConversationId?: string
   /** Agent 轮次 ID */

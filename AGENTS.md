@@ -8,6 +8,16 @@
 - 源码在 `src/`，构建产物由 Vite 生成，不要手动编辑 `dist/`。
 - 包管理器为 npm（有 `package-lock.json`），不要使用 yarn 或 pnpm。
 
+## AI 生成文档管理
+
+**所有 AI 生成的 plan、spec、设计文档必须统一存放在 `ai-docs/` 目录**：
+
+- ✅ `ai-docs/` 目录已在 `.gitignore` 中排除，不会上传到 git
+- ✅ 创建 plan 文档时使用路径：`ai-docs/YYYY-MM-DD-feature-name.md`
+- ✅ 创建 spec/设计文档时使用路径：`ai-docs/YYYY-MM-DD-feature-name-design.md`
+- ❌ 不要在 `docs/` 或其他位置创建 AI 生成的文档
+- 💡 `docs/` 目录仅存放人工编写的、需要上传的项目文档
+
 ## 常用命令
 
 | 操作 | 命令 |

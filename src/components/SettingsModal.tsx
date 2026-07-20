@@ -28,6 +28,10 @@ import {
 } from '../lib/apiProfiles'
 import { copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 import { requestBrowserNotificationPermission, type BrowserNotificationPermissionResult } from '../lib/browserNotification'
+import { formatStorageBytes, getBrowserStorageUsage, type BrowserStorageUsage } from '../lib/browserStorage'
+import { fetchApiModels } from '../lib/apiModels'
+import { setOpenAIProfileImportUrlParams } from '../lib/urlSettings'
+import { GITHUB_ISSUES_URL, GITHUB_REPOSITORY, GITHUB_REPOSITORY_URL } from '../lib/repository'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, type AgentApiConfigMode, type ApiProfile, type AppSettings, type CustomProviderDefinition, type ZipDownloadRoute } from '../types'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
@@ -178,6 +182,7 @@ function isPristineNewOpenAIProfile(profile: ApiProfile) {
     profile.baseUrl === DEFAULT_SETTINGS.baseUrl &&
     profile.apiKey === '' &&
     profile.model === DEFAULT_IMAGES_MODEL &&
+    !profile.understandingModel?.trim() &&
     profile.timeout === DEFAULT_SETTINGS.timeout &&
     profile.apiMode === 'images' &&
     profile.codexCli === false &&
@@ -311,6 +316,7 @@ export default function SettingsModal() {
   const profileMenuRef = useRef<HTMLDivElement>(null)
   const profileMenuTriggerRef = useRef<HTMLButtonElement>(null)
   const dataTransferToastAtRef = useRef(0)
+  const browserStorageUsageRequestRef = useRef(0)
 
   const profileImportUrlTooltipTimerRef = useRef<number | null>(null)
   const duplicateProfileTooltipTimerRef = useRef<number | null>(null)
@@ -343,6 +349,24 @@ export default function SettingsModal() {
   const [isExportingData, setIsExportingData] = useState(false)
   const [isImportingData, setIsImportingData] = useState(false)
   const [isImportingJson, setIsImportingJson] = useState(false)
+  const [browserStorageUsage, setBrowserStorageUsage] = useState<BrowserStorageUsage | null>()
+  const browserStorageDisplayPercentage = browserStorageUsage?.percentage == null
+    ? null
+    : browserStorageUsage.percentage < 0.1
+      ? browserStorageUsage.percentage
+      : Math.round(browserStorageUsage.percentage * 10) / 10
+  const browserStoragePercentageLabel = browserStorageDisplayPercentage === null
+    ? null
+    : browserStorageDisplayPercentage === 0
+      ? '0%'
+      : browserStorageDisplayPercentage < 0.1
+        ? '<0.1%'
+        : `${browserStorageDisplayPercentage}%`
+  const browserStoragePercentageColor = browserStorageDisplayPercentage !== null && browserStorageDisplayPercentage >= 90
+    ? 'bg-red-500'
+    : browserStorageDisplayPercentage !== null && browserStorageDisplayPercentage >= 70
+      ? 'bg-amber-400'
+      : 'bg-blue-500'
   const [draggedProfileId, setDraggedProfileId] = useState<string | null>(null)
   const [dragOverProfileId, setDragOverProfileId] = useState<string | null>(null)
   const [dragDropPosition, setDragDropPosition] = useState<'before' | 'after' | null>(null)
@@ -359,6 +383,8 @@ export default function SettingsModal() {
   const profileTouchDragRef = useRef<{ id: string, startX: number, startY: number, moved: boolean } | null>(null)
   const [copyImportUrlProfile, setCopyImportUrlProfile] = useState<ApiProfile | null>(null)
   const [copyImportUrlOptions, setCopyImportUrlOptions] = useState<CopyImportUrlOptions>(readCopyImportUrlOptions)
+  const [modelOptionsByProfile, setModelOptionsByProfile] = useState<Record<string, string[]>>({})
+  const [modelListStateByProfile, setModelListStateByProfile] = useState<Record<string, { loading: boolean, message: string, error: boolean }>>({})
 
   const apiProxyConfig = readClientDevProxyConfig()
   const apiProxyAvailable = isApiProxyAvailable(apiProxyConfig)
@@ -366,6 +392,10 @@ export default function SettingsModal() {
   const defaultConfigOnly = isDefaultConfigOnlyEnabled()
   const activeProfile = draft.profiles.find((profile) => profile.id === draft.activeProfileId) ?? draft.profiles[0] ?? getActiveApiProfile(draft)
   const activeProviderIsOpenAICompatible = isOpenAICompatibleProvider(draft, activeProfile.provider)
+  const activeProfileUsesImagesApi = activeProviderIsOpenAICompatible && activeProfile.apiMode === 'images'
+  const activeModelOptions = modelOptionsByProfile[activeProfile.id] ?? []
+  const activeModelListState = modelListStateByProfile[activeProfile.id]
+  const activeModelListId = `api-model-options-${activeProfile.id}`
   const activeProviderUsesApiUrl = activeProviderIsOpenAICompatible || activeProfile.provider === 'fal'
   const activeCustomProvider = draft.customProviders.find((provider) => provider.id === activeProfile.provider)
   const activeProfileApiProxyEligible = isProfileApiProxyEligible(draft, activeProfile)
@@ -432,6 +462,14 @@ export default function SettingsModal() {
 
   const wasSettingsOpenRef = useRef(false)
 
+  const refreshBrowserStorageUsage = useCallback(async () => {
+    const requestId = ++browserStorageUsageRequestRef.current
+    setBrowserStorageUsage(undefined)
+    const usage = await getBrowserStorageUsage()
+    if (requestId !== browserStorageUsageRequestRef.current) return
+    setBrowserStorageUsage(usage)
+  }, [])
+
   useEffect(() => {
     if (!showSettings) {
       wasSettingsOpenRef.current = false
@@ -454,6 +492,8 @@ export default function SettingsModal() {
       })),
     })
     setDraft(nextDraft)
+    setModelOptionsByProfile({})
+    setModelListStateByProfile({})
     setTimeoutInput(String(getActiveApiProfile(nextDraft).timeout))
     setAgentMaxToolRoundsInput(String(nextDraft.agentMaxToolRounds))
   }, [apiProxyAvailable, apiProxyLocked, showSettings, settings, reusedTaskApiProfileId])
@@ -465,6 +505,11 @@ export default function SettingsModal() {
   useEffect(() => {
     if (showSettings && settingsTabRequest) setActiveTab(settingsTabRequest)
   }, [settingsTabRequest, showSettings])
+
+  useEffect(() => {
+    if (!showSettings || activeTab !== 'data') return
+    void refreshBrowserStorageUsage()
+  }, [showSettings, activeTab, refreshBrowserStorageUsage])
 
   const updateProfileMenuMaxHeight = useCallback(() => {
     if (!profileMenuTriggerRef.current) return
@@ -555,6 +600,7 @@ export default function SettingsModal() {
         name: profile.name.trim() || (profile.id === DEFAULT_OPENAI_PROFILE_ID ? '默认' : '新配置'),
         baseUrl: normalizedBaseUrl,
         model: profile.model.trim() || defaultModel,
+        understandingModel: profile.understandingModel?.trim() ?? '',
         timeout: Number(profile.timeout) || DEFAULT_SETTINGS.timeout,
         apiProxy: nextApiProxy,
         codexCli: profile.provider === 'openai' ? profile.codexCli : false,
@@ -602,9 +648,11 @@ export default function SettingsModal() {
       } else if (!options.includeApiKey && options.useNewApiKey) {
         url.searchParams.set('apiKey', '{key}')
       }
-      url.searchParams.set('apiMode', profile.apiMode)
       const model = profile.model.trim() || getDefaultModelForMode(profile.apiMode)
-      url.searchParams.set('model', !options.includeApiKey && options.useNewApiModel ? '{model}' : model)
+      setOpenAIProfileImportUrlParams(url.searchParams, {
+        ...profile,
+        model: !options.includeApiKey && options.useNewApiModel ? '{model}' : model,
+      })
       if (profile.name.trim()) url.searchParams.set('profileName', profile.name.trim())
       if (profile.codexCli) url.searchParams.set('codexCli', 'true')
       if (profile.streamImages !== DEFAULT_SETTINGS.streamImages) url.searchParams.set('streamImages', String(Boolean(profile.streamImages)))
@@ -674,6 +722,36 @@ export default function SettingsModal() {
   const commitActiveProfilePatch = (patch: Partial<ApiProfile>) => {
     const nextDraft = getDraftWithActiveProfilePatch(patch)
     commitSettings(nextDraft)
+  }
+
+  const loadActiveProfileModels = async () => {
+    const profileId = activeProfile.id
+    setModelListStateByProfile((states) => ({
+      ...states,
+      [profileId]: { loading: true, message: '正在获取模型列表...', error: false },
+    }))
+
+    try {
+      const models = await fetchApiModels(activeProfile)
+      setModelOptionsByProfile((options) => ({ ...options, [profileId]: models }))
+      setModelListStateByProfile((states) => ({
+        ...states,
+        [profileId]: {
+          loading: false,
+          message: models.length ? `已获取 ${models.length} 个模型` : '接口未返回可用模型',
+          error: false,
+        },
+      }))
+    } catch (err) {
+      setModelListStateByProfile((states) => ({
+        ...states,
+        [profileId]: {
+          loading: false,
+          message: err instanceof Error ? err.message : '获取模型列表失败',
+          error: true,
+        },
+      }))
+    }
   }
 
   const handleClose = () => {
@@ -819,6 +897,7 @@ export default function SettingsModal() {
           setDraft(nextDraft)
           setTimeoutInput(String(getActiveApiProfile(nextDraft).timeout))
           setShowProfileMenu(false)
+          void refreshBrowserStorageUsage()
         }
       } finally {
         setIsImportingData(false)
@@ -833,6 +912,7 @@ export default function SettingsModal() {
     setDraft(nextDraft)
     setTimeoutInput(String(getActiveApiProfile(nextDraft).timeout))
     setShowProfileMenu(false)
+    await refreshBrowserStorageUsage()
   }
 
   const createNewProfile = () => {
@@ -1659,17 +1739,35 @@ export default function SettingsModal() {
 
               {/* 7. 模型 ID（紧跟接口选择） */}
               <label className="block">
-                <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">
-                  模型 ID
-                </span>
+                <div className="mb-1.5 flex items-center justify-between gap-3">
+                  <span className="block text-sm text-gray-600 dark:text-gray-300">
+                    {activeProfileUsesImagesApi ? '生图模型 ID' : '模型 ID'}
+                  </span>
+                  {activeProviderIsOpenAICompatible && (
+                    <button
+                      type="button"
+                      onClick={() => void loadActiveProfileModels()}
+                      disabled={activeModelListState?.loading}
+                      className="shrink-0 text-xs font-medium text-blue-500 transition hover:text-blue-600 disabled:cursor-wait disabled:opacity-60 dark:text-blue-400 dark:hover:text-blue-300"
+                    >
+                      {activeModelListState?.loading ? '获取中...' : '获取模型列表'}
+                    </button>
+                  )}
+                </div>
                 <input
                   value={activeProfile.model}
                   onChange={(e) => updateActiveProfile({ model: e.target.value })}
                   onBlur={(e) => commitActiveProfilePatch({ model: e.target.value })}
                   type="text"
+                  list={activeModelOptions.length ? activeModelListId : undefined}
                   placeholder={activeProfile.provider === 'fal' ? DEFAULT_FAL_MODEL : getDefaultModelForMode(activeProfile.apiMode ?? DEFAULT_SETTINGS.apiMode)}
                   className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
                 />
+                {activeModelListState && (
+                  <div data-selectable-text className={`mt-1.5 text-xs ${activeModelListState.error ? 'text-red-500 dark:text-red-400' : 'text-gray-500 dark:text-gray-500'}`}>
+                    {activeModelListState.message}
+                  </div>
+                )}
                 <div data-selectable-text className="mt-1.5 text-xs text-gray-500 dark:text-gray-500">
                   {activeProfile.provider === 'fal' ? (
                     <>当前适配 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">{DEFAULT_FAL_MODEL}</code>。</>
@@ -1685,6 +1783,32 @@ export default function SettingsModal() {
                   )}
                 </div>
               </label>
+
+              {activeProfileUsesImagesApi && (
+                <label className="block">
+                  <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">
+                    语义理解/多模态模型 ID
+                  </span>
+                  <input
+                    value={activeProfile.understandingModel ?? ''}
+                    onChange={(e) => updateActiveProfile({ understandingModel: e.target.value })}
+                    onBlur={(e) => commitActiveProfilePatch({ understandingModel: e.target.value })}
+                    type="text"
+                    list={activeModelOptions.length ? activeModelListId : undefined}
+                    placeholder="例如 gpt-4.1-mini"
+                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                  />
+                  <div data-selectable-text className="mt-1.5 text-xs text-gray-500 dark:text-gray-500">
+                    复用当前配置的 API URL、API Key 和代理设置，暂不参与生图或 Agent 请求。
+                  </div>
+                </label>
+              )}
+
+              {activeModelOptions.length > 0 && (
+                <datalist id={activeModelListId}>
+                  {activeModelOptions.map((model) => <option key={model} value={model} />)}
+                </datalist>
+              )}
 
               {/* 8. 流式传输 + 中间步骤图像数 */}
               {activeProfile.provider === 'openai' && (
@@ -1803,6 +1927,71 @@ export default function SettingsModal() {
                   <div className="text-[13px] leading-relaxed text-gray-500 dark:text-gray-400">
                     所有的配置、任务和生成的图片均仅保存在您的浏览器本地（除非您使用的服务商存储了它们）。如果您需要清理浏览器站点数据、重置浏览器或使用其他设备，请先导出备份。
                   </div>
+                </div>
+
+                <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm dark:border-white/[0.06] dark:bg-white/[0.02]">
+                  <h4 className="text-sm font-bold text-gray-800 dark:text-gray-100">浏览器存储</h4>
+
+                  {browserStorageUsage === undefined ? (
+                    <div className="mt-4 grid grid-cols-2 gap-4" role="status" aria-label="正在读取浏览器存储占用">
+                      <div className="animate-pulse">
+                        <div className="h-3 w-12 rounded bg-gray-200/80 dark:bg-white/[0.08]" />
+                        <div className="mt-2 h-6 w-20 rounded bg-gray-200/80 dark:bg-white/[0.08]" />
+                      </div>
+                      <div className="animate-pulse">
+                        <div className="h-3 w-16 rounded bg-gray-200/80 dark:bg-white/[0.08]" />
+                        <div className="mt-2 h-6 w-20 rounded bg-gray-200/80 dark:bg-white/[0.08]" />
+                      </div>
+                    </div>
+                  ) : browserStorageUsage === null ? (
+                    <p className="mt-3 text-xs text-gray-500 dark:text-gray-400">当前浏览器无法提供存储占用信息</p>
+                  ) : (
+                    <>
+                      <div className={`mt-4 grid gap-4 ${browserStorageUsage.quota === null ? '' : 'grid-cols-2'}`}>
+                        <div>
+                          <div className="text-xs text-gray-500 dark:text-gray-400">已使用</div>
+                          <div className="mt-1 text-xl font-semibold text-gray-800 dark:text-gray-100">
+                            {formatStorageBytes(browserStorageUsage.usage)}
+                          </div>
+                        </div>
+                        {browserStorageUsage.quota !== null && (
+                          <div>
+                            <div className="text-xs text-gray-500 dark:text-gray-400">浏览器配额</div>
+                            <div className="mt-1 text-base font-medium text-gray-700 dark:text-gray-200">
+                              {formatStorageBytes(browserStorageUsage.quota)}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {browserStorageUsage.quota !== null && browserStorageUsage.percentage !== null && (
+                        <div className="mt-4">
+                          <div className="mb-1.5 flex items-center justify-between gap-3 text-xs text-gray-500 dark:text-gray-400">
+                            <span>占用比例</span>
+                            <span>{browserStoragePercentageLabel}</span>
+                          </div>
+                          <div
+                            className="h-1.5 overflow-hidden rounded-full bg-gray-100 dark:bg-white/[0.06]"
+                            role="progressbar"
+                            aria-label="浏览器存储占用比例"
+                            aria-valuemin={0}
+                            aria-valuemax={100}
+                            aria-valuenow={browserStorageUsage.percentage}
+                            aria-valuetext={browserStoragePercentageLabel ?? undefined}
+                          >
+                            <div
+                              className={`h-full rounded-full ${browserStoragePercentageColor}`}
+                              style={{ width: `${browserStorageUsage.percentage}%` }}
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  <p className="mt-4 text-xs leading-relaxed text-gray-500 dark:text-gray-400">
+                    包含任务、原图、缩略图、配置及本站缓存。数据由浏览器估算，实际空间可能变化。
+                  </p>
                 </div>
 
                 <div className="rounded-2xl border border-gray-100 bg-white p-4 dark:border-white/[0.06] dark:bg-white/[0.02] space-y-4 shadow-sm">
@@ -1954,7 +2143,7 @@ export default function SettingsModal() {
                   > 本站点基于开源项目 [GPT Image Playground](https://github.com/CookSleep/gpt_image_playground) ([MIT](https://github.com/CookSleep/gpt_image_playground/blob/main/LICENSE)) 修改。
                 */}
                 <a
-                  href="https://github.com/CookSleep/gpt_image_playground"
+                  href={GITHUB_REPOSITORY_URL}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="group flex flex-col items-center outline-none"
@@ -1962,9 +2151,9 @@ export default function SettingsModal() {
                   <div className="mb-5 flex h-[88px] w-[88px] items-center justify-center rounded-full border border-gray-200/80 bg-gray-50/50 text-gray-800 transition-colors group-hover:bg-gray-100 dark:border-white/[0.08] dark:bg-white/[0.02] dark:text-gray-100 dark:group-hover:bg-white/[0.06]">
                     <GithubIcon className="h-11 w-11" />
                   </div>
-                  <h4 className="text-[17px] font-bold text-gray-800 dark:text-gray-100">GPT Image Playground</h4>
+                  <h4 className="text-center text-[17px] font-bold text-gray-800 dark:text-gray-100">{GITHUB_REPOSITORY}</h4>
                   <p className="mt-1.5 text-[13px] text-gray-500 transition-colors group-hover:text-gray-700 dark:text-gray-400 dark:group-hover:text-gray-300">
-                    @CookSleep
+                    GitHub 仓库
                   </p>
                 </a>
                 
@@ -1974,7 +2163,7 @@ export default function SettingsModal() {
 
                 <div className="flex flex-wrap items-center justify-center gap-3">
                   <a
-                    href="https://github.com/CookSleep/gpt_image_playground/issues"
+                    href={GITHUB_ISSUES_URL}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="flex items-center justify-center gap-2 whitespace-nowrap rounded-xl bg-gray-100/80 px-5 py-2.5 text-sm font-medium text-gray-700 transition-all hover:bg-gray-200 hover:text-gray-900 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1] dark:hover:text-white"
@@ -1983,17 +2172,6 @@ export default function SettingsModal() {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
                     </svg>
                     反馈问题
-                  </a>
-                  <a
-                    href="https://www.ifdian.net/a/cooksleep"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center justify-center gap-2 whitespace-nowrap rounded-xl bg-gray-100/80 px-5 py-2.5 text-sm font-medium text-gray-700 transition-all hover:bg-gray-200 hover:text-gray-900 dark:bg-white/[0.06] dark:text-gray-300 dark:hover:bg-white/[0.1] dark:hover:text-white"
-                  >
-                    <svg className="h-4 w-4 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
-                    </svg>
-                    赞助作者
                   </a>
                 </div>
               </div>

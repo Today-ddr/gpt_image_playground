@@ -41,6 +41,30 @@ describe('validateApiProfile', () => {
   })
 })
 
+describe('understanding model profiles', () => {
+  it('normalizes legacy profiles with an empty understanding model', () => {
+    expect(normalizeSettings({}).profiles[0].understandingModel).toBe('')
+    expect(normalizeSettings({
+      profiles: [createDefaultOpenAIProfile({ understandingModel: '  gpt-4.1-mini  ' })],
+    }).profiles[0].understandingModel).toBe('gpt-4.1-mini')
+  })
+
+  it('restores the understanding model after switching providers', () => {
+    const openai = createDefaultOpenAIProfile({ understandingModel: 'gpt-4.1-mini' })
+    const restored = switchApiProfileProvider(switchApiProfileProvider(openai, 'fal'), 'openai')
+
+    expect(restored.understandingModel).toBe('gpt-4.1-mini')
+  })
+
+  it('keeps profiles with different understanding models distinct', () => {
+    const first = createDefaultOpenAIProfile({ id: 'first', understandingModel: 'gpt-4.1-mini' })
+    const second = createDefaultOpenAIProfile({ id: 'second', understandingModel: 'gpt-4.1' })
+    const merged = mergeImportedSettings(DEFAULT_SETTINGS, { profiles: [first, second] })
+
+    expect(merged.profiles).toHaveLength(2)
+  })
+})
+
 describe('default API URL env', () => {
   it('applies shared URL params from VITE_DEFAULT_API_URL to the default profile', async () => {
     vi.resetModules()

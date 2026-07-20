@@ -15,6 +15,7 @@ export interface DefaultApiUrlPatch {
   apiKey?: string
   apiMode?: ApiMode
   model?: string
+  understandingModel?: string
   name?: string
   codexCli?: boolean
   streamImages?: boolean
@@ -35,6 +36,7 @@ export function parseDefaultApiUrl(rawUrl: string): DefaultApiUrlPatch {
     const apiKeyParam = parsed.searchParams.get('apiKey')
     const apiModeParam = parsed.searchParams.get('apiMode')
     const modelParam = parsed.searchParams.get('model')
+    const understandingModelParam = parsed.searchParams.get('understandingModel')
     const profileNameParam = parsed.searchParams.get('profileName')
     const codexCliParam = parsed.searchParams.get('codexCli')
     const streamImagesParam = parsed.searchParams.get('streamImages')
@@ -44,6 +46,7 @@ export function parseDefaultApiUrl(rawUrl: string): DefaultApiUrlPatch {
     if (apiKeyParam !== null) patch.apiKey = apiKeyParam.trim()
     if (apiModeParam === 'images' || apiModeParam === 'responses') patch.apiMode = apiModeParam
     if (modelParam !== null && modelParam.trim()) patch.model = modelParam.trim()
+    if (understandingModelParam !== null) patch.understandingModel = understandingModelParam.trim()
     if (profileNameParam?.trim()) patch.name = profileNameParam.trim()
     if (codexCliParam !== null) patch.codexCli = codexCliParam.trim().toLowerCase() === 'true'
     if (streamImagesParam !== null) patch.streamImages = streamImagesParam.trim().toLowerCase() === 'true'

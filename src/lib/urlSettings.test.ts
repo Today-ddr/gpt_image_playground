@@ -6,7 +6,7 @@ import {
   DEFAULT_SETTINGS,
   normalizeSettings,
 } from './apiProfiles'
-import { buildSettingsFromUrlParams, clearUrlSettingParams, hasUrlSettingParams } from './urlSettings'
+import { buildSettingsFromUrlParams, clearUrlSettingParams, hasUrlSettingParams, setOpenAIProfileImportUrlParams } from './urlSettings'
 
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -20,6 +20,23 @@ async function importDefaultConfigOnlyUrlSettings() {
 }
 
 describe('URL settings params', () => {
+  it('writes and reads the understanding model for OpenAI profile URLs', () => {
+    const params = new URLSearchParams()
+    setOpenAIProfileImportUrlParams(params, createDefaultOpenAIProfile({
+      model: 'gpt-image-1',
+      understandingModel: 'gpt-4.1-mini',
+    }))
+
+    expect(params.get('understandingModel')).toBe('gpt-4.1-mini')
+
+    const current = normalizeSettings(DEFAULT_SETTINGS)
+    const next = normalizeSettings({
+      ...current,
+      ...buildSettingsFromUrlParams(current, new URLSearchParams(`apiUrl=https://api.example.com/v1&apiKey=test-key&${params}`)),
+    })
+    expect(next.profiles.find((profile) => profile.id === next.activeProfileId)?.understandingModel).toBe('gpt-4.1-mini')
+  })
+
   it('creates and activates a new OpenAI profile for legacy URL params', () => {
     const current = normalizeSettings(DEFAULT_SETTINGS)
     const next = normalizeSettings({

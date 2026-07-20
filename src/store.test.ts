@@ -1835,6 +1835,29 @@ describe('agent draft lifecycle', () => {
     expect(state.agentEditingRoundId).toBeNull()
   })
 
+  it('keeps drafts isolated when switching from agent mode to tools', () => {
+    const galleryPrompt = 'gallery draft'
+    useStore.setState({
+      galleryInputDraft: {
+        prompt: galleryPrompt,
+        inputImages: [imageB],
+        maskDraft: null,
+        maskEditorImageId: null,
+      },
+    })
+
+    useStore.getState().setAppMode('tools')
+
+    const state = useStore.getState()
+    expect(state.appMode).toBe('tools')
+    expect(state.prompt).toBe(galleryPrompt)
+    expect(state.inputImages).toEqual([imageB])
+    expect(state.agentInputDrafts['conversation-a']).toMatchObject({
+      prompt: draftState.prompt,
+      inputImages: draftState.inputImages,
+    })
+  })
+
   it('keeps the gallery draft when switching into agent mode and back', () => {
     const galleryPrompt = `画廊 ${getSelectedImageMentionLabel(0)} 草稿`
     useStore.setState({
