@@ -32,7 +32,6 @@ export async function analyzeDish(opts: AnalyzeDishOptions): Promise<string> {
   if (!profile.understandingModel?.trim()) throw new Error('请先配置语义理解/多模态模型 ID')
   if (!profile.baseUrl.trim() && !useApiProxy) throw new Error('请先填写 API URL')
   if (!profile.apiKey.trim()) throw new Error('请先填写 API Key')
-  if (!opts.imageDataUrl.trim()) throw new Error('请先上传餐品图片')
   if (!opts.userPrompt.trim()) throw new Error('请输入用户内容')
   if (!opts.systemPrompt.trim()) throw new Error('请输入系统提示词')
   if (opts.signal?.aborted) throw new Error('餐品解析已取消')
@@ -47,6 +46,13 @@ export async function analyzeDish(opts: AnalyzeDishOptions): Promise<string> {
   opts.signal?.addEventListener('abort', abortFromCaller, { once: true })
 
   try {
+    const userContent: Array<Record<string, unknown>> = [
+      { type: 'text', text: opts.userPrompt.trim() },
+    ]
+    if (opts.imageDataUrl.trim()) {
+      userContent.push({ type: 'image_url', image_url: { url: opts.imageDataUrl } })
+    }
+
     const response = await fetch(buildApiUrl(profile.baseUrl, 'chat/completions', proxyConfig, useApiProxy), {
       method: 'POST',
       headers: {
@@ -59,10 +65,7 @@ export async function analyzeDish(opts: AnalyzeDishOptions): Promise<string> {
           { role: 'system', content: opts.systemPrompt.trim() },
           {
             role: 'user',
-            content: [
-              { type: 'text', text: opts.userPrompt.trim() },
-              { type: 'image_url', image_url: { url: opts.imageDataUrl } },
-            ],
+            content: userContent,
           },
         ],
       }),

@@ -42,6 +42,7 @@ describe('DishAnalysisFormView', () => {
     const html = renderForm()
     expect(html).toContain('餐品解析')
     expect(html).toContain('上传餐品图片')
+    expect(html).toContain('餐品图片（可选）')
     expect(html).toContain('用户输入')
     expect(html).toContain('系统提示词')
     expect(html).toContain('文本输出')

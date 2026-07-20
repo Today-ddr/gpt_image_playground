@@ -111,7 +111,7 @@ export function DishAnalysisFormView(props: DishAnalysisFormViewProps) {
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(320px,0.9fr)]">
         <section className="min-w-0 space-y-5" aria-label="餐品解析输入">
           <div>
-            <div className="mb-1.5 text-sm text-gray-600 dark:text-gray-300">餐品图片</div>
+            <div className="mb-1.5 text-sm text-gray-600 dark:text-gray-300">餐品图片（可选）</div>
             {props.imageDataUrl ? (
               <div className="relative overflow-hidden rounded-md border border-gray-200 bg-gray-50 dark:border-white/[0.08] dark:bg-white/[0.03]">
                 <img src={props.imageDataUrl} alt="待解析餐品" className="aspect-[4/3] w-full object-contain" />

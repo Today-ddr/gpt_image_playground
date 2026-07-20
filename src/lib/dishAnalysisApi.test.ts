@@ -56,6 +56,18 @@ describe('analyzeDish', () => {
     await expect(analyzeDish(request)).resolves.toBe('第一段\n第二段')
   })
 
+  it('allows text-only analysis without sending an image part', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: '文字分析结果' } }],
+    }), { status: 200 })))
+
+    await expect(analyzeDish({ ...request, imageDataUrl: '' })).resolves.toBe('文字分析结果')
+    const init = vi.mocked(fetch).mock.calls[0][1] as RequestInit
+    expect(JSON.parse(String(init.body)).messages[1].content).toEqual([
+      { type: 'text', text: '分析这份午餐' },
+    ])
+  })
+
   it.each([
     [createDefaultFalProfile({ apiKey: 'fal-key' }), '当前 API 配置不支持餐品解析'],
     [createDefaultOpenAIProfile({ apiKey: 'test-key', understandingModel: '' }), '请先配置语义理解/多模态模型 ID'],
@@ -68,7 +80,6 @@ describe('analyzeDish', () => {
   })
 
   it.each([
-    ['imageDataUrl', '', '请先上传餐品图片'],
     ['userPrompt', ' ', '请输入用户内容'],
     ['systemPrompt', '', '请输入系统提示词'],
   ] as const)('validates %s before sending a request', async (key, value, message) => {
