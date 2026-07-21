@@ -15,6 +15,8 @@ interface Props {
   onEditOutputs: () => void
   onDelete: () => void
   onClick: (e: React.MouseEvent | React.TouchEvent) => void
+  onRetry?: (task: TaskRecord) => void
+  retryDisabled?: boolean
   isSelected?: boolean
   disableSwipe?: boolean
 }
@@ -64,6 +66,8 @@ export default function TaskCard({
   onEditOutputs,
   onDelete,
   onClick,
+  onRetry,
+  retryDisabled,
   isSelected,
   disableSwipe,
 }: Props) {
@@ -528,7 +532,7 @@ export default function TaskCard({
               </div>
             ) : (
               <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed line-clamp-3">
-                {task.prompt || '(无提示词)'}
+                {(task.afternoonTeaBatchId && task.afternoonTeaTitle?.trim()) || task.prompt || '(无提示词)'}
               </p>
             )}
           </div>
@@ -617,8 +621,9 @@ export default function TaskCard({
               {((task.status === 'error' && !isFalReconnecting) || settings.alwaysShowRetryButton) && (
                 <TaskActionButton
                   tooltip="重试任务"
-                  onClick={() => retryTask(task)}
-                  className="p-1.5 rounded-md hover:bg-blue-50 dark:hover:bg-blue-950/30 text-gray-400 hover:text-blue-500 transition"
+                  onClick={retryDisabled ? undefined : () => onRetry ? onRetry(task) : retryTask(task)}
+                  className="p-1.5 rounded-md hover:bg-blue-50 dark:hover:bg-blue-950/30 text-gray-400 hover:text-blue-500 transition disabled:opacity-30"
+                  disabled={retryDisabled}
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />

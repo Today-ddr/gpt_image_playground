@@ -1,10 +1,30 @@
 import { describe, expect, it } from 'vitest'
+import { strToU8, zipSync } from 'fflate'
 
-import type { AppSettings, StoredImage, StoredImageThumbnail, TaskParams, TaskRecord } from '../types'
-import { buildExportZip, getExportImageEstimatedBytes, getExportZipPlan, readExportZip, readExportZipFileAsDataUrl } from './exportZip'
+import type { AfternoonTeaConversation, AppSettings, StoredImage, StoredImageThumbnail, TaskParams, TaskRecord } from '../types'
+import { buildExportZip, getExportImageEstimatedBytes, getExportZipPlan, readExportZip, readExportZipFileAsDataUrl, readExportZipManifest } from './exportZip'
 
 describe('exportZip', () => {
-  it('builds and reads backup zip entries without changing manifest shape', async () => {
+  const afternoonTeaConversation = (overrides: Partial<AfternoonTeaConversation> = {}): AfternoonTeaConversation => ({
+    id: 'afternoon-tea-a',
+    title: '下午茶会话',
+    createdAt: 1,
+    updatedAt: 2,
+    sourceImageId: 'tea-source-image',
+    sourceImageName: 'tea.png',
+    orderText: '两杯茶',
+    titleCount: 5,
+    systemPrompt: '系统提示词',
+    analysisSystemPromptSnapshot: null,
+    analysisUserPromptSnapshot: null,
+    orderResult: null,
+    posterItems: [],
+    batchStartedAt: null,
+    batchFinishedAt: null,
+    ...overrides,
+  })
+
+  it('builds and reads v4 backup zip entries with afternoon tea conversations', async () => {
     const task: TaskRecord = {
       id: 'task-1',
       prompt: '提示词',
@@ -49,11 +69,13 @@ describe('exportZip', () => {
       favoriteCollections: [],
       defaultFavoriteCollectionId: null,
       agentConversations: [],
+      afternoonTeaConversations: [afternoonTeaConversation()],
     })
     const parsed = await readExportZip(bytes)
 
     expect(parsed.manifest).toEqual(manifest)
-    expect(parsed.manifest.version).toBe(3)
+    expect(parsed.manifest.version).toBe(4)
+    expect(parsed.manifest.afternoonTeaConversations).toEqual([afternoonTeaConversation()])
     expect(parsed.manifest.exportedAt).toBe(new Date(1700000001000).toISOString())
     expect(parsed.manifest.imageFiles?.['img-1']).toEqual({
       path: 'images/task-task-1-input.png',
@@ -74,6 +96,23 @@ describe('exportZip', () => {
     expect(readExportZipFileAsDataUrl(parsed.files, 'images/task-task-1.png')).toBe(images[1].dataUrl)
     expect(readExportZipFileAsDataUrl(parsed.files, 'images/task-task-1-partial.png')).toBe(images[2].dataUrl)
     expect(readExportZipFileAsDataUrl(parsed.files, 'thumbnails/task-task-1-input.jpeg')).toBe(thumbnail.thumbnailDataUrl)
+  })
+
+  it('reads v3 backups without afternoon tea conversations', async () => {
+    const bytes = zipSync({
+      'manifest.json': strToU8(JSON.stringify({
+        version: 3,
+        exportedAt: new Date(1700000001000).toISOString(),
+        tasks: [],
+        imageFiles: {},
+      })),
+    })
+    const manifest = await readExportZipManifest(bytes)
+    const parsed = await readExportZip(bytes)
+
+    expect(manifest.version).toBe(3)
+    expect(manifest.afternoonTeaConversations).toBeUndefined()
+    expect(parsed.manifest).toEqual(manifest)
   })
 
   it('splits all stored images without dropping images that are not referenced by tasks', async () => {
@@ -103,6 +142,7 @@ describe('exportZip', () => {
       favoriteCollections: [],
       defaultFavoriteCollectionId: null,
       agentConversations: [],
+      afternoonTeaConversations: [],
     }
     const plan = getExportZipPlan(
       params,
@@ -157,11 +197,37 @@ describe('exportZip', () => {
       favoriteCollections: [],
       defaultFavoriteCollectionId: null,
       agentConversations: [],
+      afternoonTeaConversations: [],
     }
     const plan = getExportZipPlan(params, [], { maxBytes: 1_800_000, partBytes: 1_400_000 })
 
     expect(plan.length).toBeGreaterThan(1)
     expect(plan.flatMap((part) => part.tasks).map((task) => task.id)).toEqual(['task-1', 'task-2'])
+  })
+
+  it('splits afternoon tea conversation metadata across parts without dropping records', () => {
+    const conversations = ['tea-1', 'tea-2'].map((id) => afternoonTeaConversation({
+      id,
+      orderText: 'x'.repeat(600_000),
+    }))
+    const params = {
+      options: { exportConfig: true, exportTasks: true },
+      exportedAt: 1700000001000,
+      settings: {} as AppSettings,
+      tasks: [],
+      images: [],
+      thumbnailsByImageId: new Map(),
+      favoriteCollections: [],
+      defaultFavoriteCollectionId: null,
+      agentConversations: [],
+      afternoonTeaConversations: conversations,
+    }
+
+    const plan = getExportZipPlan(params, [], { maxBytes: 1_800_000, partBytes: 1_400_000 })
+
+    expect(plan.length).toBeGreaterThan(1)
+    expect(plan.flatMap((part) => part.afternoonTeaConversations).map((conversation) => conversation.id)).toEqual(['tea-1', 'tea-2'])
+    expect(plan[0].includeBaseData).toBe(true)
   })
 
   it('always keeps config-only exports in one part', () => {
@@ -191,9 +257,27 @@ describe('exportZip', () => {
         rounds: [],
         messages: [],
       }],
+      afternoonTeaConversations: [afternoonTeaConversation({ orderText: 'x'.repeat(600_000) })],
     }, [{ id: 'ignored-image', bytes: 2_000_000 }], { maxBytes: 1_800_000, partBytes: 1_400_000 })
 
-    expect(plan).toEqual([{ imageIds: [], tasks: [], agentConversations: [], includeBaseData: true }])
+    expect(plan).toEqual([{ imageIds: [], tasks: [], agentConversations: [], afternoonTeaConversations: [], includeBaseData: true }])
+  })
+
+  it('omits afternoon tea conversations from config-only manifests', async () => {
+    const { manifest } = await buildExportZip({
+      options: { exportConfig: true, exportTasks: false },
+      exportedAt: 1700000001000,
+      settings: {} as AppSettings,
+      tasks: [],
+      images: [],
+      thumbnailsByImageId: new Map(),
+      favoriteCollections: [],
+      defaultFavoriteCollectionId: null,
+      agentConversations: [],
+      afternoonTeaConversations: [afternoonTeaConversation()],
+    })
+
+    expect(manifest.afternoonTeaConversations).toBeUndefined()
   })
 
 })

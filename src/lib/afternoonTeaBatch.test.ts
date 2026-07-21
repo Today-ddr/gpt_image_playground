@@ -178,6 +178,35 @@ describe('runAfternoonTeaPosterBatch', () => {
     expect(coordinator.hasActiveWork()).toBe(false)
   })
 
+  it('task-created callback 抛错时仍尝试全部项目，并最终抛出首个 callback error', async () => {
+    const callbackErrors = items.map((item) => new Error(`created callback failed: ${item.id}`))
+    let callbackCount = 0
+    const submit = vi.fn(async (opts) => {
+      opts.onTaskCreated(`task-${opts.prompt}`)
+      return taskResult(`task-${opts.prompt}`, opts.prompt)
+    })
+
+    const run = runAfternoonTeaPosterBatch({
+      coordinator: new AfternoonTeaBatchCoordinator(),
+      batchId: 'batch-created-callback-error',
+      items,
+      settingsSnapshot,
+      paramsSnapshot,
+      inputImage,
+      submit,
+      onTaskCreated: () => {
+        const error = callbackErrors[callbackCount]
+        callbackCount += 1
+        throw error
+      },
+      onItemSetupError: vi.fn(),
+    })
+
+    await expect(run).rejects.toBe(callbackErrors[0])
+    expect(submit).toHaveBeenCalledTimes(3)
+    expect(callbackCount).toBe(3)
+  })
+
   it('空批次立即进入 terminal 且不调用 submit', async () => {
     const coordinator = new AfternoonTeaBatchCoordinator()
     const submit = vi.fn()
@@ -228,9 +257,10 @@ describe('runAfternoonTeaPosterBatch', () => {
     await expect(runAfternoonTeaPosterBatch(options)).rejects.toThrow('批次不能重复启动')
   })
 
-  it('新批次启动后忽略旧批次回调，dispose 后忽略回调并拒绝操作', async () => {
+  it('新批次启动后忽略旧 claim 回调，dispose 后仍交付当前 claim 回调和完成通知', async () => {
     const coordinator = new AfternoonTeaBatchCoordinator()
     const created = vi.fn()
+    const finished = vi.fn()
     const callbacks: {
       old?: (taskId: string) => void
       current?: (taskId: string) => void
@@ -264,6 +294,7 @@ describe('runAfternoonTeaPosterBatch', () => {
       },
       onTaskCreated: created,
       onItemSetupError: vi.fn(),
+      onBatchFinished: finished,
     })
     await flushMicrotasks()
 
@@ -272,7 +303,8 @@ describe('runAfternoonTeaPosterBatch', () => {
 
     coordinator.dispose()
     callbacks.current?.('task-after-dispose')
-    expect(created).not.toHaveBeenCalled()
+    expect(created).toHaveBeenCalledOnce()
+    expect(created).toHaveBeenCalledWith('batch-current', 'item-a', 'task-after-dispose')
     await expect(runAfternoonTeaPosterBatch({
       coordinator,
       batchId: 'batch-after-dispose',
@@ -287,7 +319,9 @@ describe('runAfternoonTeaPosterBatch', () => {
 
     pending.resolve(taskResult('task-current', '提示词 A'))
     await currentRun
-    expect(coordinator.isTerminal('batch-current')).toBe(false)
+    expect(coordinator.isTerminal('batch-current')).toBe(true)
+    expect(finished).toHaveBeenCalledOnce()
+    expect(finished).toHaveBeenCalledWith('batch-current')
   })
 
   it('dispose 后不再领取队列中尚未开始的项目', async () => {
@@ -323,10 +357,12 @@ describe('runAfternoonTeaPosterBatch', () => {
     expect(submitted).toEqual(['提示词 A', '提示词 B'])
   })
 
-  it('in-flight submit 在 dispose 后 reject 时不触发 setup-error callback', async () => {
+  it('in-flight submit 在 dispose 后 reject 时仍触发 setup-error callback 和完成通知', async () => {
     const coordinator = new AfternoonTeaBatchCoordinator()
     const pending = deferred<ReturnType<typeof taskResult>>()
     const setupErrors = vi.fn()
+    const finished = vi.fn()
+    const setupError = new Error('late setup error')
     const run = runAfternoonTeaPosterBatch({
       coordinator,
       batchId: 'batch-dispose-error',
@@ -337,15 +373,114 @@ describe('runAfternoonTeaPosterBatch', () => {
       submit: () => pending.promise,
       onTaskCreated: vi.fn(),
       onItemSetupError: setupErrors,
+      onBatchFinished: finished,
     })
     await flushMicrotasks()
 
     coordinator.dispose()
-    pending.reject(new Error('late setup error'))
+    pending.reject(setupError)
     await run
 
-    expect(setupErrors).not.toHaveBeenCalled()
-    expect(coordinator.isTerminal('batch-dispose-error')).toBe(false)
+    expect(setupErrors).toHaveBeenCalledOnce()
+    expect(setupErrors).toHaveBeenCalledWith('batch-dispose-error', 'item-a', setupError)
+    expect(coordinator.isTerminal('batch-dispose-error')).toBe(true)
+    expect(finished).toHaveBeenCalledWith('batch-dispose-error')
+  })
+
+  it('旧批次 settle 时 active identity 已变化则忽略旧 claim 和 finish callback', async () => {
+    const coordinator = new AfternoonTeaBatchCoordinator()
+    const oldPending = deferred<ReturnType<typeof taskResult>>()
+    const currentPending = deferred<ReturnType<typeof taskResult>>()
+    const created = vi.fn()
+    const oldFinished = vi.fn()
+    let oldCreated: ((taskId: string) => void) | undefined
+    const oldRun = runAfternoonTeaPosterBatch({
+      coordinator,
+      batchId: 'batch-stale-finish',
+      items: items.slice(0, 1),
+      settingsSnapshot,
+      paramsSnapshot,
+      inputImage,
+      submit: (opts) => {
+        oldCreated = opts.onTaskCreated
+        return oldPending.promise
+      },
+      onTaskCreated: created,
+      onItemSetupError: vi.fn(),
+      onBatchFinished: oldFinished,
+    })
+    await flushMicrotasks()
+
+    coordinator.finish('batch-stale-finish')
+    const currentRun = runAfternoonTeaPosterBatch({
+      coordinator,
+      batchId: 'batch-new-identity',
+      items: items.slice(0, 1),
+      settingsSnapshot,
+      paramsSnapshot,
+      inputImage,
+      submit: () => currentPending.promise,
+      onTaskCreated: vi.fn(),
+      onItemSetupError: vi.fn(),
+    })
+    await flushMicrotasks()
+
+    oldCreated?.('task-too-late')
+    oldPending.resolve(taskResult('task-old', items[0].prompt))
+    await oldRun
+
+    expect(created).not.toHaveBeenCalled()
+    expect(oldFinished).not.toHaveBeenCalled()
+    expect(coordinator.isTerminal('batch-new-identity')).toBe(false)
+
+    currentPending.resolve(taskResult('task-current', items[0].prompt))
+    await currentRun
+  })
+
+  it('finish callback 抛错时仍标记 terminal，并把 callback error 返回给调用方', async () => {
+    const coordinator = new AfternoonTeaBatchCoordinator()
+    const callbackError = new Error('finish callback failed')
+
+    const run = runAfternoonTeaPosterBatch({
+      coordinator,
+      batchId: 'batch-finish-callback-error',
+      items: [],
+      settingsSnapshot,
+      paramsSnapshot,
+      inputImage,
+      submit: vi.fn(),
+      onTaskCreated: vi.fn(),
+      onItemSetupError: vi.fn(),
+      onBatchFinished: () => {
+        throw callbackError
+      },
+    })
+
+    await expect(run).rejects.toBe(callbackError)
+    expect(coordinator.isTerminal('batch-finish-callback-error')).toBe(true)
+  })
+
+  it('批次完成只调用唯一的 onBatchFinished callback', async () => {
+    const onBatchFinished = vi.fn()
+    const onFinished = vi.fn()
+
+    await runAfternoonTeaPosterBatch({
+      coordinator: new AfternoonTeaBatchCoordinator(),
+      batchId: 'batch-single-finish-callback',
+      items: [],
+      settingsSnapshot,
+      paramsSnapshot,
+      inputImage,
+      submit: vi.fn(),
+      onTaskCreated: vi.fn(),
+      onItemSetupError: vi.fn(),
+      onBatchFinished,
+      // @ts-expect-error onFinished 不是批次完成回调契约
+      onFinished,
+    })
+
+    expect(onBatchFinished).toHaveBeenCalledOnce()
+    expect(onFinished).not.toHaveBeenCalled()
   })
 })
 

@@ -140,10 +140,42 @@ export function collectAfternoonTeaConversationSourceImageIds(conversations: Aft
 
 export function getAfternoonTeaConversationBatchElapsed(conversation: AfternoonTeaConversation, tasks: TaskRecord[]) {
   if (conversation.batchStartedAt == null || conversation.batchFinishedAt == null) return null
+  return Math.max(0, conversation.batchFinishedAt - conversation.batchStartedAt)
+}
+
+export function reconcileAfternoonTeaConversationBatch(
+  conversation: AfternoonTeaConversation,
+  tasks: TaskRecord[],
+  now = Date.now(),
+  options: { interruptUnclaimed?: boolean } = {},
+) {
+  if (conversation.batchStartedAt == null || conversation.batchFinishedAt != null || conversation.posterItems.length === 0) {
+    return conversation
+  }
 
   const tasksById = new Map(tasks.map((task) => [task.id, task]))
-  const hasRunningPosterTask = conversation.posterItems.some((item) => item.taskId && tasksById.get(item.taskId)?.status === 'running')
-  if (hasRunningPosterTask) return null
+  const posterItems = options.interruptUnclaimed
+    ? conversation.posterItems.map((item) => item.taskId || item.setupError
+      ? item
+      : { ...item, setupError: '上次批次已中断' })
+    : conversation.posterItems
+  const allTerminal = posterItems.every((item) => {
+    if (item.setupError) return true
+    if (!item.taskId) return false
+    const task = tasksById.get(item.taskId)
+    return !task || task.status === 'done' || task.status === 'error'
+  })
+  if (!allTerminal) {
+    return posterItems === conversation.posterItems ? conversation : { ...conversation, posterItems }
+  }
 
-  return Math.max(0, conversation.batchFinishedAt - conversation.batchStartedAt)
+  const finishedAt = posterItems.reduce((latest, item) => {
+    const taskFinishedAt = item.taskId ? tasksById.get(item.taskId)?.finishedAt : null
+    return taskFinishedAt == null ? latest : Math.max(latest, taskFinishedAt)
+  }, 0) || now
+  return {
+    ...conversation,
+    posterItems,
+    batchFinishedAt: finishedAt,
+  }
 }

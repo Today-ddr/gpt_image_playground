@@ -32,6 +32,7 @@ export interface RunAfternoonTeaPosterBatchOptions {
   submit: AfternoonTeaPosterSubmit
   onTaskCreated: (batchId: string, itemId: string, taskId: string) => void
   onItemSetupError: (batchId: string, itemId: string, error: unknown) => void
+  onBatchFinished?: (batchId: string) => void
 }
 
 export interface RetryAfternoonTeaPosterItemOptions {
@@ -50,6 +51,7 @@ export class AfternoonTeaBatchCoordinator {
   private activeBatchId: string | null = null
   private readonly startedBatchIds = new Set<string>()
   private readonly terminalBatchIds = new Set<string>()
+  private activeGeneration = 0
   private retryInProgress = false
   private disposed = false
 
@@ -60,15 +62,28 @@ export class AfternoonTeaBatchCoordinator {
     if (this.retryInProgress) throw new Error('重试正在进行')
     this.startedBatchIds.add(batchId)
     this.activeBatchId = batchId
+    this.activeGeneration += 1
+    return this.activeGeneration
   }
 
-  finish(batchId: string) {
-    if (this.disposed || this.activeBatchId !== batchId) return
+  finish(batchId: string, generation?: number) {
+    if (this.activeBatchId !== batchId) return false
+    if (generation !== undefined && this.activeGeneration !== generation) return false
     this.terminalBatchIds.add(batchId)
+    return true
   }
 
   accepts(batchId: string) {
     return !this.disposed && this.activeBatchId === batchId
+  }
+
+  claim(batchId: string) {
+    if (!this.accepts(batchId)) return null
+    return this.activeGeneration
+  }
+
+  acceptsClaim(batchId: string, generation: number) {
+    return this.activeBatchId === batchId && this.activeGeneration === generation
   }
 
   hasActiveWork() {
@@ -115,14 +130,23 @@ export async function runAfternoonTeaPosterBatch({
   submit,
   onTaskCreated,
   onItemSetupError,
+  onBatchFinished,
 }: RunAfternoonTeaPosterBatchOptions) {
-  coordinator.start(batchId)
+  const batchGeneration = coordinator.start(batchId)
   let cursor = 0
   let hasCallbackFailure = false
   let callbackFailure: unknown
 
+  const recordCallbackFailure = (error: unknown) => {
+    if (hasCallbackFailure) return
+    hasCallbackFailure = true
+    callbackFailure = error
+  }
+
   const worker = async () => {
-    while (coordinator.accepts(batchId) && cursor < items.length) {
+    while (cursor < items.length) {
+      const claimGeneration = coordinator.claim(batchId)
+      if (claimGeneration === null) return
       const item = items[cursor]
       cursor += 1
       try {
@@ -134,18 +158,20 @@ export async function runAfternoonTeaPosterBatch({
           title: item.title,
           prompt: item.prompt,
           onTaskCreated: (taskId) => {
-            if (coordinator.accepts(batchId)) onTaskCreated(batchId, item.id, taskId)
+            if (!coordinator.acceptsClaim(batchId, claimGeneration)) return
+            try {
+              onTaskCreated(batchId, item.id, taskId)
+            } catch (callbackError) {
+              recordCallbackFailure(callbackError)
+            }
           },
         })
       } catch (error) {
-        if (coordinator.accepts(batchId)) {
+        if (coordinator.acceptsClaim(batchId, claimGeneration)) {
           try {
             onItemSetupError(batchId, item.id, error)
           } catch (callbackError) {
-            if (!hasCallbackFailure) {
-              hasCallbackFailure = true
-              callbackFailure = callbackError
-            }
+            recordCallbackFailure(callbackError)
           }
         }
       }
@@ -155,7 +181,15 @@ export async function runAfternoonTeaPosterBatch({
   const results = await Promise.allSettled(
     Array.from({ length: AFTERNOON_TEA_BATCH_CONCURRENCY }, () => worker()),
   )
-  coordinator.finish(batchId)
+  if (coordinator.finish(batchId, batchGeneration)) {
+    if (onBatchFinished) {
+      try {
+        onBatchFinished(batchId)
+      } catch (callbackError) {
+        recordCallbackFailure(callbackError)
+      }
+    }
+  }
   if (hasCallbackFailure) throw callbackFailure
   const failure = results.find((result) => result.status === 'rejected')
   if (failure?.status === 'rejected') throw failure.reason

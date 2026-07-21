@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { strToU8, zipSync } from 'fflate'
 import { DEFAULT_PARAMS } from './types'
 import { createDefaultFalProfile, createDefaultOpenAIProfile, DEFAULT_RESPONSES_MODEL, DEFAULT_SETTINGS, normalizeSettings } from './lib/apiProfiles'
-import type { AgentConversation, ApiProfile, AppSettings, ExportData, StoredImage, StoredImageThumbnail, TaskRecord } from './types'
+import { DEFAULT_DISH_SYSTEM_PROMPT, DEFAULT_DISH_TITLE_COUNT } from './lib/dishAnalysisPrompts'
+import type { AfternoonTeaConversation, AgentConversation, ApiProfile, AppSettings, ExportData, StoredImage, StoredImageThumbnail, TaskRecord } from './types'
 import { getSelectedImageMentionLabel } from './lib/promptImageMentions'
 import { hasActiveDataOperations } from './lib/dataOperations'
 vi.mock('./lib/db', () => {
@@ -10,6 +11,7 @@ vi.mock('./lib/db', () => {
   const images = new Map<string, StoredImage>()
   const thumbnails = new Map<string, StoredImageThumbnail>()
   const agentConversations = new Map<string, AgentConversation>()
+  const afternoonTeaConversations = new Map<string, AfternoonTeaConversation>()
   let imageSeq = 0
 
   return {
@@ -40,6 +42,18 @@ vi.mock('./lib/db', () => {
       agentConversations.clear()
       for (const conversation of conversations) agentConversations.set(conversation.id, conversation)
     },
+    getAllAfternoonTeaConversations: async () => [...afternoonTeaConversations.values()],
+    putAfternoonTeaConversation: async (conversation: AfternoonTeaConversation) => {
+      afternoonTeaConversations.set(conversation.id, conversation)
+      return conversation.id
+    },
+    clearAfternoonTeaConversations: async () => {
+      afternoonTeaConversations.clear()
+    },
+    replaceAfternoonTeaConversations: vi.fn(async (conversations: AfternoonTeaConversation[]) => {
+      afternoonTeaConversations.clear()
+      for (const conversation of conversations) afternoonTeaConversations.set(conversation.id, conversation)
+    }),
     getImage: async (id: string) => images.get(id),
     getImageThumbnail: async (id: string) => thumbnails.get(id),
     getStoredFreshImageThumbnail: async (id: string) => thumbnails.get(id),
@@ -53,10 +67,12 @@ vi.mock('./lib/db', () => {
       thumbnails.set(thumbnail.id, thumbnail)
       return thumbnail.id
     },
-    deleteImage: async (id: string) => {
+    deleteImage: vi.fn(async (id: string, shouldDelete?: () => boolean) => {
+      if (shouldDelete && !shouldDelete()) return false
       images.delete(id)
       thumbnails.delete(id)
-    },
+      return true
+    }),
     clearImages: async () => {
       images.clear()
       thumbnails.clear()
@@ -131,13 +147,14 @@ vi.mock('./lib/agentApi', () => ({
     }
   }),
 }))
-import { clearAgentConversations, clearImages, clearTasks, getAllAgentConversations, getAllTasks, getImage, putAgentConversation, putImage, putTask as putDbTask, storeImage } from './lib/db'
+import { clearAfternoonTeaConversations, clearAgentConversations, clearImages, clearTasks, deleteImage, getAllAfternoonTeaConversations, getAllAgentConversations, getAllTasks, getImage, putAfternoonTeaConversation, putAgentConversation, putImage, putTask as putDbTask, replaceAfternoonTeaConversations, storeImage } from './lib/db'
 import { callImageApi } from './lib/api'
 import { showBrowserNotification } from './lib/browserNotification'
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
 import { getFalQueuedImageResult } from './lib/falAiImageApi'
 import { removeKeyedBackgroundFromDataUrl } from './lib/transparentImage'
-import { cleanStaleAgentInputDrafts, clearFailedTasks, deleteAgentRoundFromConversation, deleteFavoriteCollection, editOutputs, getActiveAgentRounds, getAgentConversationTaskIds, getAgentRoundTaskIds, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, markInterruptedOpenAIRunningTasks, mergePersistedState, migratePersistedState, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeTask, reuseConfig, stopAgentResponse, submitAfternoonTeaPosterTask, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, useStore } from './store'
+import { cleanStaleAgentInputDrafts, clearData, clearFailedTasks, deleteAgentRoundFromConversation, deleteFavoriteCollection, deleteImageIfUnreferenced, editOutputs, exportData, getActiveAgentRounds, getAgentConversationTaskIds, getAgentRoundTaskIds, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, markInterruptedOpenAIRunningTasks, mergePersistedState, migratePersistedState, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeMultipleTasks, removeTask, reuseConfig, stopAgentResponse, submitAfternoonTeaPosterTask, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, updateTaskInStore, useStore } from './store'
+import { readExportZip } from './lib/exportZip'
 
 const imageA = { id: 'image-a', dataUrl: 'data:image/png;base64,a' }
 const imageB = { id: 'image-b', dataUrl: 'data:image/png;base64,b' }
@@ -161,6 +178,27 @@ function agentConversation(overrides: Partial<AgentConversation> = {}): AgentCon
     updatedAt: 1,
     rounds: [],
     messages: [],
+    ...overrides,
+  }
+}
+
+function afternoonTeaConversation(overrides: Partial<AfternoonTeaConversation> = {}): AfternoonTeaConversation {
+  return {
+    id: 'afternoon-tea-a',
+    title: '新下午茶会话',
+    createdAt: 1,
+    updatedAt: 1,
+    sourceImageId: null,
+    sourceImageName: '',
+    orderText: '',
+    titleCount: 5,
+    systemPrompt: '系统提示词',
+    analysisSystemPromptSnapshot: null,
+    analysisUserPromptSnapshot: null,
+    orderResult: null,
+    posterItems: [],
+    batchStartedAt: null,
+    batchFinishedAt: null,
     ...overrides,
   }
 }
@@ -254,6 +292,681 @@ describe('afternoon tea batch operation lease', () => {
 
     expect(persisted).not.toHaveProperty('afternoonTeaBatchOperationId')
     expect(restored.afternoonTeaBatchOperationId).toBeNull()
+  })
+})
+
+describe('afternoonTea conversation store', () => {
+  beforeEach(async () => {
+    await clearAfternoonTeaConversations()
+    useStore.setState({
+      afternoonTeaConversations: [],
+      afternoonTeaConversationsLoaded: false,
+      activeAfternoonTeaConversationId: null,
+      afternoonTeaEditingConversationId: null,
+    })
+    await initStore()
+    vi.mocked(replaceAfternoonTeaConversations).mockClear()
+  })
+
+  it('creates and reuses the latest empty conversation with shared defaults', () => {
+    const id = useStore.getState().createAfternoonTeaConversation()
+    const created = useStore.getState().afternoonTeaConversations[0]
+    const reusedId = useStore.getState().createAfternoonTeaConversation()
+
+    expect(reusedId).toBe(id)
+    expect(useStore.getState().afternoonTeaConversations).toHaveLength(1)
+    expect(created).toMatchObject({
+      id,
+      title: '新下午茶会话',
+      sourceImageId: null,
+      sourceImageName: '',
+      orderText: '',
+      titleCount: DEFAULT_DISH_TITLE_COUNT,
+      systemPrompt: DEFAULT_DISH_SYSTEM_PROMPT,
+      analysisSystemPromptSnapshot: null,
+      analysisUserPromptSnapshot: null,
+      orderResult: null,
+      posterItems: [],
+      batchStartedAt: null,
+      batchFinishedAt: null,
+    })
+    expect(useStore.getState().activeAfternoonTeaConversationId).toBe(id)
+  })
+
+  it('selects, updates, renames, and deletes conversations without deleting tasks', () => {
+    const first = useStore.getState().createAfternoonTeaConversation()
+    useStore.getState().updateAfternoonTeaConversation(first, {
+      sourceImageId: 'source-a',
+      sourceImageName: 'afternoon-tea.png',
+      orderText: '草莓蛋糕和红茶',
+      titleCount: 3,
+      systemPrompt: '自定义系统提示词',
+      analysisSystemPromptSnapshot: '完整分析系统提示词',
+      analysisUserPromptSnapshot: '完整分析用户提示词',
+      orderResult: { titles: ['午后茶歇'], items: [{ displayName: '草莓蛋糕', tags: ['草莓'] }] },
+      posterItems: [{ id: 'poster-a', title: '午后茶歇', prompt: '海报提示词', taskId: 'task-a' }],
+      batchStartedAt: 10,
+      batchFinishedAt: 20,
+    })
+    const second = useStore.getState().createAfternoonTeaConversation()
+
+    useStore.getState().setActiveAfternoonTeaConversationId(first)
+    useStore.getState().renameAfternoonTeaConversation(first, '  周五茶歇  ')
+
+    expect(useStore.getState().activeAfternoonTeaConversationId).toBe(first)
+    expect(useStore.getState().afternoonTeaConversations.find((conversation) => conversation.id === first)).toMatchObject({
+      title: '周五茶歇',
+      sourceImageId: 'source-a',
+      orderText: '草莓蛋糕和红茶',
+      titleCount: 3,
+      analysisSystemPromptSnapshot: '完整分析系统提示词',
+      analysisUserPromptSnapshot: '完整分析用户提示词',
+      posterItems: [{ id: 'poster-a', title: '午后茶歇', prompt: '海报提示词', taskId: 'task-a' }],
+      batchStartedAt: 10,
+      batchFinishedAt: 20,
+    })
+
+    useStore.getState().deleteAfternoonTeaConversation(first)
+
+    expect(useStore.getState().afternoonTeaConversations.map((conversation) => conversation.id)).toEqual([second])
+    expect(useStore.getState().activeAfternoonTeaConversationId).toBe(second)
+    expect(useStore.getState().tasks).toEqual([])
+  })
+
+  it('serializes IndexedDB replacement and persists the latest snapshot', async () => {
+    let releaseFirstWrite = () => {}
+    const firstWrite = new Promise<void>((resolve) => {
+      releaseFirstWrite = resolve
+    })
+    vi.mocked(replaceAfternoonTeaConversations).mockImplementationOnce(async () => {
+      await firstWrite
+    })
+
+    const id = useStore.getState().createAfternoonTeaConversation()
+    useStore.getState().renameAfternoonTeaConversation(id, '第一次修改')
+    useStore.getState().renameAfternoonTeaConversation(id, '最终标题')
+
+    await vi.waitFor(() => expect(replaceAfternoonTeaConversations).toHaveBeenCalledTimes(1))
+    releaseFirstWrite()
+    await vi.waitFor(() => expect(replaceAfternoonTeaConversations).toHaveBeenCalledTimes(2))
+
+    expect(vi.mocked(replaceAfternoonTeaConversations).mock.calls[1]?.[0]).toMatchObject([
+      { id, title: '最终标题' },
+    ])
+  })
+
+  it('retries the latest snapshot after a rejected IndexedDB replacement without leaking the rejection', async () => {
+    vi.useFakeTimers()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const unhandledRejections: unknown[] = []
+    const handleUnhandledRejection = (reason: unknown) => {
+      unhandledRejections.push(reason)
+    }
+    const nodeProcess = (globalThis as typeof globalThis & {
+      process: {
+        on: (event: 'unhandledRejection', listener: (reason: unknown) => void) => void
+        off: (event: 'unhandledRejection', listener: (reason: unknown) => void) => void
+      }
+    }).process
+    nodeProcess.on('unhandledRejection', handleUnhandledRejection)
+
+    try {
+      vi.mocked(replaceAfternoonTeaConversations).mockRejectedValueOnce(new Error('indexeddb unavailable'))
+
+      const id = useStore.getState().createAfternoonTeaConversation()
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(replaceAfternoonTeaConversations).toHaveBeenCalledTimes(1)
+      expect(warn).toHaveBeenCalledWith('下午茶会话持久化失败，将自动重试', expect.any(Error))
+
+      useStore.getState().renameAfternoonTeaConversation(id, '失败后的修改')
+      useStore.getState().renameAfternoonTeaConversation(id, '重试最终标题')
+      expect(replaceAfternoonTeaConversations).toHaveBeenCalledTimes(1)
+
+      await vi.advanceTimersByTimeAsync(999)
+      expect(replaceAfternoonTeaConversations).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(1)
+
+      expect(replaceAfternoonTeaConversations).toHaveBeenCalledTimes(2)
+      expect(vi.mocked(replaceAfternoonTeaConversations).mock.calls[1]?.[0]).toMatchObject([
+        { id, title: '重试最终标题' },
+      ])
+      expect(unhandledRejections).toEqual([])
+
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(replaceAfternoonTeaConversations).toHaveBeenCalledTimes(2)
+    } finally {
+      nodeProcess.off('unhandledRejection', handleUnhandledRejection)
+      warn.mockRestore()
+      vi.useRealTimers()
+    }
+  })
+
+  it('loads normalized records and restores a valid active id or the newest record', async () => {
+    const older = afternoonTeaConversation({ id: 'older', updatedAt: 10, createdAt: 10 })
+    const newer = afternoonTeaConversation({ id: 'newer', title: '  ', updatedAt: 20, createdAt: 20, titleCount: 99 })
+    useStore.setState({
+      afternoonTeaConversations: [],
+      afternoonTeaConversationsLoaded: false,
+      activeAfternoonTeaConversationId: older.id,
+    })
+    await vi.waitFor(() => expect(replaceAfternoonTeaConversations).toHaveBeenCalled())
+    await putAfternoonTeaConversation(older)
+    await putAfternoonTeaConversation(newer)
+
+    await initStore()
+
+    expect(useStore.getState().afternoonTeaConversations).toMatchObject([
+      { id: 'older' },
+      { id: 'newer', title: '新下午茶会话', titleCount: 10 },
+    ])
+    expect(useStore.getState().afternoonTeaConversationsLoaded).toBe(true)
+    expect(useStore.getState().activeAfternoonTeaConversationId).toBe(older.id)
+
+    useStore.setState({ activeAfternoonTeaConversationId: 'missing' })
+    await initStore()
+
+    expect(useStore.getState().activeAfternoonTeaConversationId).toBe(newer.id)
+  })
+
+  it('reconciles and persists terminal afternoon tea batches after startup task recovery', async () => {
+    const storedTask = task({ id: 'poster-done', status: 'done', finishedAt: 700 })
+    await putDbTask(storedTask)
+    await putAfternoonTeaConversation(afternoonTeaConversation({
+      id: 'batch-recovered',
+      posterItems: [{ id: 'poster', title: '海报', prompt: 'prompt', taskId: storedTask.id }],
+      batchStartedAt: 100,
+    }))
+
+    await initStore()
+
+    expect(useStore.getState().afternoonTeaConversations.find((item) => item.id === 'batch-recovered')?.batchFinishedAt).toBe(700)
+    await vi.waitFor(async () => expect((await getAllAfternoonTeaConversations()).find((item) => item.id === 'batch-recovered')?.batchFinishedAt).toBe(700))
+  })
+
+  it('reconciles terminal task updates and external task deletion through conversation persistence', async () => {
+    const running = task({ id: 'poster-running', status: 'running', finishedAt: null, elapsed: null })
+    useStore.setState({
+      tasks: [running],
+      afternoonTeaConversations: [afternoonTeaConversation({
+        id: 'batch-live',
+        posterItems: [{ id: 'poster', title: '海报', prompt: 'prompt', taskId: running.id }],
+        batchStartedAt: 100,
+      })],
+    })
+
+    updateTaskInStore(running.id, { status: 'done', finishedAt: 600, elapsed: 500 })
+    expect(useStore.getState().afternoonTeaConversations[0].batchFinishedAt).toBe(600)
+
+    useStore.setState({
+      tasks: [running],
+      afternoonTeaConversations: [afternoonTeaConversation({
+        id: 'batch-deleted',
+        posterItems: [{ id: 'poster', title: '海报', prompt: 'prompt', taskId: running.id }],
+        batchStartedAt: 100,
+      })],
+    })
+    await removeTask(running)
+
+    expect(useStore.getState().afternoonTeaConversations[0].batchFinishedAt).toEqual(expect.any(Number))
+    await vi.waitFor(async () => expect((await getAllAfternoonTeaConversations())[0]?.batchFinishedAt).toEqual(expect.any(Number)))
+  })
+
+  it('reconciles batch deletion using only referenced tasks and preserves an existing finish', async () => {
+    const referenced = task({ id: 'referenced', status: 'done', finishedAt: 700 })
+    const extraSameBatch = task({ id: 'extra-same-batch', status: 'done', finishedAt: 9_000, afternoonTeaBatchId: 'batch-delete' })
+    await putDbTask(referenced)
+    await putDbTask(extraSameBatch)
+    useStore.setState({
+      tasks: [referenced, extraSameBatch],
+      afternoonTeaConversations: [afternoonTeaConversation({
+        id: 'batch-delete',
+        posterItems: [{ id: 'poster', title: '海报', prompt: 'prompt', taskId: referenced.id }],
+        batchStartedAt: 100,
+      })],
+    })
+
+    await removeMultipleTasks([referenced.id])
+
+    expect(useStore.getState().afternoonTeaConversations[0].batchFinishedAt).not.toBe(9_000)
+    const finished = useStore.getState().afternoonTeaConversations[0].batchFinishedAt
+    expect(finished).toEqual(expect.any(Number))
+
+    const existingFinish = afternoonTeaConversation({
+      id: 'batch-immutable',
+      posterItems: [{ id: 'poster', title: '海报', prompt: 'prompt', taskId: extraSameBatch.id }],
+      batchStartedAt: 100,
+      batchFinishedAt: 500,
+    })
+    useStore.setState({
+      tasks: [extraSameBatch],
+      afternoonTeaConversations: [existingFinish],
+    })
+    await removeMultipleTasks([extraSameBatch.id])
+    expect(useStore.getState().afternoonTeaConversations[0].batchFinishedAt).toBe(500)
+    expect(finished).not.toBeNull()
+  })
+
+  it('persists only the active id in localStorage state and ignores injected records on merge', () => {
+    const current = afternoonTeaConversation({ id: 'current' })
+    useStore.setState({
+      afternoonTeaConversations: [current],
+      afternoonTeaConversationsLoaded: true,
+      activeAfternoonTeaConversationId: current.id,
+      afternoonTeaEditingConversationId: current.id,
+    })
+
+    const persisted = getPersistedState(useStore.getState())
+    const restored = mergePersistedState({
+      activeAfternoonTeaConversationId: 'stored-active',
+      afternoonTeaConversations: [afternoonTeaConversation({ id: 'injected' })],
+      afternoonTeaConversationsLoaded: true,
+      afternoonTeaEditingConversationId: 'injected',
+    }, useStore.getState())
+
+    expect(persisted).toMatchObject({ activeAfternoonTeaConversationId: current.id })
+    expect(persisted).not.toHaveProperty('afternoonTeaConversations')
+    expect(persisted).not.toHaveProperty('afternoonTeaConversationsLoaded')
+    expect(persisted).not.toHaveProperty('afternoonTeaEditingConversationId')
+    expect(restored.afternoonTeaConversations).toEqual([current])
+    expect(restored.afternoonTeaConversationsLoaded).toBe(true)
+    expect(restored.afternoonTeaEditingConversationId).toBeNull()
+    expect(restored.activeAfternoonTeaConversationId).toBe('stored-active')
+  })
+})
+
+describe('afternoon tea image references', () => {
+  beforeEach(async () => {
+    await clearTasks()
+    await clearImages()
+    await clearAgentConversations()
+    await clearAfternoonTeaConversations()
+    useStore.setState({
+      tasks: [],
+      selectedTaskIds: [],
+      inputImages: [],
+      galleryInputDraft: null,
+      agentInputDrafts: {},
+      agentConversations: [],
+      agentConversationsLoaded: true,
+      activeAgentConversationId: null,
+      afternoonTeaConversations: [],
+      afternoonTeaConversationsLoaded: true,
+      activeAfternoonTeaConversationId: null,
+      afternoonTeaEditingConversationId: null,
+      showToast: vi.fn(),
+    })
+  })
+
+  it('keeps parse-only source images and removes true orphan images during startup', async () => {
+    await putImage({ id: 'parse-source', dataUrl: 'data:image/png;base64,source', source: 'upload' })
+    await putImage({ id: 'orphan', dataUrl: 'data:image/png;base64,orphan', source: 'upload' })
+    await putAfternoonTeaConversation(afternoonTeaConversation({
+      id: 'parse-only',
+      sourceImageId: 'parse-source',
+      sourceImageName: 'menu.png',
+      orderResult: { titles: ['下午茶'], items: [{ displayName: '蛋糕', tags: [] }] },
+    }))
+
+    await initStore()
+
+    expect(await getImage('parse-source')).toBeDefined()
+    expect(await getImage('orphan')).toBeUndefined()
+  })
+
+  it('keeps every task and Agent image reference field during startup cleanup', async () => {
+    const imageIds = [
+      'task-mask-target',
+      'round-mask-target',
+      'round-mask-image',
+      'message-input',
+      'message-mask-target',
+      'message-mask-image',
+    ]
+    for (const id of imageIds) {
+      await putImage({ id, dataUrl: `data:image/png;base64,${id}`, source: 'upload' })
+    }
+    await putDbTask(task({ id: 'mask-task', maskTargetImageId: 'task-mask-target' }))
+    await putAgentConversation(agentConversation({
+      rounds: [{
+        id: 'round-a',
+        index: 1,
+        userMessageId: 'message-a',
+        prompt: '参考图片',
+        inputImageIds: [],
+        maskTargetImageId: 'round-mask-target',
+        maskImageId: 'round-mask-image',
+        outputTaskIds: [],
+        status: 'done',
+        error: null,
+        createdAt: 1,
+        finishedAt: 2,
+      }],
+      messages: [{
+        id: 'message-a',
+        role: 'user',
+        content: '参考图片',
+        roundId: 'round-a',
+        inputImageIds: ['message-input'],
+        maskTargetImageId: 'message-mask-target',
+        maskImageId: 'message-mask-image',
+        createdAt: 1,
+      }],
+    }))
+
+    await initStore()
+
+    for (const id of imageIds) expect(await getImage(id), id).toBeDefined()
+  })
+
+  it('keeps a historical afternoon tea source in generic unreferenced cleanup', async () => {
+    await putImage({ id: 'history-source', dataUrl: 'data:image/png;base64,history', source: 'upload' })
+    useStore.setState({
+      afternoonTeaConversations: [afternoonTeaConversation({ sourceImageId: 'history-source' })],
+    })
+
+    await deleteImageIfUnreferenced('history-source')
+
+    expect(await getImage('history-source')).toBeDefined()
+  })
+
+  it.each([
+    ['a new afternoon tea conversation', (imageId: string) => ({
+      afternoonTeaConversations: [afternoonTeaConversation({ id: 'new-reference', sourceImageId: imageId })],
+    })],
+    ['the current input', (imageId: string) => ({
+      inputImages: [{ id: imageId, dataUrl: 'data:image/png;base64,race' }],
+    })],
+  ])('rechecks references at the database guard before deleting an image added to %s', async (_label, createState) => {
+    const imageId = `race-${_label}`
+    await putImage({ id: imageId, dataUrl: 'data:image/png;base64,race', source: 'upload' })
+    let releaseGuard = () => {}
+    const guardGate = new Promise<void>((resolve) => {
+      releaseGuard = resolve
+    })
+    let notifyDeleteStarted = () => {}
+    const deleteStarted = new Promise<void>((resolve) => {
+      notifyDeleteStarted = resolve
+    })
+    const guardedDeleteImage = vi.mocked(deleteImage as unknown as (
+      id: string,
+      shouldDelete?: () => boolean,
+    ) => Promise<boolean>)
+    guardedDeleteImage.mockImplementationOnce(async (_id, shouldDelete) => {
+      notifyDeleteStarted()
+      await guardGate
+      if (shouldDelete && !shouldDelete()) return false
+      await clearImages()
+      return true
+    })
+
+    const deletion = deleteImageIfUnreferenced(imageId)
+    await deleteStarted
+    useStore.setState(createState(imageId))
+    releaseGuard()
+    await deletion
+
+    expect(await getImage(imageId)).toBeDefined()
+  })
+
+  it('keeps historical afternoon tea sources when deleting one or multiple tasks', async () => {
+    const singleTask = task({ id: 'single-task', inputImageIds: ['single-source'] })
+    const multipleTask = task({ id: 'multiple-task', inputImageIds: ['multiple-source'] })
+    await putImage({ id: 'single-source', dataUrl: 'data:image/png;base64,single', source: 'upload' })
+    await putImage({ id: 'multiple-source', dataUrl: 'data:image/png;base64,multiple', source: 'upload' })
+    await putDbTask(singleTask)
+    await putDbTask(multipleTask)
+    useStore.setState({
+      tasks: [singleTask, multipleTask],
+      afternoonTeaConversations: [
+        afternoonTeaConversation({ id: 'single-history', sourceImageId: 'single-source' }),
+        afternoonTeaConversation({ id: 'multiple-history', sourceImageId: 'multiple-source' }),
+      ],
+    })
+
+    await removeTask(singleTask)
+    await removeMultipleTasks([multipleTask.id])
+
+    expect(await getImage('single-source')).toBeDefined()
+    expect(await getImage('multiple-source')).toBeDefined()
+  })
+
+  it('keeps an output image referenced as another task mask target when deleting one task', async () => {
+    const deletedTask = task({ id: 'deleted-task', outputImages: ['shared-mask-target'] })
+    const remainingTask = task({ id: 'remaining-task', maskTargetImageId: 'shared-mask-target' })
+    await putImage({ id: 'shared-mask-target', dataUrl: 'data:image/png;base64,shared', source: 'generated' })
+    await putDbTask(deletedTask)
+    await putDbTask(remainingTask)
+    useStore.setState({ tasks: [deletedTask, remainingTask] })
+
+    await removeTask(deletedTask)
+
+    expect(await getImage('shared-mask-target')).toBeDefined()
+  })
+
+  it('deletes an orphan task mask target when deleting its task', async () => {
+    const deletedTask = task({ id: 'deleted-task', maskTargetImageId: 'orphan-mask-target' })
+    await putImage({ id: 'orphan-mask-target', dataUrl: 'data:image/png;base64,orphan', source: 'upload' })
+    await putDbTask(deletedTask)
+    useStore.setState({ tasks: [deletedTask] })
+
+    await removeTask(deletedTask)
+
+    expect(await getImage('orphan-mask-target')).toBeUndefined()
+  })
+
+  it('keeps every Agent image reference field when deleting multiple tasks', async () => {
+    const imageIds = [
+      'round-input',
+      'round-mask-target',
+      'round-mask-image',
+      'message-input',
+      'message-mask-target',
+      'message-mask-image',
+    ]
+    const deletedTasks = imageIds.map((id, index) => task({ id: `deleted-${index}`, outputImages: [id] }))
+    for (const id of imageIds) {
+      await putImage({ id, dataUrl: `data:image/png;base64,${id}`, source: 'generated' })
+    }
+    for (const value of deletedTasks) await putDbTask(value)
+    useStore.setState({
+      tasks: deletedTasks,
+      agentConversations: [agentConversation({
+        rounds: [{
+          id: 'round-a',
+          index: 1,
+          userMessageId: 'message-a',
+          prompt: '参考图片',
+          inputImageIds: ['round-input'],
+          maskTargetImageId: 'round-mask-target',
+          maskImageId: 'round-mask-image',
+          outputTaskIds: [],
+          status: 'done',
+          error: null,
+          createdAt: 1,
+          finishedAt: 2,
+        }],
+        messages: [{
+          id: 'message-a',
+          role: 'user',
+          content: '参考图片',
+          roundId: 'round-a',
+          inputImageIds: ['message-input'],
+          maskTargetImageId: 'message-mask-target',
+          maskImageId: 'message-mask-image',
+          createdAt: 1,
+        }],
+      })],
+    })
+
+    await removeMultipleTasks(deletedTasks.map((item) => item.id))
+
+    for (const id of imageIds) expect(await getImage(id), id).toBeDefined()
+  })
+
+  it('deletes an orphan source image after deleting its conversation', async () => {
+    await putImage({ id: 'orphan-source', dataUrl: 'data:image/png;base64,orphan', source: 'upload' })
+    useStore.setState({
+      afternoonTeaConversations: [afternoonTeaConversation({ sourceImageId: 'orphan-source' })],
+    })
+
+    await useStore.getState().deleteAfternoonTeaConversation('afternoon-tea-a')
+
+    expect(useStore.getState().afternoonTeaConversations).toEqual([])
+    expect(await getImage('orphan-source')).toBeUndefined()
+  })
+
+  it.each([
+    ['another conversation', (imageId: string) => ({
+      afternoonTeaConversations: [
+        afternoonTeaConversation({ id: 'target', sourceImageId: imageId }),
+        afternoonTeaConversation({ id: 'shared', sourceImageId: imageId }),
+      ],
+    })],
+    ['a task', (imageId: string) => ({
+      afternoonTeaConversations: [afternoonTeaConversation({ id: 'target', sourceImageId: imageId })],
+      tasks: [task({ id: 'shared-task', inputImageIds: [imageId] })],
+    })],
+    ['the current input', (imageId: string) => ({
+      afternoonTeaConversations: [afternoonTeaConversation({ id: 'target', sourceImageId: imageId })],
+      inputImages: [{ id: imageId, dataUrl: 'data:image/png;base64,shared' }],
+    })],
+    ['the gallery draft', (imageId: string) => ({
+      afternoonTeaConversations: [afternoonTeaConversation({ id: 'target', sourceImageId: imageId })],
+      galleryInputDraft: {
+        prompt: '',
+        inputImages: [{ id: imageId, dataUrl: 'data:image/png;base64,shared' }],
+        params: { ...DEFAULT_PARAMS },
+      },
+    })],
+    ['an Agent draft', (imageId: string) => ({
+      afternoonTeaConversations: [afternoonTeaConversation({ id: 'target', sourceImageId: imageId })],
+      agentInputDrafts: {
+        'agent-a': {
+          prompt: '',
+          inputImages: [{ id: imageId, dataUrl: 'data:image/png;base64,shared' }],
+          maskDraft: null,
+          maskEditorImageId: null,
+        },
+      },
+    })],
+    ['an Agent conversation', (imageId: string) => ({
+      afternoonTeaConversations: [afternoonTeaConversation({ id: 'target', sourceImageId: imageId })],
+      agentConversations: [agentConversation({
+        messages: [{
+          id: 'message-a',
+          role: 'user',
+          content: '参考图片',
+          roundId: 'round-a',
+          inputImageIds: [imageId],
+          createdAt: 1,
+        }],
+      })],
+    })],
+  ])('keeps a deleted conversation source still referenced by %s', async (_label, createState) => {
+    const imageId = `shared-${_label}`
+    await putImage({ id: imageId, dataUrl: 'data:image/png;base64,shared', source: 'upload' })
+    useStore.setState(createState(imageId))
+
+    await useStore.getState().deleteAfternoonTeaConversation('target')
+
+    expect(await getImage(imageId)).toBeDefined()
+  })
+
+  it('deletes only the conversation by default and keeps its related tasks', async () => {
+    const relatedTask = task({
+      id: 'poster-task',
+      afternoonTeaBatchId: 'afternoon-tea-a',
+      inputImageIds: ['default-source'],
+      outputImages: ['default-output'],
+    })
+    await putImage({ id: 'default-source', dataUrl: 'data:image/png;base64,source', source: 'upload' })
+    await putImage({ id: 'default-output', dataUrl: 'data:image/png;base64,output', source: 'generated' })
+    await putDbTask(relatedTask)
+    useStore.setState({
+      tasks: [relatedTask],
+      afternoonTeaConversations: [afternoonTeaConversation({
+        sourceImageId: 'default-source',
+        posterItems: [{ id: 'poster-a', title: '海报', prompt: 'prompt', taskId: relatedTask.id }],
+      })],
+    })
+
+    const deletion = useStore.getState().deleteAfternoonTeaConversation('afternoon-tea-a')
+
+    expect(useStore.getState().afternoonTeaConversations).toEqual([])
+    await deletion
+    expect(useStore.getState().tasks.map((item) => item.id)).toEqual([relatedTask.id])
+    expect((await getAllTasks()).map((item) => item.id)).toEqual([relatedTask.id])
+    expect(await getImage('default-source')).toBeDefined()
+    expect(await getImage('default-output')).toBeDefined()
+  })
+
+  it('optionally deletes poster and matching batch tasks before cleaning generated images and source', async () => {
+    const posterTask = task({
+      id: 'poster-task',
+      inputImageIds: ['batch-source'],
+      outputImages: ['poster-output'],
+    })
+    const batchTask = task({
+      id: 'batch-task',
+      afternoonTeaBatchId: 'afternoon-tea-a',
+      inputImageIds: ['batch-source'],
+      outputImages: ['batch-output'],
+    })
+    const unrelatedTask = task({ id: 'unrelated-task', outputImages: ['unrelated-output'] })
+    for (const [id, source] of [
+      ['batch-source', 'upload'],
+      ['poster-output', 'generated'],
+      ['batch-output', 'generated'],
+      ['unrelated-output', 'generated'],
+    ] as const) {
+      await putImage({ id, dataUrl: `data:image/png;base64,${id}`, source })
+    }
+    for (const value of [posterTask, batchTask, unrelatedTask]) await putDbTask(value)
+    useStore.setState({
+      tasks: [posterTask, batchTask, unrelatedTask],
+      afternoonTeaConversations: [afternoonTeaConversation({
+        sourceImageId: 'batch-source',
+        posterItems: [{ id: 'poster-a', title: '海报', prompt: 'prompt', taskId: posterTask.id }],
+      })],
+    })
+
+    await useStore.getState().deleteAfternoonTeaConversation('afternoon-tea-a', true)
+
+    expect(useStore.getState().afternoonTeaConversations).toEqual([])
+    expect(useStore.getState().tasks.map((item) => item.id)).toEqual([unrelatedTask.id])
+    expect((await getAllTasks()).map((item) => item.id)).toEqual([unrelatedTask.id])
+    expect(await getImage('batch-source')).toBeUndefined()
+    expect(await getImage('poster-output')).toBeUndefined()
+    expect(await getImage('batch-output')).toBeUndefined()
+    expect(await getImage('unrelated-output')).toBeDefined()
+  })
+
+  it('clears afternoon tea persistence and state with task data but preserves it for config-only clearing', async () => {
+    const conversation = afternoonTeaConversation({ id: 'clear-me', sourceImageId: 'clear-source' })
+    await putAfternoonTeaConversation(conversation)
+    await putImage({ id: 'clear-source', dataUrl: 'data:image/png;base64,clear', source: 'upload' })
+    useStore.setState({
+      afternoonTeaConversations: [conversation],
+      activeAfternoonTeaConversationId: conversation.id,
+      afternoonTeaEditingConversationId: conversation.id,
+    })
+
+    await clearData({ clearConfig: true, clearTasks: false })
+
+    expect(useStore.getState().afternoonTeaConversations).toEqual([conversation])
+    expect(await getImage('clear-source')).toBeDefined()
+
+    await clearData({ clearConfig: false, clearTasks: true })
+
+    expect(useStore.getState()).toMatchObject({
+      afternoonTeaConversations: [],
+      activeAfternoonTeaConversationId: null,
+      afternoonTeaEditingConversationId: null,
+    })
+    expect(await getImage('clear-source')).toBeUndefined()
+    await vi.waitFor(async () => expect(await getAllAfternoonTeaConversations()).toEqual([]))
   })
 })
 
@@ -1944,10 +2657,14 @@ describe('agent round deletion', () => {
 
 describe('data import', () => {
   beforeEach(async () => {
+    await clearAfternoonTeaConversations()
+    await clearImages()
     useStore.setState({
       tasks: [],
       agentConversations: [],
       activeAgentConversationId: null,
+      afternoonTeaConversations: [],
+      activeAfternoonTeaConversationId: null,
       showToast: vi.fn(),
     })
     await clearAgentConversations()
@@ -2164,10 +2881,11 @@ describe('data import', () => {
   it('validates image entries in every part before writing earlier parts', async () => {
     await clearImages()
     const part1 = importFile({
-      version: 3,
+      version: 4,
       exportedAt: new Date(0).toISOString(),
       backupPart: { id: 'backup-a', index: 1, total: 2 },
       tasks: [],
+      afternoonTeaConversations: [afternoonTeaConversation({ id: 'preflight-tea' })],
       imageFiles: { 'preflight-image-a': { path: 'images/image-a.png' } },
     }, { 'images/image-a.png': new Uint8Array([1, 2]) })
     const part2 = importFile({
@@ -2181,6 +2899,8 @@ describe('data import', () => {
 
     expect(imported).toBe(false)
     expect(await getImage('preflight-image-a')).toBeUndefined()
+    expect(useStore.getState().afternoonTeaConversations).toEqual([])
+    expect(await getAllAfternoonTeaConversations()).toEqual([])
   })
 
   it('imports config with running tasks without requiring image parts', async () => {
@@ -2197,6 +2917,240 @@ describe('data import', () => {
     const imported = await importData([part1], { importConfig: true, importTasks: false })
 
     expect(imported).toBe(true)
+  })
+
+  it('imports conversation-only data, replaces same ids regardless of timestamp, preserves unrelated records, and persists', async () => {
+    const localSameId = afternoonTeaConversation({ id: 'same-id', title: '本地较新', createdAt: 100, updatedAt: 100 })
+    const localUnrelated = afternoonTeaConversation({ id: 'local-only', title: '本地保留', createdAt: 1, updatedAt: 1 })
+    useStore.setState({
+      afternoonTeaConversations: [localSameId, localUnrelated],
+      activeAfternoonTeaConversationId: localUnrelated.id,
+    })
+    await putAfternoonTeaConversation(localSameId)
+    await putAfternoonTeaConversation(localUnrelated)
+    vi.mocked(replaceAfternoonTeaConversations).mockClear()
+
+    const importedSameId = afternoonTeaConversation({ id: 'same-id', title: '导入较旧但应覆盖', createdAt: 2, updatedAt: 2 })
+    const importedFirst = afternoonTeaConversation({ id: 'imported-first', title: '导入首条', createdAt: 3, updatedAt: 3 })
+    const imported = await importData(importFile({
+      version: 4,
+      exportedAt: new Date(0).toISOString(),
+      afternoonTeaConversations: [null, { id: '' }, importedSameId, importedFirst],
+    } as ExportData), { importConfig: false, importTasks: true })
+
+    const state = useStore.getState()
+    const persisted = await getAllAfternoonTeaConversations()
+    expect(imported).toBe(true)
+    expect(state.afternoonTeaConversations.map((conversation) => conversation.id)).toEqual(['same-id', 'local-only', 'imported-first'])
+    expect(state.afternoonTeaConversations.find((conversation) => conversation.id === 'same-id')?.title).toBe('导入较旧但应覆盖')
+    expect(state.activeAfternoonTeaConversationId).toBe('local-only')
+    expect(persisted).toEqual(state.afternoonTeaConversations)
+    expect(replaceAfternoonTeaConversations).toHaveBeenCalled()
+    expect(state.showToast).toHaveBeenCalledWith('数据已成功导入', 'success')
+  })
+
+  it('restores app-shaped afternoon tea data without applying empty task metadata side effects', async () => {
+    await clearTasks()
+    const localTask = task({ id: 'local-task' })
+    const localAgentConversation = agentConversation({ id: 'local-agent' })
+    const localCollection = { id: 'local-collection', name: '本地收藏夹', createdAt: 1, updatedAt: 1 }
+    const importedCollection = { id: 'backup-collection', name: '备份收藏夹', createdAt: 2, updatedAt: 2 }
+    const imageId = 'app-shaped-tea-source'
+    const conversation = afternoonTeaConversation({ id: 'app-shaped-tea', sourceImageId: imageId })
+    await putDbTask(localTask)
+    useStore.setState({
+      tasks: [localTask],
+      agentConversations: [localAgentConversation],
+      activeAgentConversationId: localAgentConversation.id,
+      favoriteCollections: [localCollection],
+      defaultFavoriteCollectionId: localCollection.id,
+      supportPromptOpen: false,
+      supportPromptDismissed: false,
+      supportPromptSkippedForImportedData: true,
+      showToast: vi.fn(),
+    })
+
+    const imported = await importData(importFile({
+      version: 4,
+      exportedAt: new Date(0).toISOString(),
+      tasks: [],
+      agentConversations: [],
+      favoriteCollections: [importedCollection],
+      defaultFavoriteCollectionId: importedCollection.id,
+      afternoonTeaConversations: [conversation],
+      imageFiles: { [imageId]: { path: 'images/tea-source.png' } },
+      thumbnailFiles: {},
+    }, { 'images/tea-source.png': new Uint8Array([1, 2]) }), { importConfig: false, importTasks: true })
+
+    const state = useStore.getState()
+    expect(imported).toBe(true)
+    expect(await getImage(imageId)).toMatchObject({ dataUrl: 'data:image/png;base64,AQI=' })
+    expect(state.afternoonTeaConversations).toEqual([conversation])
+    expect(state.tasks).toEqual([localTask])
+    expect(state.agentConversations).toEqual([localAgentConversation])
+    expect(state.activeAgentConversationId).toBe(localAgentConversation.id)
+    expect(state.favoriteCollections).toEqual([localCollection])
+    expect(state.defaultFavoriteCollectionId).toBe(localCollection.id)
+    expect(state.supportPromptOpen).toBe(false)
+    expect(state.supportPromptSkippedForImportedData).toBe(true)
+    expect(state.showToast).toHaveBeenCalledWith('数据已成功导入', 'success')
+  })
+
+  it('imports v3 backups without an afternoon tea field and keeps local conversations', async () => {
+    const local = afternoonTeaConversation({ id: 'local-tea' })
+    useStore.setState({ afternoonTeaConversations: [local], activeAfternoonTeaConversationId: local.id })
+    await putAfternoonTeaConversation(local)
+
+    const imported = await importData(importFile({
+      version: 3,
+      exportedAt: new Date(0).toISOString(),
+      tasks: [],
+      imageFiles: {},
+    }), { importConfig: false, importTasks: true })
+
+    expect(imported).toBe(true)
+    expect(useStore.getState().afternoonTeaConversations).toEqual([local])
+  })
+
+  it('imports afternoon tea metadata and its source image from different multipart files selected out of order', async () => {
+    const imageId = 'multipart-tea-source'
+    const conversation = afternoonTeaConversation({ id: 'multipart-tea', sourceImageId: imageId })
+    const part1 = importFile({
+      version: 4,
+      exportedAt: new Date(0).toISOString(),
+      backupPart: { id: 'tea-backup', index: 1, total: 2 },
+      tasks: [],
+      imageFiles: { [imageId]: { path: 'images/tea-source.png' } },
+    }, { 'images/tea-source.png': new Uint8Array([1, 2]) })
+    const part2 = importFile({
+      version: 4,
+      exportedAt: new Date(0).toISOString(),
+      backupPart: { id: 'tea-backup', index: 2, total: 2 },
+      afternoonTeaConversations: [conversation],
+    })
+
+    const imported = await importData([part2, part1], { importConfig: false, importTasks: true })
+
+    expect(imported).toBe(true)
+    expect(useStore.getState().afternoonTeaConversations).toEqual([conversation])
+    expect(useStore.getState().activeAfternoonTeaConversationId).toBe(conversation.id)
+    expect(await getAllAfternoonTeaConversations()).toEqual([conversation])
+    expect(await getImage(imageId)).toMatchObject({ dataUrl: 'data:image/png;base64,AQI=' })
+  })
+
+  it('waits for the latest queued afternoon tea snapshot without overlapping IndexedDB replacements', async () => {
+    const replace = vi.mocked(replaceAfternoonTeaConversations)
+    const originalReplace = replace.getMockImplementation()!
+    let releaseFirst = () => {}
+    const firstBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve
+    })
+    let calls = 0
+    let inFlight = 0
+    let maxInFlight = 0
+    replace.mockClear()
+    replace.mockImplementation(async (conversations) => {
+      calls++
+      inFlight++
+      maxInFlight = Math.max(maxInFlight, inFlight)
+      if (calls === 1) await firstBlocked
+      await originalReplace(conversations)
+      inFlight--
+    })
+
+    try {
+      const importedConversation = afternoonTeaConversation({ id: 'queued-import', title: '导入标题' })
+      let importResolved = false
+      const importing = importData(importFile({
+        version: 4,
+        exportedAt: new Date(0).toISOString(),
+        afternoonTeaConversations: [importedConversation],
+      }), { importConfig: false, importTasks: true }).then((result) => {
+        importResolved = true
+        return result
+      })
+      await vi.waitFor(() => expect(replace).toHaveBeenCalledTimes(1))
+
+      useStore.getState().renameAfternoonTeaConversation(importedConversation.id, '导入后本地修改')
+      await Promise.resolve()
+      expect(importResolved).toBe(false)
+      expect(maxInFlight).toBe(1)
+
+      releaseFirst()
+      expect(await importing).toBe(true)
+      expect(maxInFlight).toBe(1)
+      expect(calls).toBe(2)
+      expect((await getAllAfternoonTeaConversations())[0].title).toBe('导入后本地修改')
+    } finally {
+      releaseFirst()
+      replace.mockImplementation(originalReplace)
+    }
+  })
+
+  it('reports import failure when afternoon tea conversations cannot be persisted', async () => {
+    const replace = vi.mocked(replaceAfternoonTeaConversations)
+    const originalReplace = replace.getMockImplementation()!
+    replace.mockClear()
+    replace.mockRejectedValue(new Error('IndexedDB unavailable'))
+    vi.useFakeTimers()
+
+    try {
+      const imported = await importData(importFile({
+        version: 4,
+        exportedAt: new Date(0).toISOString(),
+        afternoonTeaConversations: [afternoonTeaConversation({ id: 'failed-import' })],
+      }), { importConfig: false, importTasks: true })
+
+      expect(imported).toBe(false)
+      expect(useStore.getState().showToast).toHaveBeenCalledWith(
+        expect.stringContaining('导入失败'),
+        'error',
+      )
+    } finally {
+      replace.mockImplementation(originalReplace)
+      await vi.advanceTimersByTimeAsync(1_000)
+      await Promise.resolve()
+      vi.useRealTimers()
+    }
+  })
+
+  it('exports source-only conversation images even when no task references them', async () => {
+    const imageId = 'conversation-source-only-image'
+    const conversation = afternoonTeaConversation({ id: 'tea-source-only', sourceImageId: imageId })
+    await putImage({ id: imageId, dataUrl: 'data:image/png;base64,AQI=', source: 'upload' })
+    useStore.setState({
+      tasks: [],
+      agentConversations: [],
+      afternoonTeaConversations: [conversation],
+      showToast: vi.fn(),
+    })
+
+    const originalDocument = globalThis.document
+    const originalCreateObjectURL = URL.createObjectURL
+    const originalRevokeObjectURL = URL.revokeObjectURL
+    let exportedBlob: Blob | null = null
+    vi.stubGlobal('document', {
+      body: { appendChild: vi.fn() },
+      createElement: vi.fn(() => ({ click: vi.fn(), remove: vi.fn() })),
+    })
+    URL.createObjectURL = vi.fn((blob: Blob | MediaSource) => {
+      exportedBlob = blob as Blob
+      return 'blob:export'
+    })
+    URL.revokeObjectURL = vi.fn()
+
+    try {
+      await exportData({ exportConfig: false, exportTasks: true })
+      expect(exportedBlob).not.toBeNull()
+      const parsed = await readExportZip(new Uint8Array(await exportedBlob!.arrayBuffer()))
+      expect(parsed.manifest.afternoonTeaConversations).toEqual([conversation])
+      expect(Object.keys(parsed.manifest.imageFiles ?? {})).toEqual([imageId])
+    } finally {
+      vi.unstubAllGlobals()
+      URL.createObjectURL = originalCreateObjectURL
+      URL.revokeObjectURL = originalRevokeObjectURL
+      if (originalDocument) vi.stubGlobal('document', originalDocument)
+    }
   })
 
 })

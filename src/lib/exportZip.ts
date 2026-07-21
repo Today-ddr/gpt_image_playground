@@ -1,6 +1,6 @@
 import { strFromU8, strToU8, type AsyncUnzipOptions, unzip, zip } from 'fflate'
 
-import type { AgentConversation, AppSettings, ExportData, FavoriteCollection, StoredImage, StoredImageThumbnail, TaskRecord } from '../types'
+import type { AfternoonTeaConversation, AgentConversation, AppSettings, ExportData, FavoriteCollection, StoredImage, StoredImageThumbnail, TaskRecord } from '../types'
 import { bytesToDataUrl, dataUrlToBytes } from './dataUrl'
 import { getNumberedFileNameBase, sanitizeFileNamePart } from './exportFileName'
 import { getDataUrlDecodedByteSize } from './imageApiShared'
@@ -28,6 +28,7 @@ export interface BuildExportZipParams {
   favoriteCollections: FavoriteCollection[]
   defaultFavoriteCollectionId: string | null
   agentConversations: AgentConversation[]
+  afternoonTeaConversations: AfternoonTeaConversation[]
   imageTasks?: TaskRecord[]
   includeManifestData?: boolean
   backupPart?: ExportData['backupPart']
@@ -47,6 +48,7 @@ export interface ExportZipPlanPart {
   imageIds: string[]
   tasks: TaskRecord[]
   agentConversations: AgentConversation[]
+  afternoonTeaConversations: AfternoonTeaConversation[]
   includeBaseData: boolean
 }
 
@@ -93,7 +95,7 @@ export async function buildExportZip(params: BuildExportZipParams) {
   }
 
   const manifest: ExportData = {
-    version: 3,
+    version: 4,
     exportedAt: exportedAtDate.toISOString(),
   }
 
@@ -102,6 +104,9 @@ export async function buildExportZip(params: BuildExportZipParams) {
   if (params.options.exportTasks) {
     if (params.includeManifestData !== false || params.tasks.length) manifest.tasks = params.tasks
     if (params.includeManifestData !== false || params.agentConversations.length) manifest.agentConversations = params.agentConversations
+    if (params.includeManifestData !== false || params.afternoonTeaConversations.length) {
+      manifest.afternoonTeaConversations = params.afternoonTeaConversations
+    }
     if (params.includeManifestData !== false) {
       manifest.favoriteCollections = params.favoriteCollections
       manifest.defaultFavoriteCollectionId = params.defaultFavoriteCollectionId
@@ -137,29 +142,36 @@ export function getExportZipPlan(
   const manifestBytes = getBaseManifestEstimatedBytes(params)
   const plannedTasks = params.options.exportTasks ? params.tasks : []
   const plannedConversations = params.options.exportTasks ? params.agentConversations : []
+  const plannedAfternoonTeaConversations = params.options.exportTasks ? params.afternoonTeaConversations : []
   const taskBytes = plannedTasks.map(getJsonEstimatedBytes)
   const conversationBytes = plannedConversations.map(getJsonEstimatedBytes)
+  const afternoonTeaConversationBytes = plannedAfternoonTeaConversations.map(getJsonEstimatedBytes)
   const plannedImages = params.options.exportTasks ? images : []
   const estimatedBytes = manifestBytes
     + taskBytes.reduce((total, bytes) => total + bytes, 0)
     + conversationBytes.reduce((total, bytes) => total + bytes, 0)
+    + afternoonTeaConversationBytes.reduce((total, bytes) => total + bytes, 0)
     + plannedImages.reduce((total, image) => total + image.bytes, 0)
   if (estimatedBytes < partBytes) {
     return [{
       imageIds: plannedImages.map((image) => image.id),
       tasks: plannedTasks,
       agentConversations: plannedConversations,
+      afternoonTeaConversations: plannedAfternoonTeaConversations,
       includeBaseData: true,
     }]
   }
 
-  const parts: ExportZipPlanPart[] = [{ imageIds: [], tasks: [], agentConversations: [], includeBaseData: true }]
+  const parts: ExportZipPlanPart[] = [{ imageIds: [], tasks: [], agentConversations: [], afternoonTeaConversations: [], includeBaseData: true }]
   const sizes = [manifestBytes]
   const addItem = (bytes: number, errorMessage: string, append: (part: ExportZipPlanPart) => void) => {
     let index = parts.length - 1
-    const hasItems = parts[index].imageIds.length > 0 || parts[index].tasks.length > 0 || parts[index].agentConversations.length > 0
+    const hasItems = parts[index].imageIds.length > 0
+      || parts[index].tasks.length > 0
+      || parts[index].agentConversations.length > 0
+      || parts[index].afternoonTeaConversations.length > 0
     if (hasItems && sizes[index] + bytes >= partBytes) {
-      parts.push({ imageIds: [], tasks: [], agentConversations: [], includeBaseData: false })
+      parts.push({ imageIds: [], tasks: [], agentConversations: [], afternoonTeaConversations: [], includeBaseData: false })
       sizes.push(ZIP_BASE_OVERHEAD_BYTES)
       index++
     }
@@ -169,10 +181,17 @@ export function getExportZipPlan(
   }
 
   for (let index = 0; index < plannedTasks.length; index++) {
-    addItem(taskBytes[index], '单条任务或 Agent 对话超过 2 GB，无法生成备份。', (part) => part.tasks.push(plannedTasks[index]))
+    addItem(taskBytes[index], '单条任务或对话超过 2 GB，无法生成备份。', (part) => part.tasks.push(plannedTasks[index]))
   }
   for (let index = 0; index < plannedConversations.length; index++) {
-    addItem(conversationBytes[index], '单条任务或 Agent 对话超过 2 GB，无法生成备份。', (part) => part.agentConversations.push(plannedConversations[index]))
+    addItem(conversationBytes[index], '单条任务或对话超过 2 GB，无法生成备份。', (part) => part.agentConversations.push(plannedConversations[index]))
+  }
+  for (let index = 0; index < plannedAfternoonTeaConversations.length; index++) {
+    addItem(
+      afternoonTeaConversationBytes[index],
+      '单条任务或对话超过 2 GB，无法生成备份。',
+      (part) => part.afternoonTeaConversations.push(plannedAfternoonTeaConversations[index]),
+    )
   }
   for (const image of plannedImages) {
     addItem(image.bytes, `图片 ${image.id} 过大，无法放入小于 2 GB 的备份分片。`, (part) => part.imageIds.push(image.id))
@@ -241,7 +260,7 @@ function assertExportZipFiles(manifest: ExportData, hasFile: (path: string) => b
 
 function getBaseManifestEstimatedBytes(params: Omit<BuildExportZipParams, 'images' | 'thumbnailsByImageId'>) {
   const manifest = {
-    version: 3,
+    version: 4,
     exportedAt: new Date(params.exportedAt).toISOString(),
     ...(params.options.exportConfig ? { settings: params.settings } : {}),
     ...(params.options.exportTasks ? {
@@ -249,6 +268,7 @@ function getBaseManifestEstimatedBytes(params: Omit<BuildExportZipParams, 'image
       favoriteCollections: params.favoriteCollections,
       defaultFavoriteCollectionId: params.defaultFavoriteCollectionId,
       agentConversations: [],
+      afternoonTeaConversations: [],
     } : {}),
   }
   return ZIP_BASE_OVERHEAD_BYTES + strToU8(JSON.stringify(manifest)).byteLength

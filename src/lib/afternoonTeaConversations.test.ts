@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { AfternoonTeaConversation, TaskRecord } from '../types'
+import * as conversationHelpers from './afternoonTeaConversations'
 import {
   canReuseRecentEmptyAfternoonTeaConversation,
   collectAfternoonTeaConversationSourceImageIds,
@@ -10,6 +11,20 @@ import {
   normalizeAfternoonTeaTitleCount,
   normalizeAfternoonTeaConversations,
 } from './afternoonTeaConversations'
+
+const reconcileAfternoonTeaConversationBatch = (
+  value: AfternoonTeaConversation,
+  tasks: TaskRecord[],
+  now: number,
+  options?: { interruptUnclaimed?: boolean },
+) => (conversationHelpers as typeof conversationHelpers & {
+  reconcileAfternoonTeaConversationBatch?: (
+    conversation: AfternoonTeaConversation,
+    tasks: TaskRecord[],
+    now: number,
+    options?: { interruptUnclaimed?: boolean },
+  ) => AfternoonTeaConversation
+}).reconcileAfternoonTeaConversationBatch?.(value, tasks, now, options) ?? value
 
 function conversation(patch: Partial<AfternoonTeaConversation> = {}): AfternoonTeaConversation {
   return {
@@ -34,7 +49,7 @@ function conversation(patch: Partial<AfternoonTeaConversation> = {}): AfternoonT
   }
 }
 
-function task(id: string, status: TaskRecord['status']): TaskRecord {
+function task(id: string, status: TaskRecord['status'], finishedAt = status === 'running' ? null : 400): TaskRecord {
   return {
     id,
     prompt: '海报提示词',
@@ -52,7 +67,7 @@ function task(id: string, status: TaskRecord['status']): TaskRecord {
     status,
     error: null,
     createdAt: 100,
-    finishedAt: status === 'running' ? null : 400,
+    finishedAt,
     elapsed: status === 'running' ? null : 300,
   }
 }
@@ -205,14 +220,14 @@ describe('afternoon tea conversations', () => {
     ])).toEqual(['source-a', 'source-b'])
   })
 
-  it('returns elapsed only after this conversation poster tasks finish', () => {
+  it('keeps frozen elapsed when a replacement retry task is running', () => {
     const value = conversation({ batchStartedAt: 100, batchFinishedAt: 500 })
 
     expect(getAfternoonTeaConversationBatchElapsed(value, [
       task('task-a', 'done'),
       task('other-batch-running', 'running'),
     ])).toBe(400)
-    expect(getAfternoonTeaConversationBatchElapsed(value, [task('task-a', 'running')])).toBeNull()
+    expect(getAfternoonTeaConversationBatchElapsed(value, [task('task-a', 'running')])).toBe(400)
   })
 
   it('clamps completed batch elapsed to zero', () => {
@@ -247,5 +262,73 @@ describe('afternoon tea conversations', () => {
     })
 
     expect(getAfternoonTeaConversationBatchElapsed(value, [])).toBeNull()
+  })
+
+  it('does not finish while a linked task is running or an item is unclaimed', () => {
+    const value = conversation({
+      posterItems: [
+        { id: 'running', title: '生成中', prompt: '提示词 A', taskId: 'task-running' },
+        { id: 'queued', title: '等待', prompt: '提示词 B' },
+      ],
+      batchStartedAt: 100,
+    })
+
+    expect(reconcileAfternoonTeaConversationBatch(value, [task('task-running', 'running')], 500)).toBe(value)
+  })
+
+  it('finishes when setup errors, done/error tasks, and missing linked tasks are all terminal', () => {
+    const value = conversation({
+      posterItems: [
+        { id: 'setup', title: '创建失败', prompt: '提示词 A', setupError: '创建失败' },
+        { id: 'done', title: '成功', prompt: '提示词 B', taskId: 'task-done' },
+        { id: 'error', title: '失败', prompt: '提示词 C', taskId: 'task-error' },
+        { id: 'missing', title: '缺失', prompt: '提示词 D', taskId: 'task-missing' },
+      ],
+      batchStartedAt: 100,
+    })
+    const reconciled = reconcileAfternoonTeaConversationBatch(value, [
+      task('task-done', 'done', 420),
+      task('task-error', 'error', 460),
+      task('same-batch-extra', 'done', 900),
+    ], 500)
+
+    expect(reconciled.batchFinishedAt).toBe(460)
+  })
+
+  it('uses reconciliation time when terminal items have no linked finished timestamp', () => {
+    const value = conversation({
+      posterItems: [
+        { id: 'setup', title: '创建失败', prompt: '提示词 A', setupError: '创建失败' },
+        { id: 'missing', title: '缺失', prompt: '提示词 B', taskId: 'task-missing' },
+      ],
+      batchStartedAt: 100,
+    })
+
+    expect(reconcileAfternoonTeaConversationBatch(value, [], 550).batchFinishedAt).toBe(550)
+  })
+
+  it('marks only unclaimed items interrupted during recovery', () => {
+    const value = conversation({
+      posterItems: [
+        { id: 'unclaimed', title: '等待', prompt: '提示词 A' },
+        { id: 'claimed', title: '生成中', prompt: '提示词 B', taskId: 'task-running' },
+      ],
+      batchStartedAt: 100,
+    })
+    const reconciled = reconcileAfternoonTeaConversationBatch(value, [task('task-running', 'running')], 600, {
+      interruptUnclaimed: true,
+    })
+
+    expect(reconciled.posterItems).toEqual([
+      { id: 'unclaimed', title: '等待', prompt: '提示词 A', setupError: '上次批次已中断' },
+      { id: 'claimed', title: '生成中', prompt: '提示词 B', taskId: 'task-running' },
+    ])
+    expect(reconciled.batchFinishedAt).toBeNull()
+  })
+
+  it('never overwrites an existing batch finish', () => {
+    const value = conversation({ batchStartedAt: 100, batchFinishedAt: 450 })
+
+    expect(reconcileAfternoonTeaConversationBatch(value, [task('task-a', 'done', 900)], 1_000)).toBe(value)
   })
 })

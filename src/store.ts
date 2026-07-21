@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type {
+  AfternoonTeaConversation,
   AgentConversation,
   AgentMessage,
   AgentRound,
@@ -31,6 +32,9 @@ import {
   getAllAgentConversations,
   replaceAgentConversations,
   clearAgentConversations as dbClearAgentConversations,
+  getAllAfternoonTeaConversations,
+  replaceAfternoonTeaConversations,
+  clearAfternoonTeaConversations as dbClearAfternoonTeaConversations,
   getImage,
   getImageThumbnail,
   getStoredFreshImageThumbnail,
@@ -57,6 +61,8 @@ import { blobToDataUrl, fileToDataUrl } from './lib/dataUrl'
 import { hasActiveDataOperations } from './lib/dataOperations'
 import { formatExportFileTime } from './lib/exportFileName'
 import { buildExportZip, createExportBlob, getExportImageEstimatedBytes, getExportZipPlan, MAX_EXPORT_ZIP_BYTES, readExportZip, readExportZipFileAsDataUrl, readExportZipManifest } from './lib/exportZip'
+import { collectAfternoonTeaConversationSourceImageIds, isEmptyAfternoonTeaConversation, normalizeAfternoonTeaConversations, reconcileAfternoonTeaConversationBatch } from './lib/afternoonTeaConversations'
+import { DEFAULT_DISH_SYSTEM_PROMPT, DEFAULT_DISH_TITLE_COUNT } from './lib/dishAnalysisPrompts'
 
 export const ALL_FAVORITES_COLLECTION_ID = '__all_favorites__'
 export const DEFAULT_FAVORITE_COLLECTION_ID = '__default_favorites__'
@@ -78,6 +84,7 @@ const FAL_RECOVERY_POLL_MS = 10_000
 const CUSTOM_RECOVERY_POLL_MS = 10_000
 const SUPPORT_PROMPT_IMAGE_THRESHOLD = 50
 const AGENT_INPUT_DRAFT_RETENTION_MS = 3 * 24 * 60 * 60 * 1000
+const AFTERNOON_TEA_CONVERSATION_PERSIST_RETRY_MS = 1_000
 const AGENT_ROUND_IMAGE_MENTION_RE = /@(?:第)?(\d+)轮图(\d+)/g
 const falRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const customRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -86,6 +93,7 @@ const agentRoundControllers = new Map<string, AbortController>()
 const agentRecoveryContinuations = new Set<string>()
 let agentConversationPersistenceReady = false
 let agentConversationMigrationPending = false
+let afternoonTeaConversationPersistenceReady = false
 const OPENAI_INTERRUPTED_ERROR = '请求中断'
 const AGENT_STOPPED_MESSAGE = '已停止生成。'
 const AGENT_RECOVERY_PAUSE_ERROR = 'AgentRecoveryPauseError'
@@ -668,6 +676,44 @@ function getLatestAgentConversation(conversations: AgentConversation[]) {
   }, null)
 }
 
+function createAfternoonTeaConversation(now = Date.now()): AfternoonTeaConversation {
+  return {
+    id: genId(),
+    title: '新下午茶会话',
+    createdAt: now,
+    updatedAt: now,
+    sourceImageId: null,
+    sourceImageName: '',
+    orderText: '',
+    titleCount: DEFAULT_DISH_TITLE_COUNT,
+    systemPrompt: DEFAULT_DISH_SYSTEM_PROMPT,
+    analysisSystemPromptSnapshot: null,
+    analysisUserPromptSnapshot: null,
+    orderResult: null,
+    posterItems: [],
+    batchStartedAt: null,
+    batchFinishedAt: null,
+  }
+}
+
+function getLatestAfternoonTeaConversation(conversations: AfternoonTeaConversation[]) {
+  return conversations.reduce<AfternoonTeaConversation | null>((latest, conversation) => {
+    if (!latest) return conversation
+    if (conversation.updatedAt !== latest.updatedAt) return conversation.updatedAt > latest.updatedAt ? conversation : latest
+    return conversation.createdAt > latest.createdAt ? conversation : latest
+  }, null)
+}
+
+function mergeAfternoonTeaConversationsForStorage(stored: AfternoonTeaConversation[], current: AfternoonTeaConversation[]) {
+  const merged = new Map<string, AfternoonTeaConversation>()
+  for (const conversation of stored) merged.set(conversation.id, conversation)
+  for (const conversation of current) {
+    const existing = merged.get(conversation.id)
+    if (!existing || conversation.updatedAt >= existing.updatedAt) merged.set(conversation.id, conversation)
+  }
+  return [...merged.values()].sort((a, b) => a.createdAt - b.createdAt)
+}
+
 export function getPersistedState(state: AppState) {
   const settings = normalizeSettings(state.settings)
   const galleryInputDraft = getPersistableGalleryInputDraft(state)
@@ -689,6 +735,7 @@ export function getPersistedState(state: AppState) {
       ? { agentConversations: getPersistableAgentConversations(state.agentConversations) }
       : {}),
     activeAgentConversationId: state.activeAgentConversationId,
+    activeAfternoonTeaConversationId: state.activeAfternoonTeaConversationId,
     agentInputDrafts: getPersistableAgentInputDrafts(state),
     agentSidebarCollapsed: state.agentSidebarCollapsed,
     agentAssetTab: state.agentAssetTab,
@@ -727,6 +774,9 @@ export function mergePersistedState(persistedState: unknown, currentState: AppSt
     typeof persisted.activeAgentConversationId === 'string' && (!hasPersistedAgentConversations || agentConversations.some((conversation) => conversation.id === persisted.activeAgentConversationId))
       ? persisted.activeAgentConversationId
       : agentConversations[0]?.id ?? null
+  const activeAfternoonTeaConversationId = typeof persisted.activeAfternoonTeaConversationId === 'string'
+    ? persisted.activeAfternoonTeaConversationId
+    : null
   const appMode = persisted.appMode === 'agent' ? 'agent' : 'gallery'
   const galleryInputDraft = settings.persistInputOnRestart
     ? normalizeAgentInputDraft(persisted.galleryInputDraft ?? {
@@ -766,6 +816,10 @@ export function mergePersistedState(persistedState: unknown, currentState: AppSt
     galleryInputDraft: galleryInputDraft && !isEmptyAgentInputDraft(galleryInputDraft) ? galleryInputDraft : null,
     agentConversations,
     activeAgentConversationId,
+    afternoonTeaConversations: currentState.afternoonTeaConversations,
+    afternoonTeaConversationsLoaded: currentState.afternoonTeaConversationsLoaded,
+    activeAfternoonTeaConversationId,
+    afternoonTeaEditingConversationId: null,
     agentInputDrafts,
     agentSidebarCollapsed: Boolean(persisted.agentSidebarCollapsed),
     agentAssetTab: persisted.agentAssetTab === 'references' ? 'references' : 'outputs',
@@ -796,6 +850,21 @@ interface AppState {
   afternoonTeaBatchOperationId: string | null
   tryBeginAfternoonTeaBatchOperation: (id: string) => boolean
   finishAfternoonTeaBatchOperation: (id: string) => void
+
+  // 下午茶会话
+  afternoonTeaConversations: AfternoonTeaConversation[]
+  afternoonTeaConversationsLoaded: boolean
+  activeAfternoonTeaConversationId: string | null
+  afternoonTeaEditingConversationId: string | null
+  createAfternoonTeaConversation: () => string
+  setActiveAfternoonTeaConversationId: (id: string | null) => void
+  updateAfternoonTeaConversation: (
+    id: string,
+    patch: Partial<Omit<AfternoonTeaConversation, 'id' | 'createdAt' | 'updatedAt'>>,
+  ) => void
+  renameAfternoonTeaConversation: (id: string, title: string) => void
+  deleteAfternoonTeaConversation: (id: string, deleteRelatedTasks?: boolean) => Promise<void>
+  setAfternoonTeaEditingConversationId: (id: string | null) => void
 
   // 设置
   settings: AppSettings
@@ -936,43 +1005,44 @@ interface AppState {
   setConfirmDialog: (d: AppState['confirmDialog']) => void
 }
 
+function addAfternoonTeaConversationReferencedImageIds(
+  target: Set<string>,
+  conversations = useStore.getState().afternoonTeaConversations,
+) {
+  for (const id of collectAfternoonTeaConversationSourceImageIds(conversations)) target.add(id)
+}
+
+function addStateReferencedImageIds(target: Set<string>, state = useStore.getState()) {
+  for (const img of state.inputImages) target.add(img.id)
+  addInputDraftReferencedImageIds(target, state.galleryInputDraft)
+  addAgentReferencedImageIds(target, state.agentConversations, state.agentInputDrafts)
+  for (const task of state.tasks) addTaskReferencedImageIds(target, task)
+  addAfternoonTeaConversationReferencedImageIds(target, state.afternoonTeaConversations)
+}
+
 function isImageReferencedByState(state: AppState, imageId: string) {
-  if (state.inputImages.some((img) => img.id === imageId)) return true
-  if (state.galleryInputDraft?.inputImages.some((img) => img.id === imageId)) return true
-  if (Object.values(state.agentInputDrafts).some((draft) => draft.inputImages.some((img) => img.id === imageId))) return true
-  if (state.tasks.some((task) =>
-    task.inputImageIds.includes(imageId) ||
-    task.outputImages.includes(imageId) ||
-    task.transparentOriginalImages?.includes(imageId) ||
-    task.streamPartialImageIds?.includes(imageId) ||
-    task.maskTargetImageId === imageId ||
-    task.maskImageId === imageId
-  )) return true
-  return state.agentConversations.some((conversation) =>
-    conversation.rounds.some((round) =>
-      round.inputImageIds.includes(imageId) ||
-      round.maskTargetImageId === imageId ||
-      round.maskImageId === imageId
-    ) ||
-    conversation.messages.some((message) =>
-      message.inputImageIds?.includes(imageId) ||
-      message.maskTargetImageId === imageId ||
-      message.maskImageId === imageId
-    ),
-  )
+  const referencedIds = new Set<string>()
+  addStateReferencedImageIds(referencedIds, state)
+  return referencedIds.has(imageId)
 }
 
 export async function deleteImageIfUnreferenced(imageId: string) {
-  imageCache.delete(imageId)
-  thumbnailCache.delete(imageId)
-  thumbnailBackfillIds.delete(imageId)
-  thumbnailBackfillRunningIds.delete(imageId)
-  thumbnailSubscribers.delete(imageId)
-  if (isImageReferencedByState(useStore.getState(), imageId)) return
+  if (isImageReferencedByState(useStore.getState(), imageId)) return false
   try {
-    await deleteImage(imageId)
+    const deleted = await deleteImage(
+      imageId,
+      () => !isImageReferencedByState(useStore.getState(), imageId),
+    )
+    if (!deleted) return false
+    imageCache.delete(imageId)
+    thumbnailCache.delete(imageId)
+    thumbnailBackfillIds.delete(imageId)
+    thumbnailBackfillRunningIds.delete(imageId)
+    thumbnailSubscribers.delete(imageId)
+    return true
   } catch {
     // 清理是内存/存储优化，失败不影响替换结果。
+    return false
   }
 }
 
@@ -1251,6 +1321,99 @@ export const useStore = create<AppState>()(
           ? { afternoonTeaBatchOperationId: null }
           : state
       )),
+
+      // Afternoon tea conversations
+      afternoonTeaConversations: [],
+      afternoonTeaConversationsLoaded: false,
+      activeAfternoonTeaConversationId: null,
+      afternoonTeaEditingConversationId: null,
+      createAfternoonTeaConversation: () => {
+        const now = Date.now()
+        const latestConversation = getLatestAfternoonTeaConversation(get().afternoonTeaConversations)
+        if (latestConversation && isEmptyAfternoonTeaConversation(latestConversation)) {
+          set((state) => ({
+            afternoonTeaConversations: state.afternoonTeaConversations.map((conversation) =>
+              conversation.id === latestConversation.id
+                ? { ...conversation, createdAt: now, updatedAt: now }
+                : conversation,
+            ),
+            activeAfternoonTeaConversationId: latestConversation.id,
+            afternoonTeaEditingConversationId: null,
+          }))
+          return latestConversation.id
+        }
+
+        const conversation = createAfternoonTeaConversation(now)
+        set((state) => ({
+          afternoonTeaConversations: [...state.afternoonTeaConversations, conversation],
+          activeAfternoonTeaConversationId: conversation.id,
+          afternoonTeaEditingConversationId: null,
+        }))
+        return conversation.id
+      },
+      setActiveAfternoonTeaConversationId: (activeAfternoonTeaConversationId) => set({
+        activeAfternoonTeaConversationId,
+        afternoonTeaEditingConversationId: null,
+      }),
+      updateAfternoonTeaConversation: (id, patch) => set((state) => {
+        const existing = state.afternoonTeaConversations.find((conversation) => conversation.id === id)
+        if (!existing) return state
+        const now = Date.now()
+        const updated = normalizeAfternoonTeaConversations([{
+          ...existing,
+          ...patch,
+          id: existing.id,
+          createdAt: existing.createdAt,
+          updatedAt: now,
+        }], now)[0]
+        if (!updated) return state
+        return {
+          afternoonTeaConversations: state.afternoonTeaConversations.map((conversation) =>
+            conversation.id === id ? updated : conversation,
+          ),
+        }
+      }),
+      renameAfternoonTeaConversation: (id, title) => {
+        const normalizedTitle = title.trim()
+        if (!normalizedTitle) return
+        set((state) => ({
+          afternoonTeaConversations: state.afternoonTeaConversations.map((conversation) =>
+            conversation.id === id
+              ? { ...conversation, title: normalizedTitle, updatedAt: Date.now() }
+              : conversation,
+          ),
+        }))
+      },
+      deleteAfternoonTeaConversation: async (id, deleteRelatedTasks = false) => {
+        const conversation = get().afternoonTeaConversations.find((item) => item.id === id)
+        if (!conversation) return
+
+        if (deleteRelatedTasks) {
+          const relatedTaskIds = new Set(conversation.posterItems.flatMap((item) => item.taskId ? [item.taskId] : []))
+          for (const task of get().tasks) {
+            if (task.afternoonTeaBatchId === conversation.id) relatedTaskIds.add(task.id)
+          }
+          if (relatedTaskIds.size > 0) await removeMultipleTasks([...relatedTaskIds])
+        }
+
+        set((state) => {
+          const afternoonTeaConversations = state.afternoonTeaConversations.filter((item) => item.id !== id)
+          const activeDeleted = state.activeAfternoonTeaConversationId === id
+          return {
+            afternoonTeaConversations,
+            activeAfternoonTeaConversationId: activeDeleted
+              ? getLatestAfternoonTeaConversation(afternoonTeaConversations)?.id ?? null
+              : state.activeAfternoonTeaConversationId,
+            afternoonTeaEditingConversationId: state.afternoonTeaEditingConversationId === id
+              ? null
+              : state.afternoonTeaEditingConversationId,
+          }
+        })
+        if (conversation.sourceImageId) await deleteImageIfUnreferenced(conversation.sourceImageId)
+      },
+      setAfternoonTeaEditingConversationId: (afternoonTeaEditingConversationId) => set({
+        afternoonTeaEditingConversationId,
+      }),
 
       // Settings
       settings: { ...DEFAULT_SETTINGS },
@@ -1687,6 +1850,91 @@ useStore.subscribe((state) => {
   }
   void flushAgentConversationsToIndexedDB()
 })
+
+let lastStoredAfternoonTeaConversations = useStore.getState().afternoonTeaConversations
+let afternoonTeaConversationPersistQueued = false
+let afternoonTeaConversationPersistPromise: Promise<boolean> | null = null
+let afternoonTeaConversationPersistRetryTimer: ReturnType<typeof setTimeout> | null = null
+
+function scheduleAfternoonTeaConversationPersistRetry() {
+  if (afternoonTeaConversationPersistRetryTimer != null) return
+  afternoonTeaConversationPersistRetryTimer = setTimeout(() => {
+    afternoonTeaConversationPersistRetryTimer = null
+    void flushAfternoonTeaConversationsToIndexedDB()
+  }, AFTERNOON_TEA_CONVERSATION_PERSIST_RETRY_MS)
+}
+
+function flushAfternoonTeaConversationsToIndexedDB(): Promise<boolean> {
+  if (afternoonTeaConversationPersistPromise) {
+    afternoonTeaConversationPersistQueued = true
+    return afternoonTeaConversationPersistPromise
+  }
+
+  const persist = async (): Promise<boolean> => {
+    let succeeded = false
+    try {
+      do {
+        afternoonTeaConversationPersistQueued = false
+        const conversations = useStore.getState().afternoonTeaConversations
+        await replaceAfternoonTeaConversations(conversations)
+        lastStoredAfternoonTeaConversations = conversations
+      } while (
+        afternoonTeaConversationPersistQueued
+        || useStore.getState().afternoonTeaConversations !== lastStoredAfternoonTeaConversations
+      )
+      succeeded = true
+      return true
+    } catch (error) {
+      afternoonTeaConversationPersistQueued = true
+      console.warn('下午茶会话持久化失败，将自动重试', error)
+      scheduleAfternoonTeaConversationPersistRetry()
+      return false
+    } finally {
+      if (succeeded && afternoonTeaConversationPersistRetryTimer != null) {
+        clearTimeout(afternoonTeaConversationPersistRetryTimer)
+        afternoonTeaConversationPersistRetryTimer = null
+      }
+    }
+  }
+  const promise = persist().then((succeeded) => {
+    if (afternoonTeaConversationPersistPromise === promise) afternoonTeaConversationPersistPromise = null
+    if (!succeeded) return false
+    if (
+      afternoonTeaConversationPersistQueued
+      || useStore.getState().afternoonTeaConversations !== lastStoredAfternoonTeaConversations
+    ) {
+      return flushAfternoonTeaConversationsToIndexedDB()
+    }
+    return true
+  })
+  afternoonTeaConversationPersistPromise = promise
+  return promise
+}
+
+useStore.subscribe((state) => {
+  if (state.afternoonTeaConversations === lastStoredAfternoonTeaConversations) return
+  if (!afternoonTeaConversationPersistenceReady) {
+    afternoonTeaConversationPersistQueued = true
+    return
+  }
+  if (afternoonTeaConversationPersistRetryTimer != null) {
+    afternoonTeaConversationPersistQueued = true
+    return
+  }
+  void flushAfternoonTeaConversationsToIndexedDB()
+})
+
+function reconcileAfternoonTeaConversationBatches(tasks: TaskRecord[], options: { interruptUnclaimed?: boolean } = {}) {
+  useStore.setState((state) => {
+    let changed = false
+    const afternoonTeaConversations = state.afternoonTeaConversations.map((conversation) => {
+      const reconciled = reconcileAfternoonTeaConversationBatch(conversation, tasks, Date.now(), options)
+      if (reconciled !== conversation) changed = true
+      return reconciled
+    })
+    return changed ? { afternoonTeaConversations } : state
+  })
+}
 
 // ===== Actions =====
 
@@ -2157,6 +2405,7 @@ export async function initStore() {
   const legacyAgentConversations = normalizeAgentConversations(useStore.getState().agentConversations)
   const storedTasks = await getAllTasks()
   const storedAgentConversations = normalizeAgentConversations(await getAllAgentConversations())
+  const storedAfternoonTeaConversations = normalizeAfternoonTeaConversations(await getAllAfternoonTeaConversations())
   let loadedAgentConversations = mergeAgentConversationsForStorage(storedAgentConversations, legacyAgentConversations)
   const currentAgentConversations = normalizeAgentConversations(useStore.getState().agentConversations)
   loadedAgentConversations = mergeAgentConversationsForStorage(loadedAgentConversations, currentAgentConversations)
@@ -2190,6 +2439,29 @@ export async function initStore() {
   if (shouldRewritePersistedLocalState) {
     useStore.setState({})
   }
+  const currentAfternoonTeaConversations = normalizeAfternoonTeaConversations(useStore.getState().afternoonTeaConversations)
+  const loadedAfternoonTeaConversations = mergeAfternoonTeaConversationsForStorage(
+    storedAfternoonTeaConversations,
+    currentAfternoonTeaConversations,
+  )
+  const currentActiveAfternoonTeaConversationId = useStore.getState().activeAfternoonTeaConversationId
+  const activeAfternoonTeaConversationId = currentActiveAfternoonTeaConversationId
+    && loadedAfternoonTeaConversations.some((conversation) => conversation.id === currentActiveAfternoonTeaConversationId)
+    ? currentActiveAfternoonTeaConversationId
+    : getLatestAfternoonTeaConversation(loadedAfternoonTeaConversations)?.id ?? null
+  useStore.setState({
+    afternoonTeaConversations: loadedAfternoonTeaConversations,
+    afternoonTeaConversationsLoaded: true,
+    activeAfternoonTeaConversationId,
+    afternoonTeaEditingConversationId: null,
+  })
+  afternoonTeaConversationPersistenceReady = true
+  if (
+    afternoonTeaConversationPersistQueued
+    || useStore.getState().afternoonTeaConversations !== lastStoredAfternoonTeaConversations
+  ) {
+    await flushAfternoonTeaConversationsToIndexedDB()
+  }
   const { tasks: markedTasks, interruptedTasks } = markInterruptedOpenAIRunningTasks(storedTasks)
   const interruptedTaskIds = new Set(interruptedTasks.map((task) => task.id))
   const favoriteState = useStore.getState()
@@ -2205,6 +2477,7 @@ export async function initStore() {
     .filter((task, index) => normalizedFavorites.changed || interruptedTaskIds.has(task.id) || task.rawResponsePayload !== markedTasks[index]?.rawResponsePayload)
     .map((task) => putTask(task)))
   useStore.getState().setTasks(tasks)
+  reconcileAfternoonTeaConversationBatches(tasks, { interruptUnclaimed: true })
   showSupportPromptForExistingLocalData(tasks)
   for (const task of tasks) {
     if (
@@ -2228,23 +2501,8 @@ export async function initStore() {
   const state = useStore.getState()
   const persistedInputImages = state.inputImages
   const galleryInputDraft = state.galleryInputDraft
-  const agentConversations = state.agentConversations
   const agentInputDrafts = state.agentInputDrafts
-  for (const img of persistedInputImages) referencedIds.add(img.id)
-  if (galleryInputDraft) {
-    for (const img of galleryInputDraft.inputImages) referencedIds.add(img.id)
-  }
-  for (const draft of Object.values(agentInputDrafts)) {
-    for (const img of draft.inputImages) referencedIds.add(img.id)
-  }
-  for (const conversation of agentConversations) {
-    for (const round of conversation.rounds) {
-      for (const id of round.inputImageIds) referencedIds.add(id)
-    }
-  }
-  for (const t of tasks) {
-    addTaskReferencedImageIds(referencedIds, t)
-  }
+  addStateReferencedImageIds(referencedIds, state)
 
   // 只枚举 key 清理孤立图片，避免启动时把所有 4K 原图读进内存。
   const imageIds = await getAllImageIds()
@@ -2253,7 +2511,8 @@ export async function initStore() {
     if (referencedIds.has(imgId)) {
       referencedImageIds.push(imgId)
     } else {
-      await deleteImage(imgId)
+      const deleted = await deleteImageIfUnreferenced(imgId)
+      if (!deleted && isImageReferencedByState(useStore.getState(), imgId)) referencedImageIds.push(imgId)
     }
   }
   scheduleThumbnailBackfill(referencedImageIds)
@@ -2940,9 +3199,12 @@ function addAgentReferencedImageIds(target: Set<string>, conversations = useStor
   for (const conversation of conversations) {
     for (const round of conversation.rounds) {
       for (const id of round.inputImageIds) target.add(id)
+      if (round.maskTargetImageId) target.add(round.maskTargetImageId)
       if (round.maskImageId) target.add(round.maskImageId)
     }
     for (const message of conversation.messages) {
+      for (const id of message.inputImageIds || []) target.add(id)
+      if (message.maskTargetImageId) target.add(message.maskTargetImageId)
       if (message.maskImageId) target.add(message.maskImageId)
     }
   }
@@ -2958,6 +3220,7 @@ function addInputDraftReferencedImageIds(target: Set<string>, draft: AgentInputD
 
 function addTaskReferencedImageIds(target: Set<string>, task: TaskRecord) {
   for (const id of task.inputImageIds || []) target.add(id)
+  if (task.maskTargetImageId) target.add(task.maskTargetImageId)
   if (task.maskImageId) target.add(task.maskImageId)
   for (const id of task.outputImages || []) target.add(id)
   for (const id of task.transparentOriginalImages || []) {
@@ -3018,18 +3281,8 @@ async function deleteUnreferencedImageIds(imageIds: Iterable<string>) {
   const candidates = Array.from(new Set(Array.from(imageIds).filter(Boolean)))
   if (candidates.length === 0) return
 
-  const { tasks, inputImages, galleryInputDraft } = useStore.getState()
-  const stillUsed = new Set<string>()
-  for (const task of tasks) addTaskReferencedImageIds(stillUsed, task)
-  addAgentReferencedImageIds(stillUsed)
-  addInputDraftReferencedImageIds(stillUsed, galleryInputDraft)
-  for (const img of inputImages) stillUsed.add(img.id)
-
   for (const imgId of candidates) {
-    if (stillUsed.has(imgId)) continue
-    await deleteImage(imgId)
-    imageCache.delete(imgId)
-    thumbnailCache.delete(imgId)
+    await deleteImageIfUnreferenced(imgId)
   }
 }
 
@@ -5026,6 +5279,7 @@ export function updateTaskInStore(taskId: string, patch: Partial<TaskRecord>) {
   )
   const task = updated.find((t) => t.id === taskId)
   setTasks(updated)
+  if (patch.status === 'done' || patch.status === 'error') reconcileAfternoonTeaConversationBatches(updated)
   maybeOpenSupportPrompt(tasks, updated, taskId)
   if (task) putTask(task)
 }
@@ -5314,7 +5568,7 @@ export async function editOutputs(task: TaskRecord) {
 
 /** 删除多条任务 */
 export async function removeMultipleTasks(taskIds: string[]) {
-  const { tasks, setTasks, inputImages, galleryInputDraft, showToast, selectedTaskIds } = useStore.getState()
+  const { tasks, setTasks, showToast, selectedTaskIds } = useStore.getState()
   
   if (!taskIds.length) return
 
@@ -5331,26 +5585,14 @@ export async function removeMultipleTasks(taskIds: string[]) {
   }
 
   setTasks(remaining)
+  reconcileAfternoonTeaConversationBatches(remaining)
   for (const id of taskIds) {
     await dbDeleteTask(id)
   }
 
-  // 找出其他任务仍引用的图片
-  const stillUsed = new Set<string>()
-  for (const t of remaining) {
-    addTaskReferencedImageIds(stillUsed, t)
-  }
-  addAgentReferencedImageIds(stillUsed)
-  addInputDraftReferencedImageIds(stillUsed, galleryInputDraft)
-  for (const img of inputImages) stillUsed.add(img.id)
-
   // 删除孤立图片
   for (const imgId of deletedImageIds) {
-    if (!stillUsed.has(imgId)) {
-      await deleteImage(imgId)
-      imageCache.delete(imgId)
-      thumbnailCache.delete(imgId)
-    }
+    await deleteImageIfUnreferenced(imgId)
   }
 
   // 如果删除的任务在选中列表中，则移除
@@ -5390,38 +5632,21 @@ export async function clearFailedTasks(taskIds?: string[]) {
 
 /** 删除单条任务 */
 export async function removeTask(task: TaskRecord) {
-  const { tasks, setTasks, inputImages, galleryInputDraft, showToast } = useStore.getState()
+  const { tasks, setTasks, showToast } = useStore.getState()
 
   // 收集此任务关联的图片
-  const taskImageIds = new Set([
-    ...(task.inputImageIds || []),
-    ...(task.maskImageId ? [task.maskImageId] : []),
-    ...(task.outputImages || []),
-    ...(task.transparentOriginalImages || []),
-    ...(task.streamPartialImageIds || []),
-  ])
+  const taskImageIds = new Set<string>()
+  addTaskReferencedImageIds(taskImageIds, task)
 
   // 从列表移除
   const remaining = await scrubAgentOutputPayloadsForDeletedTasks([task], tasks.filter((t) => t.id !== task.id))
   setTasks(remaining)
+  reconcileAfternoonTeaConversationBatches(remaining)
   await dbDeleteTask(task.id)
-
-  // 找出其他任务仍引用的图片
-  const stillUsed = new Set<string>()
-  for (const t of remaining) {
-    addTaskReferencedImageIds(stillUsed, t)
-  }
-  addAgentReferencedImageIds(stillUsed)
-  addInputDraftReferencedImageIds(stillUsed, galleryInputDraft)
-  for (const img of inputImages) stillUsed.add(img.id)
 
   // 删除孤立图片
   for (const imgId of taskImageIds) {
-    if (!stillUsed.has(imgId)) {
-      await deleteImage(imgId)
-      imageCache.delete(imgId)
-      thumbnailCache.delete(imgId)
-    }
+    await deleteImageIfUnreferenced(imgId)
   }
 
   showToast('任务已删除', 'success')
@@ -5440,19 +5665,23 @@ export async function clearData(options: ClearOptions = { clearConfig: true, cle
   if (options.clearTasks) {
     await dbClearTasks()
     await dbClearAgentConversations()
-    await clearImages()
-    imageCache.clear()
-    thumbnailCache.clear()
-    thumbnailBackfillIds.clear()
+    await dbClearAfternoonTeaConversations()
     setTasks([])
     useStore.setState({
       agentConversations: [],
       activeAgentConversationId: null,
+      afternoonTeaConversations: [],
+      activeAfternoonTeaConversationId: null,
+      afternoonTeaEditingConversationId: null,
       supportPromptOpen: false,
       supportPromptSkippedForImportedData: false,
     })
     clearInputImages()
     clearMaskDraft()
+    await clearImages()
+    imageCache.clear()
+    thumbnailCache.clear()
+    thumbnailBackfillIds.clear()
   }
 
   if (options.clearConfig) {
@@ -5538,6 +5767,9 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
     const tasks = options.exportTasks ? await getAllTasks() : []
     const imageIds = options.exportTasks ? await getAllImageIds() : []
     const { settings, agentConversations, favoriteCollections, defaultFavoriteCollectionId } = state
+    const afternoonTeaConversations = options.exportTasks
+      ? normalizeAfternoonTeaConversations(state.afternoonTeaConversations)
+      : []
     const exportedAt = Date.now()
     const params = {
       options,
@@ -5548,6 +5780,7 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
       favoriteCollections,
       defaultFavoriteCollectionId,
       agentConversations: options.exportTasks ? getPersistableAgentConversations(agentConversations) : [],
+      afternoonTeaConversations,
     }
     const imageSizes = []
     for (const id of imageIds) {
@@ -5582,6 +5815,7 @@ export async function exportData(options: ExportOptions = { exportConfig: true, 
         ...params,
         tasks: plan[index].tasks,
         agentConversations: plan[index].agentConversations,
+        afternoonTeaConversations: plan[index].afternoonTeaConversations,
         images,
         thumbnailsByImageId,
         includeManifestData: plan[index].includeBaseData,
@@ -5651,10 +5885,18 @@ export async function importData(input: File | File[], options: ImportOptions = 
     if (options.importConfig && !options.importTasks && !data.settings) throw new Error('所选分片不包含配置数据。')
     const importedTasks = selected.flatMap((part) => part.manifest.tasks ?? [])
     const importedAgentConversations = selected.flatMap((part) => part.manifest.agentConversations ?? [])
-    const hasTaskData = selected.some((part) => part.manifest.tasks != null || part.manifest.imageFiles != null)
+    const importedAfternoonTeaConversations = selected.flatMap((part) => part.manifest.afternoonTeaConversations ?? [])
+    const normalizedImportedAgentConversations = normalizeAgentConversations(importedAgentConversations)
+      .filter((conversation) => !isEmptyAgentConversation(conversation))
+    const hasImageData = selected.some((part) =>
+      Object.keys(part.manifest.imageFiles ?? {}).length > 0
+      || Object.keys(part.manifest.thumbnailFiles ?? {}).length > 0,
+    )
+    const hasLegacyTaskMetadata = importedTasks.length > 0 || normalizedImportedAgentConversations.length > 0
+    const hasAfternoonTeaData = selected.some((part) => part.manifest.afternoonTeaConversations != null)
 
     const importedImageIds: string[] = []
-    if (options.importTasks && hasTaskData) {
+    if (options.importTasks && hasImageData) {
       for (const part of selected) {
         const { manifest, files: zipFiles } = await readExportZip(new Uint8Array(await part.file.arrayBuffer()))
         for (const [id, info] of Object.entries(manifest.imageFiles ?? {})) {
@@ -5690,7 +5932,10 @@ export async function importData(input: File | File[], options: ImportOptions = 
           })
         }
       }
+      scheduleThumbnailBackfill(importedImageIds)
+    }
 
+    if (options.importTasks && hasLegacyTaskMetadata) {
       for (const task of importedTasks) {
         await putTask(task)
       }
@@ -5711,13 +5956,11 @@ export async function importData(input: File | File[], options: ImportOptions = 
         defaultFavoriteCollectionId: normalizedFavorites.defaultFavoriteCollectionId,
       })
       if (normalizedFavorites.changed) await Promise.all(normalizedFavorites.tasks.map((task) => putTask(task)))
-      const normalizedAgentConversations = normalizeAgentConversations(importedAgentConversations)
-        .filter((conversation) => !isEmptyAgentConversation(conversation))
       useStore.setState((state) => {
-        const agentConversations = mergeImportedAgentConversations(state.agentConversations, normalizedAgentConversations)
+        const agentConversations = mergeImportedAgentConversations(state.agentConversations, normalizedImportedAgentConversations)
         const activeAgentConversationId = state.activeAgentConversationId && agentConversations.some((conversation) => conversation.id === state.activeAgentConversationId)
           ? state.activeAgentConversationId
-          : normalizedAgentConversations[0]?.id ?? agentConversations[0]?.id ?? null
+          : normalizedImportedAgentConversations[0]?.id ?? agentConversations[0]?.id ?? null
         return {
           agentConversations,
           activeAgentConversationId,
@@ -5725,7 +5968,26 @@ export async function importData(input: File | File[], options: ImportOptions = 
       })
       await replaceStoredAgentConversations(useStore.getState().agentConversations)
       skipSupportPromptForImportedData(tasks)
-      scheduleThumbnailBackfill(importedImageIds)
+    }
+
+    if (options.importTasks && hasAfternoonTeaData) {
+      const normalizedImportedAfternoonTeaConversations = normalizeAfternoonTeaConversations(importedAfternoonTeaConversations)
+      const state = useStore.getState()
+      const byId = new Map(state.afternoonTeaConversations.map((conversation) => [conversation.id, conversation]))
+      for (const conversation of normalizedImportedAfternoonTeaConversations) byId.set(conversation.id, conversation)
+      const afternoonTeaConversations = [...byId.values()]
+      const activeAfternoonTeaConversationId = state.activeAfternoonTeaConversationId
+        && afternoonTeaConversations.some((conversation) => conversation.id === state.activeAfternoonTeaConversationId)
+        ? state.activeAfternoonTeaConversationId
+        : normalizedImportedAfternoonTeaConversations[0]?.id
+          ?? getLatestAfternoonTeaConversation(afternoonTeaConversations)?.id
+          ?? null
+      useStore.setState({
+        afternoonTeaConversations,
+        activeAfternoonTeaConversationId,
+      })
+      const persisted = await flushAfternoonTeaConversationsToIndexedDB()
+      if (!persisted) throw new Error('下午茶会话持久化失败，请稍后重试。')
     }
 
     if (options.importConfig && data.settings) {
@@ -5733,14 +5995,7 @@ export async function importData(input: File | File[], options: ImportOptions = 
       state.setSettings(mergeImportedSettings(state.settings, data.settings))
     }
 
-    let msg = '数据已成功导入'
-    if (options.importTasks && hasTaskData) {
-      msg = `已导入 ${importedTasks.length} 个任务`
-    } else if (options.importConfig && data.settings) {
-      msg = '配置已成功导入'
-    }
-
-    useStore.getState().showToast(msg, 'success')
+    useStore.getState().showToast('数据已成功导入', 'success')
     return true
   } catch (e) {
     console.error('importData failed', e)

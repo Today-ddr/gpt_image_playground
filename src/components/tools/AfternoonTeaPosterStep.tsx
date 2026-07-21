@@ -1,27 +1,34 @@
+import { useEffect, useState } from 'react'
+import type { TaskRecord } from '../../types'
+import TaskCard from '../TaskCard'
+
 export type AfternoonTeaPosterViewItem = {
   id: string
   title: string
   prompt: string
   status: 'queued' | 'running' | 'done' | 'error'
-  hasOutput?: boolean
-  outputSrc?: string
+  task?: TaskRecord
   error?: string
 }
 
 type AfternoonTeaPosterStepProps = {
   sourceImageSrc: string
   sourceImageName: string
-  profileName: string
-  modelName: string
   items: AfternoonTeaPosterViewItem[]
   busy: boolean
-  batchStarted: boolean
+  batchStartedAt: number | null
+  batchFinishedAt: number | null
+  retryDisabled?: boolean
   pageError: string
   onStart: () => void
   onBack: () => void
   onClear: () => void
   onReparse: () => void
   onRetry: (itemId: string) => void
+  onTaskClick?: (task: TaskRecord) => void
+  onTaskDelete?: (task: TaskRecord) => void
+  onTaskReuse?: (task: TaskRecord) => void
+  onTaskEditOutputs?: (task: TaskRecord) => void
 }
 
 export function getAfternoonTeaPosterErrorMessage(error: unknown) {
@@ -31,12 +38,24 @@ export function getAfternoonTeaPosterErrorMessage(error: unknown) {
 }
 
 export function AfternoonTeaPosterStep(props: AfternoonTeaPosterStepProps) {
+  const [now, setNow] = useState(Date.now())
+  useEffect(() => {
+    if (props.batchStartedAt == null || props.batchFinishedAt != null) return
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000)
+    return () => window.clearInterval(timer)
+  }, [props.batchStartedAt, props.batchFinishedAt])
   const counters = props.items.reduce((result, item) => ({
     ...result,
     [item.status]: result[item.status] + 1,
   }), { queued: 0, running: 0, done: 0, error: 0 })
-  const startDisabled = props.busy || props.batchStarted || !props.sourceImageSrc || props.items.length === 0
-  const startText = props.busy ? '批次生成中' : props.batchStarted ? '已开始生成' : '开始批量生成'
+  const startDisabled = props.busy || props.batchStartedAt != null || !props.sourceImageSrc || props.items.length === 0
+  const startText = props.busy ? '批次生成中' : props.batchStartedAt != null ? '已开始生成' : '开始批量生成'
+  const elapsedSeconds = props.batchStartedAt == null
+    ? null
+    : Math.floor(Math.max(0, (props.batchFinishedAt ?? now) - props.batchStartedAt) / 1_000)
+  const elapsedText = elapsedSeconds == null
+    ? '--:--'
+    : `${Math.floor(elapsedSeconds / 60).toString().padStart(2, '0')}:${(elapsedSeconds % 60).toString().padStart(2, '0')}`
 
   return (
     <div className="min-w-0 flex-1 px-0 py-5 sm:px-6 sm:py-7">
@@ -62,12 +81,6 @@ export function AfternoonTeaPosterStep(props: AfternoonTeaPosterStepProps) {
             ) : (
               <div className="flex aspect-[4/3] items-center justify-center px-4 text-center text-sm text-amber-700 dark:text-amber-300">请先上传原图</div>
             )}
-          </section>
-
-          <section className="rounded-md border border-gray-200 bg-gray-50/60 px-3 py-3 dark:border-white/[0.08] dark:bg-white/[0.02]" aria-label="图片模型摘要">
-            <div className="text-xs text-gray-500 dark:text-gray-400">图片配置</div>
-            <div className="mt-1 break-words text-sm font-medium text-gray-800 dark:text-gray-100">{props.profileName || '未配置'}</div>
-            <div className="mt-0.5 break-words text-xs text-gray-500 dark:text-gray-400">{props.modelName || '未配置图片模型'}</div>
           </section>
 
           <section aria-label="海报 Prompt" className="space-y-2">
@@ -107,31 +120,36 @@ export function AfternoonTeaPosterStep(props: AfternoonTeaPosterStepProps) {
             <span>生成中 {counters.running}</span>
             <span>成功 {counters.done}</span>
             <span>失败 {counters.error}</span>
+            <span>总耗时 {elapsedText}</span>
           </div>
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {props.items.map((item) => (
-              <article key={item.id} data-result-slot={item.id} className="min-w-0 overflow-hidden rounded-md border border-gray-200 bg-white dark:border-white/[0.08] dark:bg-white/[0.03]">
-                <div className="relative aspect-[4/3] min-h-[180px] bg-gray-50 dark:bg-black/20">
-                  {item.status === 'done' && item.outputSrc ? (
-                    <img src={item.outputSrc} alt={`${item.title}海报`} className="h-full w-full object-contain" />
-                  ) : (
-                    <div className="flex h-full min-h-[180px] items-center justify-center px-4 text-center text-sm text-gray-400">
-                      {item.status === 'running' ? '正在生成...' : item.status === 'error' ? '生成失败' : item.status === 'done' ? item.hasOutput === false ? '没有输出图片' : '正在加载图片...' : '等待生成'}
-                    </div>
-                  )}
-                </div>
-                <div className="min-h-[76px] border-t border-gray-200 px-3 py-2.5 dark:border-white/[0.08]">
+            {props.items.map((item) => item.task ? (
+              <div key={item.id} data-result-slot={item.id} data-task-card={item.task.id} className="min-w-0">
+                <TaskCard
+                  task={item.task}
+                  disableSwipe
+                  retryDisabled={props.busy || Boolean(props.retryDisabled)}
+                  onClick={() => props.onTaskClick?.(item.task!)}
+                  onDelete={() => props.onTaskDelete?.(item.task!)}
+                  onReuse={() => props.onTaskReuse?.(item.task!)}
+                  onEditOutputs={() => props.onTaskEditOutputs?.(item.task!)}
+                  onRetry={() => props.onRetry(item.id)}
+                />
+              </div>
+            ) : (
+              <article key={item.id} data-result-slot={item.id} data-result-placeholder className="flex min-h-40 min-w-0 flex-col justify-between rounded-md border border-gray-200 bg-white p-3 dark:border-white/[0.08] dark:bg-white/[0.03]">
+                <div>
                   <div className="break-words text-sm font-medium text-gray-800 dark:text-gray-100">{item.title}</div>
-                  {item.status === 'error' && (
-                    <div className="mt-2 space-y-2">
-                      <p className="max-h-20 overflow-auto whitespace-pre-wrap break-words text-xs leading-5 text-red-600 dark:text-red-300">{item.error || '图片任务创建失败'}</p>
-                      <button type="button" onClick={() => props.onRetry(item.id)} disabled={props.busy} className="whitespace-nowrap rounded-md border border-red-200 bg-white px-2.5 py-1.5 text-xs font-medium text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-500/30 dark:bg-white/[0.03] dark:text-red-300 dark:hover:bg-red-500/10">
-                        重试此项
-                      </button>
-                    </div>
-                  )}
+                  <div className="mt-3 text-sm text-gray-400">
+                    {item.status === 'queued' ? '等待生成' : item.error || '任务记录不可用'}
+                  </div>
                 </div>
+                {item.status === 'error' && (
+                  <button type="button" onClick={() => props.onRetry(item.id)} disabled={props.busy || Boolean(props.retryDisabled)} className="mt-3 self-start whitespace-nowrap rounded-md border border-red-200 bg-white px-2.5 py-1.5 text-xs font-medium text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-500/30 dark:bg-white/[0.03] dark:text-red-300 dark:hover:bg-red-500/10">
+                    重试此项
+                  </button>
+                )}
               </article>
             ))}
           </div>
