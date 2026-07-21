@@ -48,6 +48,10 @@ export function validateDishImageFile(file: Pick<File, 'type' | 'size'>) {
   if (file.size > MAX_DISH_IMAGE_BYTES) throw new Error('餐品图片不能超过 20 MiB')
 }
 
+export function validateDishAnalysisInput(imageDataUrl: string, userPrompt: string) {
+  if (!imageDataUrl.trim() && !userPrompt.trim()) throw new Error('请上传餐品图片或填写下午茶订单')
+}
+
 export function getDishAnalysisProfile(settings: AppSettings): ApiProfile | null {
   const profile = getActiveApiProfile(settings)
   if (profile.provider !== 'openai' || !profile.understandingModel?.trim()) return null
@@ -262,7 +266,7 @@ export function DishAnalysisFormView(props: DishAnalysisFormViewProps) {
                 取消解析
               </button>
             ) : (
-              <button type="button" onClick={props.onSubmit} disabled={!props.configured || props.locked} className="whitespace-nowrap rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50">
+              <button type="button" onClick={props.onSubmit} disabled={!props.configured || props.locked || (!props.imageDataUrl.trim() && !props.userPrompt.trim())} className="whitespace-nowrap rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50">
                 开始解析
               </button>
             )}
@@ -320,11 +324,12 @@ export default function ToolsWorkspace() {
   const settings = useStore((state) => state.settings)
   const params = useStore((state) => state.params)
   const tasks = useStore((state) => state.tasks)
+  const afternoonTeaBatchOperationId = useStore((state) => state.afternoonTeaBatchOperationId)
+  const tryBeginAfternoonTeaBatchOperation = useStore((state) => state.tryBeginAfternoonTeaBatchOperation)
+  const finishAfternoonTeaBatchOperation = useStore((state) => state.finishAfternoonTeaBatchOperation)
   const analysisProfile = getDishAnalysisProfile(settings)
   const posterProfile = getActiveApiProfile(settings)
   const coordinatorRef = useRef(new DishAnalysisCoordinator())
-  const batchCoordinatorRef = useRef(new AfternoonTeaBatchCoordinator())
-  const batchActionRef = useRef(false)
   const mountedRef = useRef(true)
   const cachedSourceImageRef = useRef<{ dataUrl: string; id: string } | null>(null)
   const batchRuntimeRef = useRef<{
@@ -333,6 +338,7 @@ export default function ToolsWorkspace() {
     settingsSnapshot: AppSettings
     paramsSnapshot: TaskParams
     inputImage: InputImage
+    coordinator: AfternoonTeaBatchCoordinator
   } | null>(null)
   const [imageDataUrl, setImageDataUrl] = useState('')
   const [imageName, setImageName] = useState('')
@@ -350,7 +356,7 @@ export default function ToolsWorkspace() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const viewItems = deriveAfternoonTeaPosterViewItems(batchItems, tasks, outputSources)
-  const batchBusy = batchRunning || retrying
+  const batchBusy = Boolean(afternoonTeaBatchOperationId) || batchRunning || retrying
   const displayedPosterProfile = batchRuntimeRef.current?.settingsSnapshot
     ? getActiveApiProfile(batchRuntimeRef.current.settingsSnapshot)
     : posterProfile
@@ -366,13 +372,9 @@ export default function ToolsWorkspace() {
 
   useEffect(() => {
     mountedRef.current = true
-    batchActionRef.current = false
-    batchCoordinatorRef.current = new AfternoonTeaBatchCoordinator()
     return () => {
       mountedRef.current = false
-      batchActionRef.current = false
       coordinatorRef.current.dispose()
-      batchCoordinatorRef.current.dispose()
     }
   }, [])
 
@@ -463,6 +465,7 @@ export default function ToolsWorkspace() {
     setError('')
 
     try {
+      validateDishAnalysisInput(imageDataUrl, userPrompt)
       if (!analysisProfile) throw new Error('请先在 API 配置中选择 OpenAI 配置，并填写语义理解/多模态模型 ID')
       const raw = await analyzeDish({
         profile: analysisProfile,
@@ -502,8 +505,9 @@ export default function ToolsWorkspace() {
 
   const startBatch = async () => {
     if (!imageDataUrl || !orderResult || batchItems.length === 0 || batchBusy || batchStarted) return
-    if (batchActionRef.current) return
-    batchActionRef.current = true
+    const operationId = `afternoon-tea-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    if (!tryBeginAfternoonTeaBatchOperation(operationId)) return
+    const batchCoordinator = new AfternoonTeaBatchCoordinator()
     setBatchRunning(true)
     setBatchPageError('')
     try {
@@ -517,16 +521,15 @@ export default function ToolsWorkspace() {
         ? cachedSourceImageRef.current
         : null
       const imageId = cachedSource?.id ?? await storeImage(imageDataUrl, 'upload')
-      if (!mountedRef.current) return
       cachedSourceImageRef.current = { dataUrl: imageDataUrl, id: imageId }
       const inputImage: InputImage = { id: imageId, dataUrl: imageDataUrl }
-      const batchId = `afternoon-tea-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      const batchId = operationId
       const originalItems = batchItems.map((item) => ({ id: item.id, title: item.title, prompt: item.prompt }))
-      batchRuntimeRef.current = { batchId, items: originalItems, settingsSnapshot, paramsSnapshot, inputImage }
-      setBatchStarted(true)
+      batchRuntimeRef.current = { batchId, items: originalItems, settingsSnapshot, paramsSnapshot, inputImage, coordinator: batchCoordinator }
+      if (mountedRef.current) setBatchStarted(true)
 
       await runAfternoonTeaPosterBatch({
-        coordinator: batchCoordinatorRef.current,
+        coordinator: batchCoordinator,
         batchId,
         items: originalItems,
         settingsSnapshot,
@@ -534,12 +537,14 @@ export default function ToolsWorkspace() {
         inputImage,
         submit: submitAfternoonTeaPosterTask,
         onTaskCreated: (currentBatchId, itemId, taskId) => {
+          if (!mountedRef.current) return
           if (batchRuntimeRef.current?.batchId !== currentBatchId) return
           setBatchItems((current) => current.map((item) => item.id === itemId
             ? { id: item.id, title: item.title, prompt: item.prompt, taskId }
             : item))
         },
         onItemSetupError: (currentBatchId, itemId, setupError) => {
+          if (!mountedRef.current) return
           if (batchRuntimeRef.current?.batchId !== currentBatchId) return
           const message = getAfternoonTeaPosterErrorMessage(setupError)
           setBatchItems((current) => current.map((item) => item.id === itemId
@@ -550,7 +555,7 @@ export default function ToolsWorkspace() {
     } catch (err) {
       if (mountedRef.current) setBatchPageError(getAfternoonTeaPosterErrorMessage(err))
     } finally {
-      batchActionRef.current = false
+      finishAfternoonTeaBatchOperation(operationId)
       if (mountedRef.current) setBatchRunning(false)
     }
   }
@@ -558,14 +563,14 @@ export default function ToolsWorkspace() {
   const retryItem = async (itemId: string) => {
     const runtime = batchRuntimeRef.current
     const item = runtime?.items.find((candidate) => candidate.id === itemId)
-    if (!runtime || !item || batchBusy || !batchCoordinatorRef.current.isTerminal(runtime.batchId)) return
-    if (batchActionRef.current) return
-    batchActionRef.current = true
+    if (!runtime || !item || batchBusy || !runtime.coordinator.isTerminal(runtime.batchId)) return
+    const operationId = `${runtime.batchId}-retry-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    if (!tryBeginAfternoonTeaBatchOperation(operationId)) return
     setRetrying(true)
     setBatchPageError('')
     try {
       await retryAfternoonTeaPosterItem({
-        coordinator: batchCoordinatorRef.current,
+        coordinator: runtime.coordinator,
         batchId: runtime.batchId,
         item,
         settingsSnapshot: runtime.settingsSnapshot,
@@ -573,12 +578,14 @@ export default function ToolsWorkspace() {
         inputImage: runtime.inputImage,
         submit: submitAfternoonTeaPosterTask,
         onTaskCreated: (currentBatchId, currentItemId, taskId) => {
+          if (!mountedRef.current) return
           if (batchRuntimeRef.current?.batchId !== currentBatchId) return
           setBatchItems((current) => current.map((candidate) => candidate.id === currentItemId
             ? { id: candidate.id, title: candidate.title, prompt: candidate.prompt, taskId }
             : candidate))
         },
         onItemSetupError: (currentBatchId, currentItemId, setupError) => {
+          if (!mountedRef.current) return
           if (batchRuntimeRef.current?.batchId !== currentBatchId) return
           const message = getAfternoonTeaPosterErrorMessage(setupError)
           setBatchItems((current) => current.map((candidate) => candidate.id === currentItemId
@@ -589,7 +596,7 @@ export default function ToolsWorkspace() {
     } catch (err) {
       if (mountedRef.current) setBatchPageError(getAfternoonTeaPosterErrorMessage(err))
     } finally {
-      batchActionRef.current = false
+      finishAfternoonTeaBatchOperation(operationId)
       if (mountedRef.current) setRetrying(false)
     }
   }

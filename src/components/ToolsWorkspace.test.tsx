@@ -10,6 +10,7 @@ import {
   deriveAfternoonTeaPosterViewItems,
   getDishAnalysisProfile,
   normalizeDishTitleCount,
+  validateDishAnalysisInput,
   validateDishImageFile,
 } from './ToolsWorkspace'
 import appSource from '../App.tsx?raw'
@@ -93,6 +94,12 @@ describe('DishAnalysisFormView', () => {
     expect(html).toContain('解析结果将显示在这里')
     expect(html).not.toContain('&quot;items&quot;')
   })
+
+  it('disables parsing only when both image and order text are empty', () => {
+    expect(renderForm({ imageDataUrl: '', userPrompt: '' })).toMatch(/<button[^>]*disabled=""[^>]*>开始解析<\/button>/)
+    expect(renderForm({ imageDataUrl: 'data:image/png;base64,AQID', userPrompt: '' })).not.toMatch(/<button[^>]*disabled=""[^>]*>开始解析<\/button>/)
+    expect(renderForm({ imageDataUrl: '', userPrompt: '今日茶歇' })).not.toMatch(/<button[^>]*disabled=""[^>]*>开始解析<\/button>/)
+  })
 })
 
 describe('ToolsWorkflowSteps', () => {
@@ -148,6 +155,15 @@ describe('dish analysis coordination', () => {
     expect(normalizeDishTitleCount(7.9)).toBe(7)
     expect(normalizeDishTitleCount(11)).toBe(10)
     expect(normalizeDishTitleCount(Number.NaN)).toBe(5)
+  })
+
+  it('rejects an empty image and order before any API request', () => {
+    expect(() => validateDishAnalysisInput('', '   ')).toThrow('请上传餐品图片或填写下午茶订单')
+    expect(() => validateDishAnalysisInput('data:image/png;base64,AQID', '   ')).not.toThrow()
+    expect(() => validateDishAnalysisInput('', '今日茶歇')).not.toThrow()
+    expect(workspaceSource).toContain('validateDishAnalysisInput(imageDataUrl, userPrompt)')
+    expect(workspaceSource.indexOf('validateDishAnalysisInput(imageDataUrl, userPrompt)'))
+      .toBeLessThan(workspaceSource.indexOf('await analyzeDish({'))
   })
 
   it('builds both dynamic prompts with the same state title count before submitting', () => {
@@ -212,12 +228,39 @@ describe('dish analysis coordination', () => {
     expect(workspaceSource).toContain('runAfternoonTeaPosterBatch({')
     expect(workspaceSource).toContain('retryAfternoonTeaPosterItem({')
     expect(workspaceSource).toContain('submit: submitAfternoonTeaPosterTask')
-    expect(workspaceSource).toContain('if (batchActionRef.current) return')
-    expect(workspaceSource).toContain('batchActionRef.current = true')
     expect(workspaceSource).toContain('if (mountedRef.current) setBatchPageError')
     expect(workspaceSource).toContain('batchRuntimeRef.current?.settingsSnapshot')
     expect(workspaceSource).toContain('busy={batchBusy || loading}')
-    expect(workspaceSource).toContain('batchCoordinatorRef.current = new AfternoonTeaBatchCoordinator()')
+  })
+
+  it('holds one global operation lease across source setup, batch run, and retry', () => {
+    const startSource = workspaceSource.slice(
+      workspaceSource.indexOf('const startBatch = async () => {'),
+      workspaceSource.indexOf('const retryItem = async (itemId: string) => {'),
+    )
+    const retrySource = workspaceSource.slice(
+      workspaceSource.indexOf('const retryItem = async (itemId: string) => {'),
+      workspaceSource.indexOf('const updateUserPrompt = (value: string) => {'),
+    )
+    const sourceSetup = startSource.slice(
+      startSource.indexOf('await storeImage'),
+      startSource.indexOf('cachedSourceImageRef.current ='),
+    )
+
+    expect(workspaceSource).toContain('const afternoonTeaBatchOperationId = useStore((state) => state.afternoonTeaBatchOperationId)')
+    expect(workspaceSource).toContain('const batchBusy = Boolean(afternoonTeaBatchOperationId) || batchRunning || retrying')
+    expect(startSource).toContain('if (!tryBeginAfternoonTeaBatchOperation(operationId)) return')
+    expect(startSource.indexOf('tryBeginAfternoonTeaBatchOperation(operationId)'))
+      .toBeLessThan(startSource.indexOf('await storeImage'))
+    expect(sourceSetup).not.toContain('mountedRef.current')
+    expect(startSource).toContain('if (mountedRef.current) setBatchStarted(true)')
+    expect(retrySource).toContain('if (!tryBeginAfternoonTeaBatchOperation(operationId)) return')
+    expect(retrySource.indexOf('tryBeginAfternoonTeaBatchOperation(operationId)'))
+      .toBeLessThan(retrySource.indexOf('await retryAfternoonTeaPosterItem({'))
+    expect(workspaceSource.match(/finishAfternoonTeaBatchOperation\(operationId\)/g)).toHaveLength(2)
+    expect(workspaceSource.match(/if \(!mountedRef\.current\) return\n\s+if \(batchRuntimeRef\.current\?\.batchId !== currentBatchId\) return/g)).toHaveLength(4)
+    expect(workspaceSource).not.toContain('batchCoordinatorRef.current.dispose()')
+    expect(workspaceSource).not.toContain('disposeWhenIdle()')
   })
 
   it('suppresses stale image conversions and duplicate requests', () => {

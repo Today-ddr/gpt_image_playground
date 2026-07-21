@@ -709,8 +709,10 @@ function getPersistableAgentConversation(conversation: AgentConversation): Agent
   return getPersistableAgentConversations([conversation])[0]!
 }
 
-function mergePersistedState(persistedState: unknown, currentState: AppState): AppState {
-  if (!persistedState || typeof persistedState !== 'object') return currentState
+export function mergePersistedState(persistedState: unknown, currentState: AppState): AppState {
+  if (!persistedState || typeof persistedState !== 'object') {
+    return { ...currentState, afternoonTeaBatchOperationId: null }
+  }
 
   const persisted = persistedState as Partial<AppState>
   const settings = normalizeSettings(persisted.settings ?? currentState.settings)
@@ -779,6 +781,7 @@ function mergePersistedState(persistedState: unknown, currentState: AppState): A
     inputImages: restoredAgentDraft ? restoredAgentDraft.inputImages : galleryInputDraft?.inputImages ?? [],
     maskDraft: restoredAgentDraft ? restoredAgentDraft.maskDraft : galleryInputDraft?.maskDraft ?? null,
     maskEditorImageId: restoredAgentDraft ? restoredAgentDraft.maskEditorImageId : galleryInputDraft?.maskEditorImageId ?? null,
+    afternoonTeaBatchOperationId: null,
   }
 }
 
@@ -788,6 +791,11 @@ interface AppState {
   // 模式
   appMode: AppMode
   setAppMode: (mode: AppMode) => void
+
+  // 下午茶批量操作
+  afternoonTeaBatchOperationId: string | null
+  tryBeginAfternoonTeaBatchOperation: (id: string) => boolean
+  finishAfternoonTeaBatchOperation: (id: string) => void
 
   // 设置
   settings: AppSettings
@@ -1226,6 +1234,23 @@ export const useStore = create<AppState>()(
           },
         })
       },
+
+      // Afternoon tea batch operation
+      afternoonTeaBatchOperationId: null,
+      tryBeginAfternoonTeaBatchOperation: (id) => {
+        let acquired = false
+        set((state) => {
+          if (state.afternoonTeaBatchOperationId !== null) return state
+          acquired = true
+          return { afternoonTeaBatchOperationId: id }
+        })
+        return acquired
+      },
+      finishAfternoonTeaBatchOperation: (id) => set((state) => (
+        state.afternoonTeaBatchOperationId === id
+          ? { afternoonTeaBatchOperationId: null }
+          : state
+      )),
 
       // Settings
       settings: { ...DEFAULT_SETTINGS },

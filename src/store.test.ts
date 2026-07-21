@@ -137,7 +137,7 @@ import { showBrowserNotification } from './lib/browserNotification'
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
 import { getFalQueuedImageResult } from './lib/falAiImageApi'
 import { removeKeyedBackgroundFromDataUrl } from './lib/transparentImage'
-import { cleanStaleAgentInputDrafts, clearFailedTasks, deleteAgentRoundFromConversation, deleteFavoriteCollection, editOutputs, getActiveAgentRounds, getAgentConversationTaskIds, getAgentRoundTaskIds, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, markInterruptedOpenAIRunningTasks, migratePersistedState, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeTask, reuseConfig, stopAgentResponse, submitAfternoonTeaPosterTask, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, useStore } from './store'
+import { cleanStaleAgentInputDrafts, clearFailedTasks, deleteAgentRoundFromConversation, deleteFavoriteCollection, editOutputs, getActiveAgentRounds, getAgentConversationTaskIds, getAgentRoundTaskIds, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, markInterruptedOpenAIRunningTasks, mergePersistedState, migratePersistedState, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeTask, reuseConfig, stopAgentResponse, submitAfternoonTeaPosterTask, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, useStore } from './store'
 
 const imageA = { id: 'image-a', dataUrl: 'data:image/png;base64,a' }
 const imageB = { id: 'image-b', dataUrl: 'data:image/png;base64,b' }
@@ -218,6 +218,44 @@ function afternoonTeaOptions(settingsSnapshot: AppSettings, overrides: Partial<S
     ...overrides,
   }
 }
+
+describe('afternoon tea batch operation lease', () => {
+  beforeEach(() => {
+    useStore.setState({ afternoonTeaBatchOperationId: null })
+  })
+
+  it('admits only one operation synchronously', () => {
+    expect(useStore.getState().afternoonTeaBatchOperationId).toBeNull()
+    expect(useStore.getState().tryBeginAfternoonTeaBatchOperation('operation-a')).toBe(true)
+    expect(useStore.getState().tryBeginAfternoonTeaBatchOperation('operation-b')).toBe(false)
+    expect(useStore.getState().afternoonTeaBatchOperationId).toBe('operation-a')
+  })
+
+  it('only lets the current owner release the lease', () => {
+    expect(useStore.getState().tryBeginAfternoonTeaBatchOperation('operation-a')).toBe(true)
+    useStore.getState().finishAfternoonTeaBatchOperation('operation-a')
+    expect(useStore.getState().tryBeginAfternoonTeaBatchOperation('operation-b')).toBe(true)
+
+    useStore.getState().finishAfternoonTeaBatchOperation('operation-a')
+
+    expect(useStore.getState().afternoonTeaBatchOperationId).toBe('operation-b')
+    useStore.getState().finishAfternoonTeaBatchOperation('operation-b')
+    expect(useStore.getState().afternoonTeaBatchOperationId).toBeNull()
+  })
+
+  it('never persists or restores the in-memory lease', () => {
+    useStore.setState({ afternoonTeaBatchOperationId: 'operation-live' })
+
+    const persisted = getPersistedState(useStore.getState())
+    const restored = mergePersistedState(
+      { afternoonTeaBatchOperationId: 'operation-injected' },
+      useStore.getState(),
+    )
+
+    expect(persisted).not.toHaveProperty('afternoonTeaBatchOperationId')
+    expect(restored.afternoonTeaBatchOperationId).toBeNull()
+  })
+})
 
 describe('persisted afternoon tea poster tasks', () => {
   beforeEach(async () => {
