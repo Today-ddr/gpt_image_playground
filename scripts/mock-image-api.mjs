@@ -180,8 +180,44 @@ function isOpenAIImagesPath(pathname) {
   return pathname.endsWith('/v1/images/generations') || pathname.endsWith('/v1/images/edits')
 }
 
+function isOpenAIChatCompletionsPath(pathname) {
+  return pathname.endsWith('/v1/chat/completions')
+}
+
 function isOpenAIResponsesPath(pathname) {
   return pathname.endsWith('/v1/responses')
+}
+
+function getChatMessageText(content) {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content
+    .map((part) => part && typeof part === 'object' && part.type === 'text' && typeof part.text === 'string' ? part.text : '')
+    .filter(Boolean)
+    .join('\n')
+}
+
+async function handleChatCompletions(req, res) {
+  const body = await readBody(req)
+  const messages = body.json && typeof body.json === 'object' && Array.isArray(body.json.messages)
+    ? body.json.messages
+    : []
+  const userText = messages
+    .filter((message) => message && typeof message === 'object' && message.role === 'user')
+    .map((message) => getChatMessageText(message.content))
+    .join('\n')
+  const match = userText.match(/标题数量：\s*(\d+)/)
+  const requestedCount = Number(match?.[1])
+  const count = Number.isFinite(requestedCount) ? Math.max(1, Math.min(10, Math.floor(requestedCount))) : 5
+  const titlePool = ['午后茶歇', '暖心时光', '茶香满室', '轻松一刻', '元气补给', '甜蜜相聚', '悠享午后', '温馨茶点', '惬意时分', '美味共享']
+  const result = {
+    titles: titlePool.slice(0, count),
+    items: [
+      { displayName: '草莓酸奶碗', tags: ['草莓', '酸奶', '燕麦'] },
+      { displayName: '柠檬红茶', tags: ['柠檬', '红茶'] },
+    ],
+  }
+  sendJson(res, 200, { choices: [{ message: { content: JSON.stringify(result) } }] })
 }
 
 function isCustomPath(pathname) {
@@ -503,6 +539,11 @@ const server = http.createServer(async (req, res) => {
   }
 
   try {
+    if (req.method === 'POST' && isOpenAIChatCompletionsPath(url.pathname)) {
+      await handleChatCompletions(req, res)
+      return
+    }
+
     if (isOpenAIImagesPath(url.pathname)) {
       await handleApi(req, res, url)
       return
