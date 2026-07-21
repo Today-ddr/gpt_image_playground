@@ -1763,7 +1763,7 @@ function scheduleOpenAIWatchdog(taskId: string, timeoutSeconds: number, profile?
   const timer = setTimeout(() => {
     openAIWatchdogTimers.delete(taskId)
     const failed = failOpenAITaskIfStillRunning(taskId, createOpenAITimeoutError(timeoutSeconds, profile))
-    if (failed) useStore.getState().showToast('OpenAI 任务请求超时', 'error')
+    if (failed && !task.afternoonTeaBatchId) useStore.getState().showToast('OpenAI 任务请求超时', 'error')
   }, remainingMs)
   openAIWatchdogTimers.set(taskId, timer)
 }
@@ -2459,6 +2459,100 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
 
   // 异步调用 API
   executeTask(taskId)
+}
+
+export async function submitAfternoonTeaPosterTask({
+  settingsSnapshot,
+  paramsSnapshot,
+  inputImage,
+  batchId,
+  title,
+  prompt,
+  onTaskCreated,
+}: {
+  settingsSnapshot: AppSettings
+  paramsSnapshot: TaskParams
+  inputImage: InputImage
+  batchId: string
+  title: string
+  prompt: string
+  onTaskCreated: (taskId: string) => void
+}): Promise<{ taskId: string; task: TaskRecord }> {
+  const snapshotProfile = settingsSnapshot.profiles.find((profile) => profile.id === settingsSnapshot.activeProfileId)
+    ?? getActiveApiProfile(settingsSnapshot)
+  if (snapshotProfile.provider !== 'openai') {
+    throw new Error('下午茶海报目前仅支持 OpenAI 图片模型配置。')
+  }
+  const profileError = validateApiProfile(snapshotProfile)
+  if (profileError) {
+    throw new Error(`请先完善请求 API 配置：${profileError}`)
+  }
+
+  const normalizedSettings = normalizeSettings(settingsSnapshot)
+  const activeProfile = getActiveApiProfile(normalizedSettings)
+  const requestSettings = createSettingsForApiProfile(normalizedSettings, activeProfile)
+  const normalizedParams = normalizeParamsForSettings(paramsSnapshot, requestSettings, { hasInputImages: true })
+  const taskId = genId()
+  const task: TaskRecord = {
+    id: taskId,
+    prompt: prompt.trim(),
+    afternoonTeaBatchId: batchId,
+    afternoonTeaTitle: title,
+    params: {
+      ...normalizedParams,
+      n: 1,
+      transparent_output: false,
+    },
+    apiProvider: activeProfile.provider,
+    apiProfileId: activeProfile.id,
+    apiProfileName: activeProfile.name,
+    apiMode: activeProfile.apiMode,
+    apiModel: activeProfile.model,
+    inputImageIds: [inputImage.id],
+    maskTargetImageId: null,
+    maskImageId: null,
+    outputImages: [],
+    status: 'running',
+    error: null,
+    createdAt: Date.now(),
+    finishedAt: null,
+    elapsed: null,
+  }
+
+  const latestTasks = useStore.getState().tasks
+  useStore.getState().setTasks([task, ...latestTasks])
+  try {
+    await putTask(task)
+  } catch (err) {
+    useStore.setState((state) => ({
+      tasks: state.tasks.filter((item) => item.id !== taskId),
+    }))
+    throw err
+  }
+  try {
+    onTaskCreated(taskId)
+  } catch (err) {
+    const finishedAt = Date.now()
+    const currentTask = useStore.getState().tasks.find((item) => item.id === taskId) ?? task
+    const failedTask: TaskRecord = {
+      ...currentTask,
+      status: 'error',
+      error: '下午茶任务创建失败',
+      finishedAt,
+      elapsed: Math.max(0, finishedAt - task.createdAt),
+    }
+    useStore.setState((state) => ({
+      tasks: state.tasks.map((item) => item.id === taskId ? failedTask : item),
+    }))
+    await putTask(failedTask)
+    throw err
+  }
+  await executeTask(taskId, normalizedSettings)
+
+  const latestTask = useStore.getState().tasks.find((item) => item.id === taskId)
+  if (!latestTask) throw new Error('找不到刚创建的下午茶海报任务。')
+  await putTask(latestTask)
+  return { taskId, task: latestTask }
 }
 
 function getActiveAgentConversation(): AgentConversation {
@@ -4656,8 +4750,8 @@ async function executeAgentRound(
   }
 }
 
-async function executeTask(taskId: string) {
-  const { settings } = useStore.getState()
+async function executeTask(taskId: string, settingsOverride?: AppSettings) {
+  const settings = settingsOverride ?? useStore.getState().settings
   const task = useStore.getState().tasks.find((t) => t.id === taskId)
   if (!task) return
   const taskProfile = getTaskApiProfile(settings, task)
@@ -4770,7 +4864,7 @@ async function executeTask(taskId: string) {
       (revisedPrompt) => revisedPrompt?.trim() && revisedPrompt.trim() !== requestPrompt.trim(),
     )
     const hasRevisedPromptValue = shouldStoreRevisedPrompts && result.revisedPrompts?.some((revisedPrompt) => revisedPrompt?.trim())
-    if (taskProvider === 'openai' && activeProfile.apiMode === 'responses' && !activeProfile.codexCli) {
+    if (!task.afternoonTeaBatchId && taskProvider === 'openai' && activeProfile.apiMode === 'responses' && !activeProfile.codexCli) {
       if (promptWasRevised) {
         showCodexCliPrompt()
       } else if (!hasRevisedPromptValue) {
@@ -4808,8 +4902,10 @@ async function executeTask(taskId: string) {
     const completionMessage = failedCount > 0
       ? `生成完成：成功 ${outputIds.length} 张，失败 ${failedCount} 张`
       : `生成完成，共 ${outputIds.length} 张图片`
-    useStore.getState().showToast(completionMessage, failedCount > 0 ? 'error' : 'success')
-    if (!isAgentTask(task)) showTaskCompletionNotification('图像生成完成', `${completionMessage}。`)
+    if (!task.afternoonTeaBatchId) {
+      useStore.getState().showToast(completionMessage, failedCount > 0 ? 'error' : 'success')
+      if (!isAgentTask(task)) showTaskCompletionNotification('图像生成完成', `${completionMessage}。`)
+    }
     const currentMask = useStore.getState().maskDraft
     if (
       maskDataUrl &&
@@ -4851,7 +4947,6 @@ async function executeTask(taskId: string) {
       scheduleCustomRecovery(taskId)
     } else {
       let errorMessage = err instanceof Error ? err.message : String(err)
-      const settings = useStore.getState().settings
       const profile = getTaskApiProfile(settings, latestTask)
       const usesApiProxy = profile?.apiProxy ?? settings.apiProxy
       const activeProfile = getActiveApiProfile(settings)
@@ -4874,7 +4969,7 @@ async function executeTask(taskId: string) {
         finishedAt: Date.now(),
         elapsed: Date.now() - task.createdAt,
       })
-      useStore.getState().setDetailTaskId(taskId)
+      if (!task.afternoonTeaBatchId) useStore.getState().setDetailTaskId(taskId)
     }
   } finally {
     // 释放输入图片的内存缓存（已持久化到 IndexedDB，后续按需从 DB 加载）

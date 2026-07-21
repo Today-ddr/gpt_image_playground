@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { strToU8, zipSync } from 'fflate'
 import { DEFAULT_PARAMS } from './types'
 import { createDefaultFalProfile, createDefaultOpenAIProfile, DEFAULT_RESPONSES_MODEL, DEFAULT_SETTINGS, normalizeSettings } from './lib/apiProfiles'
-import type { AgentConversation, ExportData, StoredImage, StoredImageThumbnail, TaskRecord } from './types'
+import type { AgentConversation, ApiProfile, AppSettings, ExportData, StoredImage, StoredImageThumbnail, TaskRecord } from './types'
 import { getSelectedImageMentionLabel } from './lib/promptImageMentions'
 import { hasActiveDataOperations } from './lib/dataOperations'
 vi.mock('./lib/db', () => {
@@ -15,10 +15,10 @@ vi.mock('./lib/db', () => {
   return {
     CURRENT_THUMBNAIL_VERSION: 2,
     getAllTasks: async () => [...tasks.values()],
-    putTask: async (task: TaskRecord) => {
+    putTask: vi.fn(async (task: TaskRecord) => {
       tasks.set(task.id, task)
       return task.id
-    },
+    }),
     deleteTask: async (id: string) => {
       tasks.delete(id)
     },
@@ -61,11 +61,11 @@ vi.mock('./lib/db', () => {
       images.clear()
       thumbnails.clear()
     },
-    storeImage: async (dataUrl: string, source: StoredImage['source'] = 'upload') => {
+    storeImage: vi.fn(async (dataUrl: string, source: StoredImage['source'] = 'upload') => {
       const id = `stored-image-${++imageSeq}`
       images.set(id, { id, dataUrl, source, createdAt: Date.now() })
       return id
-    },
+    }),
     storeImageWithSize: async (dataUrl: string, source: StoredImage['source'] = 'upload') => {
       const id = `stored-image-${++imageSeq}`
       const size = dataUrl.match(/(\d+)x(\d+)/)
@@ -83,6 +83,9 @@ vi.mock('./lib/api', () => ({
     actualParamsList: [],
     revisedPrompts: [],
   })),
+}))
+vi.mock('./lib/browserNotification', () => ({
+  showBrowserNotification: vi.fn(() => true),
 }))
 vi.mock('./lib/falAiImageApi', () => ({
   getFalErrorMessage: vi.fn((err: unknown) => err instanceof Error ? err.message : String(err)),
@@ -128,11 +131,13 @@ vi.mock('./lib/agentApi', () => ({
     }
   }),
 }))
-import { clearAgentConversations, clearImages, clearTasks, getAllAgentConversations, getAllTasks, getImage, putAgentConversation, putImage, putTask as putDbTask } from './lib/db'
+import { clearAgentConversations, clearImages, clearTasks, getAllAgentConversations, getAllTasks, getImage, putAgentConversation, putImage, putTask as putDbTask, storeImage } from './lib/db'
+import { callImageApi } from './lib/api'
+import { showBrowserNotification } from './lib/browserNotification'
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
 import { getFalQueuedImageResult } from './lib/falAiImageApi'
 import { removeKeyedBackgroundFromDataUrl } from './lib/transparentImage'
-import { cleanStaleAgentInputDrafts, clearFailedTasks, deleteAgentRoundFromConversation, deleteFavoriteCollection, editOutputs, getActiveAgentRounds, getAgentConversationTaskIds, getAgentRoundTaskIds, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, markInterruptedOpenAIRunningTasks, migratePersistedState, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeTask, reuseConfig, stopAgentResponse, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, useStore } from './store'
+import { cleanStaleAgentInputDrafts, clearFailedTasks, deleteAgentRoundFromConversation, deleteFavoriteCollection, editOutputs, getActiveAgentRounds, getAgentConversationTaskIds, getAgentRoundTaskIds, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, markInterruptedOpenAIRunningTasks, migratePersistedState, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeTask, reuseConfig, stopAgentResponse, submitAfternoonTeaPosterTask, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, useStore } from './store'
 
 const imageA = { id: 'image-a', dataUrl: 'data:image/png;base64,a' }
 const imageB = { id: 'image-b', dataUrl: 'data:image/png;base64,b' }
@@ -183,6 +188,395 @@ function importFile(data: ExportData, files: Record<string, Uint8Array> = {}): F
   const buffer = zipped.buffer.slice(zipped.byteOffset, zipped.byteOffset + zipped.byteLength)
   return { name: 'backup.zip', size: zipped.byteLength, arrayBuffer: async () => buffer.slice(0) } as File
 }
+
+type SubmitAfternoonTeaPosterTaskOptions = Parameters<typeof submitAfternoonTeaPosterTask>[0]
+
+function afternoonTeaSettings(profile: ApiProfile): AppSettings {
+  return {
+    ...DEFAULT_SETTINGS,
+    baseUrl: profile.baseUrl,
+    apiKey: profile.apiKey,
+    model: profile.model,
+    timeout: profile.timeout,
+    apiMode: profile.apiMode,
+    codexCli: profile.codexCli,
+    apiProxy: profile.apiProxy,
+    profiles: [profile],
+    activeProfileId: profile.id,
+  }
+}
+
+function afternoonTeaOptions(settingsSnapshot: AppSettings, overrides: Partial<SubmitAfternoonTeaPosterTaskOptions> = {}): SubmitAfternoonTeaPosterTaskOptions {
+  return {
+    settingsSnapshot,
+    paramsSnapshot: { ...DEFAULT_PARAMS },
+    inputImage: imageA,
+    batchId: 'afternoon-tea-batch-a',
+    title: '夏日下午茶',
+    prompt: '生成夏日下午茶海报',
+    onTaskCreated: vi.fn(),
+    ...overrides,
+  }
+}
+
+describe('persisted afternoon tea poster tasks', () => {
+  beforeEach(async () => {
+    await clearTasks()
+    await clearImages()
+    vi.mocked(callImageApi).mockReset()
+    vi.mocked(callImageApi).mockResolvedValue({
+      images: [],
+      actualParams: {},
+      actualParamsList: [],
+      revisedPrompts: [],
+    })
+    vi.mocked(putDbTask).mockClear()
+    vi.mocked(storeImage).mockClear()
+    vi.mocked(showBrowserNotification).mockClear()
+    useStore.setState({
+      settings: afternoonTeaSettings(createDefaultOpenAIProfile({
+        id: 'gallery-profile',
+        name: '当前画廊配置',
+        baseUrl: 'https://gallery.example.com/v1',
+        apiKey: 'gallery-key',
+        model: 'gallery-image-model',
+        apiProxy: false,
+      })),
+      prompt: '保留画廊提示词',
+      inputImages: [imageB],
+      params: { ...DEFAULT_PARAMS, n: 4, quality: 'low' },
+      tasks: [],
+      detailTaskId: null,
+      confirmDialog: null,
+      showToast: vi.fn(),
+    })
+  })
+
+  it.each([
+    ['API URL', { baseUrl: '' }, '缺少 API URL'],
+    ['API Key', { apiKey: '' }, '缺少 API Key'],
+    ['图片模型', { model: '' }, '缺少模型 ID'],
+  ])('validates the OpenAI %s before creating a task', async (_label, profilePatch, expectedError) => {
+    const profile = createDefaultOpenAIProfile({
+      id: 'invalid-openai-profile',
+      name: '无效 OpenAI 配置',
+      baseUrl: 'https://snapshot.example.com/v1',
+      apiKey: 'snapshot-secret',
+      model: 'snapshot-image-model',
+      apiProxy: false,
+      ...profilePatch,
+    })
+    const onTaskCreated = vi.fn()
+
+    await expect(submitAfternoonTeaPosterTask(afternoonTeaOptions(afternoonTeaSettings(profile), { onTaskCreated })))
+      .rejects.toThrow(expectedError)
+
+    expect(useStore.getState().tasks).toEqual([])
+    expect(await getAllTasks()).toEqual([])
+    expect(onTaskCreated).not.toHaveBeenCalled()
+    expect(callImageApi).not.toHaveBeenCalled()
+  })
+
+  it('rejects a non-OpenAI active profile before creating a task', async () => {
+    const profile = createDefaultFalProfile({
+      id: 'fal-profile',
+      name: 'fal 配置',
+      apiKey: 'fal-secret',
+    })
+    const onTaskCreated = vi.fn()
+
+    await expect(submitAfternoonTeaPosterTask(afternoonTeaOptions(afternoonTeaSettings(profile), { onTaskCreated })))
+      .rejects.toThrow('OpenAI')
+
+    expect(useStore.getState().tasks).toEqual([])
+    expect(await getAllTasks()).toEqual([])
+    expect(onTaskCreated).not.toHaveBeenCalled()
+    expect(callImageApi).not.toHaveBeenCalled()
+  })
+
+  it('removes a task from memory when its initial persistence fails', async () => {
+    const profile = createDefaultOpenAIProfile({
+      id: 'initial-persist-failure-profile',
+      name: '初始持久化失败配置',
+      baseUrl: 'https://snapshot.example.com/v1',
+      apiKey: 'snapshot-key',
+      model: 'snapshot-model',
+      apiProxy: false,
+    })
+    const onTaskCreated = vi.fn()
+    vi.mocked(putDbTask).mockRejectedValueOnce(new Error('indexeddb write failed'))
+
+    await expect(submitAfternoonTeaPosterTask(afternoonTeaOptions(afternoonTeaSettings(profile), { onTaskCreated })))
+      .rejects.toThrow('indexeddb write failed')
+
+    expect(useStore.getState().tasks).toEqual([])
+    expect(await getAllTasks()).toEqual([])
+    expect(onTaskCreated).not.toHaveBeenCalled()
+    expect(callImageApi).not.toHaveBeenCalled()
+  })
+
+  it('marks a task as a safe error when onTaskCreated throws', async () => {
+    const profile = createDefaultOpenAIProfile({
+      id: 'callback-failure-profile',
+      name: '回调失败配置',
+      baseUrl: 'https://snapshot.example.com/v1',
+      apiKey: 'snapshot-key',
+      model: 'snapshot-model',
+      apiProxy: false,
+    })
+    const onTaskCreated = vi.fn(() => {
+      throw new Error('callback secret must not be persisted')
+    })
+
+    await expect(submitAfternoonTeaPosterTask(afternoonTeaOptions(afternoonTeaSettings(profile), { onTaskCreated })))
+      .rejects.toThrow('callback secret must not be persisted')
+
+    const [memoryTask] = useStore.getState().tasks
+    const [persistedTask] = await getAllTasks()
+    expect(memoryTask).toMatchObject({
+      status: 'error',
+      error: '下午茶任务创建失败',
+      finishedAt: expect.any(Number),
+      elapsed: expect.any(Number),
+    })
+    expect(persistedTask).toMatchObject({
+      id: memoryTask.id,
+      status: 'error',
+      error: '下午茶任务创建失败',
+      finishedAt: expect.any(Number),
+      elapsed: expect.any(Number),
+    })
+    expect(persistedTask.error).not.toContain('callback secret')
+    expect(putDbTask).toHaveBeenCalledTimes(2)
+    expect(callImageApi).not.toHaveBeenCalled()
+  })
+
+  it('persists explicit task data, calls onTaskCreated after persistence, and waits for done', async () => {
+    const profile = createDefaultOpenAIProfile({
+      id: 'snapshot-openai-profile',
+      name: '快照 OpenAI 配置',
+      baseUrl: 'https://snapshot.example.com/v1',
+      apiKey: 'snapshot-secret-do-not-persist',
+      model: 'snapshot-image-model',
+      apiProxy: false,
+    })
+    const settingsSnapshot = afternoonTeaSettings(profile)
+    const galleryDraft = {
+      prompt: useStore.getState().prompt,
+      inputImages: useStore.getState().inputImages,
+      params: useStore.getState().params,
+    }
+    await putImage({ ...imageA, source: 'upload', createdAt: 1 })
+    vi.mocked(storeImage).mockClear()
+
+    let resolveApi!: (result: Awaited<ReturnType<typeof callImageApi>>) => void
+    vi.mocked(callImageApi).mockImplementationOnce(() => new Promise((resolve) => {
+      resolveApi = resolve
+    }))
+    let persistedAtCallback: Promise<TaskRecord[]> | null = null
+    let notifyCreated!: () => void
+    const created = new Promise<void>((resolve) => {
+      notifyCreated = resolve
+    })
+    const changedSettings = afternoonTeaSettings(createDefaultOpenAIProfile({
+      id: 'changed-profile',
+      name: '排队后切换的配置',
+      baseUrl: 'https://changed.example.com/v1',
+      apiKey: 'changed-key',
+      model: 'changed-model',
+      apiProxy: true,
+    }))
+    const onTaskCreated = vi.fn(() => {
+      persistedAtCallback = getAllTasks()
+      useStore.setState({ settings: changedSettings })
+      notifyCreated()
+    })
+    let settled = false
+
+    const submission = submitAfternoonTeaPosterTask(afternoonTeaOptions(settingsSnapshot, {
+      paramsSnapshot: {
+        ...DEFAULT_PARAMS,
+        size: '1000x1000',
+        quality: 'high',
+        output_format: 'jpeg',
+        output_compression: 72,
+        n: 8,
+        transparent_output: true,
+      },
+      onTaskCreated,
+    }))
+    submission.then(() => {
+      settled = true
+    })
+
+    await created
+    await vi.waitFor(() => expect(callImageApi).toHaveBeenCalledTimes(1))
+
+    const persisted = await persistedAtCallback!
+    expect(persisted).toHaveLength(1)
+    expect(onTaskCreated).toHaveBeenCalledWith(persisted[0].id)
+    expect(persisted[0]).toMatchObject({
+      prompt: '生成夏日下午茶海报',
+      params: {
+        size: '1008x1008',
+        quality: 'high',
+        output_format: 'jpeg',
+        output_compression: 72,
+        moderation: 'auto',
+        n: 1,
+        transparent_output: false,
+      },
+      apiProvider: 'openai',
+      apiProfileId: profile.id,
+      apiProfileName: profile.name,
+      apiMode: profile.apiMode,
+      apiModel: profile.model,
+      inputImageIds: [imageA.id],
+      afternoonTeaBatchId: 'afternoon-tea-batch-a',
+      afternoonTeaTitle: '夏日下午茶',
+      status: 'running',
+    })
+    expect(JSON.stringify(persisted[0])).not.toContain(profile.apiKey)
+    expect(storeImage).not.toHaveBeenCalled()
+    expect(useStore.getState()).toMatchObject(galleryDraft)
+    expect(callImageApi).toHaveBeenCalledWith(expect.objectContaining({
+      settings: expect.objectContaining({
+        activeProfileId: profile.id,
+        baseUrl: profile.baseUrl,
+        apiKey: profile.apiKey,
+        model: profile.model,
+      }),
+      prompt: '生成夏日下午茶海报',
+      params: expect.objectContaining({ n: 1, transparent_output: false }),
+      inputImageDataUrls: [imageA.dataUrl],
+    }))
+    expect(settled).toBe(false)
+
+    resolveApi({
+      images: [],
+      actualParams: {},
+      actualParamsList: [],
+      revisedPrompts: [],
+    })
+    const result = await submission
+
+    expect(result.taskId).toBe(persisted[0].id)
+    expect(result.task).toBe(useStore.getState().tasks.find((item) => item.id === result.taskId))
+    expect(result.task).toMatchObject({ status: 'done', error: null })
+    expect((await getAllTasks()).find((item) => item.id === result.taskId)).toMatchObject({ status: 'done' })
+    expect(JSON.stringify(result.task)).not.toContain(profile.apiKey)
+    expect(useStore.getState().showToast).not.toHaveBeenCalled()
+    expect(showBrowserNotification).not.toHaveBeenCalled()
+    expect(useStore.getState().detailTaskId).toBeNull()
+  })
+
+  it('uses the same settings snapshot for request errors without opening per-task UI', async () => {
+    const profile = createDefaultOpenAIProfile({
+      id: 'proxy-snapshot-profile',
+      name: '代理快照配置',
+      baseUrl: 'https://proxy-target.example.com/v1',
+      apiKey: 'proxy-snapshot-secret',
+      model: 'proxy-snapshot-model',
+      apiProxy: true,
+    })
+    const settingsSnapshot = afternoonTeaSettings(profile)
+    await putImage({ ...imageA, source: 'upload', createdAt: 1 })
+    vi.mocked(callImageApi).mockRejectedValueOnce(new TypeError('Failed to fetch'))
+    const changedSettings = afternoonTeaSettings(createDefaultOpenAIProfile({
+      id: 'direct-profile',
+      name: '当前直连配置',
+      baseUrl: 'https://direct.example.com/v1',
+      apiKey: 'direct-key',
+      model: 'direct-model',
+      apiProxy: false,
+    }))
+
+    const result = await submitAfternoonTeaPosterTask(afternoonTeaOptions(settingsSnapshot, {
+      onTaskCreated: () => useStore.setState({ settings: changedSettings }),
+    }))
+
+    expect(callImageApi).toHaveBeenCalledWith(expect.objectContaining({
+      settings: expect.objectContaining({
+        activeProfileId: profile.id,
+        apiKey: profile.apiKey,
+        apiProxy: true,
+      }),
+    }))
+    expect(result.task.status).toBe('error')
+    expect(result.task.error).toContain('请检查 API 代理服务是否正常运行')
+    expect(result.task.error).not.toContain('浏览器跨域')
+    expect(useStore.getState().detailTaskId).toBeNull()
+    expect(useStore.getState().showToast).not.toHaveBeenCalled()
+    expect(showBrowserNotification).not.toHaveBeenCalled()
+    expect(JSON.stringify(await getAllTasks())).not.toContain(profile.apiKey)
+  })
+
+  it.each([
+    ['rewrites the prompt', ['改写后的下午茶海报提示词']],
+    ['omits the revised prompt', []],
+  ])('skips the per-task Codex CLI prompt when a Responses batch %s', async (_case, revisedPrompts) => {
+    const profile = createDefaultOpenAIProfile({
+      id: 'batch-responses-profile',
+      name: '批次 Responses 配置',
+      baseUrl: 'https://snapshot.example.com/v1',
+      apiKey: 'snapshot-key',
+      model: 'snapshot-model',
+      apiMode: 'responses',
+      codexCli: false,
+    })
+    const changedProfile = createDefaultOpenAIProfile({
+      id: 'changed-responses-profile',
+      name: '排队后切换的 Responses 配置',
+      baseUrl: 'https://changed.example.com/v1',
+      apiKey: 'changed-key',
+      model: 'changed-model',
+      apiMode: 'responses',
+      codexCli: false,
+    })
+    await putImage({ ...imageA, source: 'upload', createdAt: 1 })
+    vi.mocked(callImageApi).mockResolvedValueOnce({
+      images: [],
+      actualParams: {},
+      actualParamsList: [],
+      revisedPrompts,
+    })
+
+    const result = await submitAfternoonTeaPosterTask(afternoonTeaOptions(afternoonTeaSettings(profile), {
+      onTaskCreated: () => useStore.setState({ settings: afternoonTeaSettings(changedProfile) }),
+    }))
+
+    expect(result.task.status).toBe('done')
+    expect(useStore.getState().confirmDialog).toBeNull()
+  })
+
+  it('keeps the Codex CLI prompt for an ordinary Responses gallery task', async () => {
+    const profile = createDefaultOpenAIProfile({
+      id: 'gallery-responses-profile',
+      name: '普通 Responses 配置',
+      baseUrl: 'https://gallery.example.com/v1',
+      apiKey: 'gallery-key',
+      model: 'gallery-model',
+      apiMode: 'responses',
+      codexCli: false,
+    })
+    useStore.setState({
+      settings: afternoonTeaSettings(profile),
+      prompt: '普通画廊任务',
+      inputImages: [],
+      params: { ...DEFAULT_PARAMS },
+      confirmDialog: null,
+    })
+    vi.mocked(callImageApi).mockResolvedValueOnce({
+      images: [],
+      actualParams: {},
+      actualParamsList: [],
+      revisedPrompts: ['普通画廊任务（已改写）'],
+    })
+
+    await submitTask()
+    await vi.waitFor(() => expect(useStore.getState().confirmDialog?.title).toBe('检测到 Codex CLI API'))
+  })
+})
 
 describe('data operation locking', () => {
   it('detects running and recoverable work before import or export', () => {

@@ -183,6 +183,10 @@ export type TaskStatus = 'running' | 'done' | 'error'
 export interface TaskRecord {
   id: string
   prompt: string
+  /** 下午茶海报批次 ID */
+  afternoonTeaBatchId?: string
+  /** 下午茶海报标题 */
+  afternoonTeaTitle?: string
   params: TaskParams
   /** 生成时使用的 Provider 类型 */
   apiProvider?: ApiProvider
