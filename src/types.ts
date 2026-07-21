@@ -161,6 +161,24 @@ export interface AfternoonTeaPosterBatchItem extends AfternoonTeaPosterPrompt {
   setupError?: string
 }
 
+export interface AfternoonTeaConversation {
+  id: string
+  title: string
+  createdAt: number
+  updatedAt: number
+  sourceImageId: string | null
+  sourceImageName: string
+  orderText: string
+  titleCount: number
+  systemPrompt: string
+  analysisSystemPromptSnapshot: string | null
+  analysisUserPromptSnapshot: string | null
+  orderResult: AfternoonTeaOrderResult | null
+  posterItems: AfternoonTeaPosterBatchItem[]
+  batchStartedAt: number | null
+  batchFinishedAt: number | null
+}
+
 // ===== 输入图片（UI 层面） =====
 
 export interface InputImage {
@@ -456,6 +474,7 @@ export interface ExportData {
   favoriteCollections?: FavoriteCollection[]
   defaultFavoriteCollectionId?: string | null
   agentConversations?: AgentConversation[]
+  afternoonTeaConversations?: AfternoonTeaConversation[]
   /** imageId → 图片信息 */
   imageFiles?: Record<string, {
     path: string
