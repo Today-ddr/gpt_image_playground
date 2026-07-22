@@ -30,24 +30,39 @@ describe('buildAfternoonTeaPosterPrompts', () => {
     expect(prompts).toHaveLength(result.titles.length)
     expect(readPosterData(prompts[0].prompt).title).toBe('午后茶歇')
     expect(prompts[0].prompt).not.toContain('暖心时光')
+    expect(prompts[0].prompt).toContain('posterData.title 是本次图片唯一允许使用的标题')
+    expect(prompts[0].prompt).toContain('不要随机生成、替换或改写标题')
     expect(readPosterData(prompts[1].prompt).title).toBe('暖心时光')
     expect(prompts[1].prompt).not.toContain('午后茶歇')
   })
 
-  it('keeps items as structured data and requires one text label for each displayName', () => {
+  it('keeps items as structured data and matches labels to actual photo regions', () => {
     const prompts = buildAfternoonTeaPosterPrompts(result)
 
     for (const item of prompts) {
       expect(readPosterData(item.prompt).items).toEqual(result.items)
-      expect(item.prompt).toContain('为 posterData.items 中每个条目的 displayName 添加一次清晰可读的商品文字标签')
+      expect(item.prompt).toContain('先识别照片中的实际空间区域')
+      expect(item.prompt).toContain('再根据 posterData.items 中的 displayName 和 tags')
+      expect(item.prompt).toContain('不得按照 posterData.items 的数组顺序假定左上、右上、左下或右下')
+      expect(item.prompt).toContain('每个条目至少标注一次')
+      expect(item.prompt).toContain('同一商品出现在多个明显分离区域时')
+      expect(item.prompt).toContain('无法可靠匹配时，不要编造新的商品名称')
+      expect(item.prompt).toContain('准确匹配优先于覆盖全部区域和条目')
+      expect(item.prompt).toContain('允许跳过无法可靠匹配的区域或条目，不得强行标注')
+      expect(item.prompt).not.toContain('左上：双重黑芝麻牛乳')
+      expect(item.prompt).not.toContain('右上：柠檬奶')
+      expect(item.prompt).not.toContain('左下：芒果糯米饭')
+      expect(item.prompt).not.toContain('右下：老椰清补凉')
     }
   })
 
-  it('requires matching small hand-drawn elements or icons for item tags', () => {
+  it('uses tags only for label-associated icons and never as visible text', () => {
     const prompts = buildAfternoonTeaPosterPrompts(result)
 
     for (const item of prompts) {
-      expect(item.prompt).toContain('根据每个条目的 tags，为该商品添加对应的小型手绘元素或相关图标贴纸')
+      expect(item.prompt).toContain('posterData.items[].tags 只用于选择与对应分类标签关联的小图标')
+      expect(item.prompt).toContain('不得作为文字显示')
+      expect(item.prompt).toContain('小图标必须跟随对应分类标签出现')
     }
   })
 
@@ -105,19 +120,28 @@ describe('buildAfternoonTeaPosterPrompts', () => {
       title: untrustedResult.titles[0],
       items: untrustedResult.items,
     })
-    expect(prompt.prompt).toContain('使用用户原图为唯一视觉基底，只做图片编辑')
+    expect(prompt.prompt).toContain('请基于原图进行编辑，不要重新生成图片')
   })
 
-  it('keeps the source photo and limits edits to approved poster additions', () => {
+  it('keeps the source photo and applies all five controlled editing steps', () => {
     const prompts = buildAfternoonTeaPosterPrompts(result)
 
     for (const item of prompts) {
-      expect(item.prompt).toContain('使用用户原图为唯一视觉基底，只做图片编辑')
-      expect(item.prompt).toContain('保持桌面环境、食品数量、食品外观、物品位置和原始构图')
-      expect(item.prompt).toContain('只允许轻度调色、添加标题、商品文字标签和贴纸')
-      expect(item.prompt).toContain('禁止移动、增加、删除、替换或重绘食品、餐具、包装和背景')
-      expect(item.prompt).toContain('禁止添加订单外文字、价格、数量和宣传信息')
-      expect(item.prompt).toContain('贴纸保持克制，不遮挡食品和原有重要内容')
+      expect(item.prompt).toContain('请基于原图进行编辑，不要重新生成图片')
+      expect(item.prompt).toContain('不改变桌面环境')
+      expect(item.prompt).toContain('不改变物品数量')
+      expect(item.prompt).toContain('不改变食物/饮品外观')
+      expect(item.prompt).toContain('不移动任何物品位置')
+      expect(item.prompt).toContain('不删除或新增任何物品')
+      expect(item.prompt).toContain('不改变原始照片构图')
+      expect(item.prompt).toContain('【第一步：识别照片布局】')
+      expect(item.prompt).toContain('【第二步：添加分类标签】')
+      expect(item.prompt).toContain('【第三步：添加下午茶标题】')
+      expect(item.prompt).toContain('【第四步：照片色彩优化】')
+      expect(item.prompt).toContain('【第五步：添加主题贴纸装饰】')
+      expect(item.prompt).toContain('全局贴纸数量控制在3-6个以内')
+      expect(item.prompt).toContain('装饰元素面积不要超过图片整体面积的10%')
+      expect(item.prompt).toContain('这是图片编辑任务，不是重新生成任务')
     }
   })
 })

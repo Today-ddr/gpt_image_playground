@@ -3,7 +3,6 @@ import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from './devP
 
 type AnalyzeDishOptions = {
   profile: ApiProfile
-  imageDataUrl: string
   userPrompt: string
   systemPrompt: string
   signal?: AbortSignal
@@ -49,9 +48,6 @@ export async function analyzeDish(opts: AnalyzeDishOptions): Promise<string> {
     const userContent: Array<Record<string, unknown>> = [
       { type: 'text', text: opts.userPrompt.trim() },
     ]
-    if (opts.imageDataUrl.trim()) {
-      userContent.push({ type: 'image_url', image_url: { url: opts.imageDataUrl } })
-    }
 
     const response = await fetch(buildApiUrl(profile.baseUrl, 'chat/completions', proxyConfig, useApiProxy), {
       method: 'POST',

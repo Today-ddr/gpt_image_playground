@@ -16,6 +16,8 @@ export interface CallApiOptions {
   params: TaskParams
   /** 输入图片的 data URL 列表 */
   inputImageDataUrls: string[]
+  /** 不添加全局提示词保护前缀，按原文发送 */
+  sendPromptAsIs?: boolean
   maskDataUrl?: string
   onFalRequestEnqueued?: (request: { requestId: string; endpoint: string }) => void
   onCustomTaskEnqueued?: (task: { taskId: string }) => void

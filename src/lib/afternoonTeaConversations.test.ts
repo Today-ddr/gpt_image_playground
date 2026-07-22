@@ -39,6 +39,7 @@ function conversation(patch: Partial<AfternoonTeaConversation> = {}): AfternoonT
     systemPrompt: patch.systemPrompt ?? '系统提示词',
     analysisSystemPromptSnapshot: patch.analysisSystemPromptSnapshot ?? '分析系统提示词',
     analysisUserPromptSnapshot: patch.analysisUserPromptSnapshot ?? '分析用户提示词',
+    analysisElapsed: patch.analysisElapsed ?? null,
     orderResult: patch.orderResult === undefined ? {
       titles: ['午后茶歇'],
       items: [{ displayName: '草莓蛋糕', tags: ['草莓'] }],
@@ -88,6 +89,7 @@ describe('afternoon tea conversations', () => {
         titleCount: 99,
         systemPrompt: '系统提示词',
         analysisSystemPromptSnapshot: 123,
+        analysisElapsed: 65_000,
         orderResult: {
           titles: [' 午后茶歇 ', 1],
           items: [
@@ -117,6 +119,7 @@ describe('afternoon tea conversations', () => {
       systemPrompt: '系统提示词',
       analysisSystemPromptSnapshot: null,
       analysisUserPromptSnapshot: null,
+      analysisElapsed: 65_000,
       orderResult: {
         titles: ['午后茶歇'],
         items: [{ displayName: '草莓蛋糕', tags: ['草莓'] }],
@@ -140,6 +143,7 @@ describe('afternoon tea conversations', () => {
       systemPrompt: '当前系统提示词',
       analysisSystemPromptSnapshot: '分析系统提示词快照',
       analysisUserPromptSnapshot: '分析用户提示词快照',
+      analysisElapsed: 65_000,
       orderResult: {
         titles: ['午后茶歇', '暖心时光'],
         items: [
@@ -162,15 +166,47 @@ describe('afternoon tea conversations', () => {
     [undefined, 'missing'],
     [Number.NaN, 'NaN'],
     [Number.POSITIVE_INFINITY, 'Infinity'],
-    ['5', 'string'],
+    ['7', 'string'],
   ])('falls back to the shared default title count for %s values', (titleCount, _label) => {
     const [normalized] = normalizeAfternoonTeaConversations([{
       id: 'conversation-default-title-count',
       ...(titleCount === undefined ? {} : { titleCount }),
     }], 999)
 
-    expect(normalized.titleCount).toBe(5)
-    expect(normalizeAfternoonTeaTitleCount(titleCount)).toBe(5)
+    expect(normalized.titleCount).toBe(4)
+    expect(normalizeAfternoonTeaTitleCount(titleCount)).toBe(4)
+  })
+
+  it('clamps and floors valid numeric title counts', () => {
+    expect(normalizeAfternoonTeaTitleCount(0)).toBe(1)
+    expect(normalizeAfternoonTeaTitleCount(11)).toBe(10)
+    expect(normalizeAfternoonTeaTitleCount(7.9)).toBe(7)
+  })
+
+  it.each([
+    [undefined, 'missing'],
+    [-1, 'negative'],
+    [Number.NaN, 'NaN'],
+    [Number.POSITIVE_INFINITY, 'Infinity'],
+    ['65000', 'string'],
+  ])('discards invalid analysis elapsed values for %s', (analysisElapsed, _label) => {
+    const [normalized] = normalizeAfternoonTeaConversations([{
+      id: 'conversation-invalid-analysis-elapsed',
+      ...(analysisElapsed === undefined ? {} : { analysisElapsed }),
+    }], 999)
+
+    expect(normalized.analysisElapsed).toBeNull()
+  })
+
+  it('discards analysis elapsed when there is no valid result', () => {
+    const [normalized] = normalizeAfternoonTeaConversations([{
+      id: 'conversation-orphan-analysis-elapsed',
+      analysisElapsed: 65_000,
+      orderResult: null,
+    }], 999)
+
+    expect(normalized.orderResult).toBeNull()
+    expect(normalized.analysisElapsed).toBeNull()
   })
 
   it('identifies and reuses only recently updated empty conversations', () => {

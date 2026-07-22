@@ -13,7 +13,6 @@ export type AfternoonTeaPosterViewItem = {
 
 type AfternoonTeaPosterStepProps = {
   sourceImageSrc: string
-  sourceImageName: string
   items: AfternoonTeaPosterViewItem[]
   busy: boolean
   batchStartedAt: number | null
@@ -58,26 +57,23 @@ export function AfternoonTeaPosterStep(props: AfternoonTeaPosterStepProps) {
     : `${Math.floor(elapsedSeconds / 60).toString().padStart(2, '0')}:${(elapsedSeconds % 60).toString().padStart(2, '0')}`
 
   return (
-    <div className="min-w-0 flex-1 px-0 py-5 sm:px-6 sm:py-7">
-      <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+    <div className="min-w-0 flex-1 px-0 py-4 sm:px-6 sm:py-7">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3 sm:mb-5">
         <div>
           <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">批量海报</h2>
           <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">每个标题生成一张基于原图的下午茶海报</p>
         </div>
-        <button type="button" onClick={props.onBack} disabled={props.busy} className="whitespace-nowrap rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/[0.1] dark:bg-white/[0.04] dark:text-gray-200 dark:hover:bg-white/[0.08]">
+        <button type="button" onClick={props.onBack} disabled={props.busy} className="hidden whitespace-nowrap rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/[0.1] dark:bg-white/[0.04] dark:text-gray-200 dark:hover:bg-white/[0.08] sm:inline-flex">
           返回订单解析
         </button>
       </div>
 
-      <div className="grid gap-5 lg:grid-cols-[280px_minmax(0,1fr)]">
+      <div className="grid gap-4 sm:gap-5 lg:grid-cols-[280px_minmax(0,1fr)]">
         <aside className="min-w-0 space-y-4" aria-label="批量海报输入摘要">
           <section className="overflow-hidden rounded-md border border-gray-200 bg-white dark:border-white/[0.08] dark:bg-white/[0.03]">
             <div className="border-b border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 dark:border-white/[0.08] dark:text-gray-200">原图</div>
             {props.sourceImageSrc ? (
-              <>
-                <img src={props.sourceImageSrc} alt="下午茶海报原图" className="aspect-[4/3] w-full bg-gray-50 object-contain dark:bg-black/20" />
-                <div className="truncate px-3 py-2 text-xs text-gray-500 dark:text-gray-400">{props.sourceImageName || '已上传图片'}</div>
-              </>
+              <img src={props.sourceImageSrc} alt="下午茶海报原图" className="aspect-[4/3] w-full bg-gray-50 object-contain dark:bg-black/20" />
             ) : (
               <div className="flex aspect-[4/3] items-center justify-center px-4 text-center text-sm text-amber-700 dark:text-amber-300">请先上传原图</div>
             )}
@@ -100,8 +96,8 @@ export function AfternoonTeaPosterStep(props: AfternoonTeaPosterStepProps) {
           )}
 
           {!props.sourceImageSrc && <div className="text-xs text-amber-700 dark:text-amber-300">批量生成需要一张原图。</div>}
-          <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={props.onStart} disabled={startDisabled} className="whitespace-nowrap rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50">
+          <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
+            <button type="button" onClick={props.onStart} disabled={startDisabled} className="col-span-2 whitespace-nowrap rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50 sm:col-auto">
               {startText}
             </button>
             <button type="button" onClick={props.onReparse} disabled={props.busy} className="whitespace-nowrap rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/[0.1] dark:bg-white/[0.04] dark:text-gray-200 dark:hover:bg-white/[0.08]">
@@ -114,7 +110,7 @@ export function AfternoonTeaPosterStep(props: AfternoonTeaPosterStepProps) {
         </aside>
 
         <section className="min-w-0" aria-label="批量海报结果">
-          <div className="mb-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500 dark:text-gray-400" aria-live="polite">
+          <div className="mb-3 grid grid-cols-3 gap-x-3 gap-y-1 text-xs text-gray-500 dark:text-gray-400 sm:flex sm:flex-wrap sm:gap-x-4" aria-live="polite">
             <span>总数 {props.items.length}</span>
             <span>等待 {counters.queued}</span>
             <span>生成中 {counters.running}</span>
@@ -123,7 +119,7 @@ export function AfternoonTeaPosterStep(props: AfternoonTeaPosterStepProps) {
             <span>总耗时 {elapsedText}</span>
           </div>
 
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {props.items.map((item) => item.task ? (
               <div key={item.id} data-result-slot={item.id} data-task-card={item.task.id} className="min-w-0">
                 <TaskCard

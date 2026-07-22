@@ -9,11 +9,21 @@ import {
 
 describe('dish analysis prompts', () => {
   it('keeps editable source defaults in the project', () => {
-    expect(DEFAULT_DISH_TITLE_COUNT).toBe(5)
+    expect(DEFAULT_DISH_TITLE_COUNT).toBe(4)
     expect(DEFAULT_DISH_USER_PROMPT).toBe('')
     expect(DEFAULT_DISH_SYSTEM_PROMPT).toContain('公司下午茶图片设计助手')
-    expect(DEFAULT_DISH_SYSTEM_PROMPT).toContain('生成 {{titleCount}} 个不同标题')
+    expect(DEFAULT_DISH_SYSTEM_PROMPT).toContain('整理出用于生成下午茶分享图片的标题和商品贴纸信息')
+    expect(DEFAULT_DISH_SYSTEM_PROMPT).toContain('【displayName 商品名称】')
+    expect(DEFAULT_DISH_SYSTEM_PROMPT).toContain('【tags 贴纸关键词】')
+    expect(DEFAULT_DISH_SYSTEM_PROMPT).toContain('生成 {{titleCount}} 个适合放在下午茶分享图片顶部的大标题')
+    expect(DEFAULT_DISH_SYSTEM_PROMPT).toContain('标题不要包含')
+    expect(DEFAULT_DISH_SYSTEM_PROMPT).toContain('公司')
+    expect(DEFAULT_DISH_SYSTEM_PROMPT).toContain('员工')
+    expect(DEFAULT_DISH_SYSTEM_PROMPT).toContain('福利')
+    expect(DEFAULT_DISH_SYSTEM_PROMPT).toContain('活动')
+    expect(DEFAULT_DISH_SYSTEM_PROMPT).toContain('通知')
     expect(DEFAULT_DISH_SYSTEM_PROMPT).toContain('必须只返回纯 JSON')
+    expect(DEFAULT_DISH_SYSTEM_PROMPT).not.toContain('生成 {{titleCount}} 个不同标题')
   })
 
   it('replaces every title count placeholder in the system prompt', () => {
@@ -29,9 +39,9 @@ describe('dish analysis prompts', () => {
   it('builds the default request without leaving a title count token', () => {
     const prompt = buildDishAnalysisSystemPrompt(DEFAULT_DISH_SYSTEM_PROMPT, DEFAULT_DISH_TITLE_COUNT)
 
-    expect(prompt).toContain('生成 5 个不同标题')
+    expect(prompt).toContain('生成 4 个适合放在下午茶分享图片顶部的大标题')
     expect(prompt).not.toContain('{{titleCount}}')
     expect(buildDishAnalysisUserPrompt(' 草莓蛋糕 x 2 ', DEFAULT_DISH_TITLE_COUNT))
-      .toBe('标题数量：5\n\n下午茶订单：\n草莓蛋糕 x 2')
+      .toBe('标题数量：4\n\n下午茶订单：\n草莓蛋糕 x 2')
   })
 })

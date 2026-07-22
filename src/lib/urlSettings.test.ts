@@ -6,7 +6,9 @@ import {
   DEFAULT_SETTINGS,
   normalizeSettings,
 } from './apiProfiles'
-import { buildSettingsFromUrlParams, clearUrlSettingParams, hasUrlSettingParams, setOpenAIProfileImportUrlParams } from './urlSettings'
+import { buildSettingsFromUrlParams, clearUrlSettingParams, getAppModeFromUrlParams, hasUrlSettingParams, setAppModeUrlParams, setOpenAIProfileImportUrlParams } from './urlSettings'
+import appSource from '../App.tsx?raw'
+import mainSource from '../main.tsx?raw'
 
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -20,6 +22,28 @@ async function importDefaultConfigOnlyUrlSettings() {
 }
 
 describe('URL settings params', () => {
+  it('uses the appMode URL marker for tools without persisting other modes in the URL', () => {
+    const params = new URLSearchParams('appMode=tools&foo=bar')
+
+    expect(getAppModeFromUrlParams(params)).toBe('tools')
+    expect(getAppModeFromUrlParams(new URLSearchParams('appMode=gallery'))).toBeNull()
+    expect(getAppModeFromUrlParams(new URLSearchParams('appMode=invalid'))).toBeNull()
+
+    setAppModeUrlParams(params, 'gallery')
+    expect(params.get('foo')).toBe('bar')
+    expect(params.has('appMode')).toBe(false)
+
+    setAppModeUrlParams(params, 'tools')
+    expect(params.get('appMode')).toBe('tools')
+  })
+
+  it('wires URL mode bootstrap before render and synchronizes mode changes with replaceState', () => {
+    expect(mainSource).toContain('getAppModeFromUrlParams')
+    expect(mainSource).toContain('useStore.getState().setAppMode(initialAppMode)')
+    expect(appSource).toContain('setAppModeUrlParams(searchParams, appMode)')
+    expect(appSource).toContain('window.history.replaceState')
+  })
+
   it('writes and reads the understanding model for OpenAI profile URLs', () => {
     const params = new URLSearchParams()
     setOpenAIProfileImportUrlParams(params, createDefaultOpenAIProfile({
@@ -216,12 +240,12 @@ describe('URL settings params', () => {
   })
 
   it('clears known URL setting params without touching unrelated params', () => {
-    const params = new URLSearchParams('apiUrl=https://api.example.com/v1&apiKey=test-key&model=test-model&profileName=test-profile&streamImages=false&streamPartialImages=3&foo=bar')
+    const params = new URLSearchParams('appMode=tools&apiUrl=https://api.example.com/v1&apiKey=test-key&model=test-model&profileName=test-profile&streamImages=false&streamPartialImages=3&foo=bar')
 
     expect(hasUrlSettingParams(params)).toBe(true)
     clearUrlSettingParams(params)
 
-    expect(params.toString()).toBe('foo=bar')
+    expect(params.toString()).toBe('appMode=tools&foo=bar')
   })
 
   it('imports settings with custom providers from URL params', () => {

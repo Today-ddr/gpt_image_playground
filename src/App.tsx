@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import { initStore } from './store'
 import { useStore } from './store'
-import { activateFirstImportedProfile, buildSettingsFromUrlParams, clearUrlSettingParams, hasUrlSettingParams } from './lib/urlSettings'
+import { activateFirstImportedProfile, buildSettingsFromUrlParams, clearUrlSettingParams, hasUrlSettingParams, setAppModeUrlParams } from './lib/urlSettings'
 import { isDefaultConfigOnlyEnabled, mergeImportedSettings } from './lib/apiProfiles'
 import { getCustomProviderConfigUrl, loadCustomProviderSettingsFromUrl } from './lib/customProviderConfigUrl'
 import { useDockerApiUrlMigrationNotice } from './hooks/useDockerApiUrlMigrationNotice'
@@ -47,6 +47,7 @@ export default function App() {
       if (!hasUrlSettingParams(searchParams)) return
 
       clearUrlSettingParams(searchParams)
+      setAppModeUrlParams(searchParams, useStore.getState().appMode)
 
       const nextSearch = searchParams.toString()
       const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}${window.location.hash}`
@@ -96,6 +97,16 @@ export default function App() {
 
     initStore()
   }, [setSettings])
+
+  useEffect(() => {
+    const searchParams = new URLSearchParams(window.location.search)
+    setAppModeUrlParams(searchParams, appMode)
+
+    const nextSearch = searchParams.toString()
+    const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}${window.location.hash}`
+    const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`
+    if (nextUrl !== currentUrl) window.history.replaceState(null, '', nextUrl)
+  }, [appMode])
 
   useEffect(() => {
     const preventPageImageDrag = (e: DragEvent) => {

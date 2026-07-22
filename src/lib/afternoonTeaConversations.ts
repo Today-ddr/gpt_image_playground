@@ -77,6 +77,7 @@ export function normalizeAfternoonTeaConversations(value: unknown, now = Date.no
 
     const createdAt = normalizeTimestamp(record.createdAt, now)
     const sourceImageId = normalizeString(record.sourceImageId)
+    const orderResult = normalizeOrderResult(record.orderResult)
     return [{
       id,
       title: normalizeString(record.title) || DEFAULT_CONVERSATION_TITLE,
@@ -89,7 +90,10 @@ export function normalizeAfternoonTeaConversations(value: unknown, now = Date.no
       systemPrompt: typeof record.systemPrompt === 'string' ? record.systemPrompt : '',
       analysisSystemPromptSnapshot: typeof record.analysisSystemPromptSnapshot === 'string' ? record.analysisSystemPromptSnapshot : null,
       analysisUserPromptSnapshot: typeof record.analysisUserPromptSnapshot === 'string' ? record.analysisUserPromptSnapshot : null,
-      orderResult: normalizeOrderResult(record.orderResult),
+      analysisElapsed: orderResult && typeof record.analysisElapsed === 'number' && Number.isFinite(record.analysisElapsed) && record.analysisElapsed >= 0
+        ? record.analysisElapsed
+        : null,
+      orderResult,
       posterItems: normalizePosterItems(record.posterItems),
       batchStartedAt: typeof record.batchStartedAt === 'number' && Number.isFinite(record.batchStartedAt) ? record.batchStartedAt : null,
       batchFinishedAt: typeof record.batchFinishedAt === 'number' && Number.isFinite(record.batchFinishedAt) ? record.batchFinishedAt : null,

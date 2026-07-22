@@ -191,10 +191,11 @@ function afternoonTeaConversation(overrides: Partial<AfternoonTeaConversation> =
     sourceImageId: null,
     sourceImageName: '',
     orderText: '',
-    titleCount: 5,
+    titleCount: DEFAULT_DISH_TITLE_COUNT,
     systemPrompt: '系统提示词',
     analysisSystemPromptSnapshot: null,
     analysisUserPromptSnapshot: null,
+    analysisElapsed: null,
     orderResult: null,
     posterItems: [],
     batchStartedAt: null,
@@ -303,6 +304,7 @@ describe('afternoonTea conversation store', () => {
       afternoonTeaConversationsLoaded: false,
       activeAfternoonTeaConversationId: null,
       afternoonTeaEditingConversationId: null,
+      defaultAfternoonTeaTitleCount: DEFAULT_DISH_TITLE_COUNT,
     })
     await initStore()
     vi.mocked(replaceAfternoonTeaConversations).mockClear()
@@ -331,6 +333,78 @@ describe('afternoonTea conversation store', () => {
       batchFinishedAt: null,
     })
     expect(useStore.getState().activeAfternoonTeaConversationId).toBe(id)
+  })
+
+  it('force-creates a conversation without reusing another empty conversation', () => {
+    const first = useStore.getState().createAfternoonTeaConversation()
+    const second = useStore.getState().createAfternoonTeaConversation({ force: true })
+
+    expect(second).not.toBe(first)
+    expect(useStore.getState().afternoonTeaConversations.map((conversation) => conversation.id)).toEqual([first, second])
+    expect(useStore.getState().activeAfternoonTeaConversationId).toBe(second)
+  })
+
+  it('stores the title count preference and force-creates with it', () => {
+    expect(useStore.getState().defaultAfternoonTeaTitleCount).toBe(4)
+
+    useStore.getState().setDefaultAfternoonTeaTitleCount(7)
+    const id = useStore.getState().createAfternoonTeaConversation({ force: true })
+
+    expect(useStore.getState().defaultAfternoonTeaTitleCount).toBe(7)
+    expect(useStore.getState().afternoonTeaConversations.find((item) => item.id === id)?.titleCount).toBe(7)
+  })
+
+  it('reuses an empty conversation and synchronizes the latest title count preference', () => {
+    const first = useStore.getState().createAfternoonTeaConversation()
+
+    useStore.getState().setDefaultAfternoonTeaTitleCount(7)
+    const reused = useStore.getState().createAfternoonTeaConversation()
+
+    expect(reused).toBe(first)
+    expect(useStore.getState().afternoonTeaConversations).toHaveLength(1)
+    expect(useStore.getState().afternoonTeaConversations[0].titleCount).toBe(7)
+  })
+
+  it.each([
+    [0, 1],
+    [11, 10],
+    [7.9, 7],
+    ['7', 4],
+    [Number.NaN, 4],
+    [Number.POSITIVE_INFINITY, 4],
+  ])('normalizes a persisted title count preference from %s to %s', (persistedValue, expected) => {
+    const restored = mergePersistedState({
+      defaultAfternoonTeaTitleCount: persistedValue,
+    }, useStore.getState())
+
+    expect(restored.defaultAfternoonTeaTitleCount).toBe(expected)
+  })
+
+  it('restores the persisted title count preference before force-creating a conversation', () => {
+    const originalState = useStore.getState()
+
+    try {
+      originalState.setDefaultAfternoonTeaTitleCount(7)
+      const persisted = getPersistedState(useStore.getState())
+      const freshState = {
+        ...originalState,
+        afternoonTeaConversations: [],
+        afternoonTeaConversationsLoaded: true,
+        activeAfternoonTeaConversationId: null,
+        afternoonTeaEditingConversationId: null,
+        defaultAfternoonTeaTitleCount: DEFAULT_DISH_TITLE_COUNT,
+      }
+
+      expect(persisted).toHaveProperty('defaultAfternoonTeaTitleCount', 7)
+
+      useStore.setState(mergePersistedState(persisted, freshState), true)
+      const id = useStore.getState().createAfternoonTeaConversation({ force: true })
+
+      expect(useStore.getState().defaultAfternoonTeaTitleCount).toBe(7)
+      expect(useStore.getState().afternoonTeaConversations.find((item) => item.id === id)?.titleCount).toBe(7)
+    } finally {
+      useStore.setState(originalState, true)
+    }
   })
 
   it('selects, updates, renames, and deletes conversations without deleting tasks', () => {
@@ -483,6 +557,39 @@ describe('afternoonTea conversation store', () => {
 
     expect(useStore.getState().afternoonTeaConversations.find((item) => item.id === 'batch-recovered')?.batchFinishedAt).toBe(700)
     await vi.waitFor(async () => expect((await getAllAfternoonTeaConversations()).find((item) => item.id === 'batch-recovered')?.batchFinishedAt).toBe(700))
+  })
+
+  it('publishes loaded afternoon tea conversations only after startup batch reconciliation', async () => {
+    useStore.setState({
+      tasks: [],
+      afternoonTeaConversationsLoaded: false,
+      activeAfternoonTeaConversationId: null,
+    })
+    const storedTask = task({ id: 'poster-interrupted', status: 'running', finishedAt: null, elapsed: null })
+    await putDbTask(storedTask)
+    await putAfternoonTeaConversation(afternoonTeaConversation({
+      id: 'batch-interrupted',
+      posterItems: [{ id: 'poster', title: '海报', prompt: 'prompt', taskId: storedTask.id }],
+      batchStartedAt: 100,
+    }))
+    const prematurelyPublished: AfternoonTeaConversation[] = []
+    const unsubscribe = useStore.subscribe((state) => {
+      const conversation = state.afternoonTeaConversations.find((item) => item.id === 'batch-interrupted')
+      if (state.afternoonTeaConversationsLoaded && conversation && conversation.batchFinishedAt == null) {
+        prematurelyPublished.push(conversation)
+      }
+    })
+
+    try {
+      await initStore()
+    } finally {
+      unsubscribe()
+    }
+
+    expect(prematurelyPublished).toEqual([])
+    expect(useStore.getState().afternoonTeaConversationsLoaded).toBe(true)
+    expect(useStore.getState().afternoonTeaConversations.find((item) => item.id === 'batch-interrupted')?.batchFinishedAt)
+      .toEqual(expect.any(Number))
   })
 
   it('reconciles terminal task updates and external task deletion through conversation persistence', async () => {
@@ -1198,6 +1305,7 @@ describe('persisted afternoon tea poster tasks', () => {
         model: profile.model,
       }),
       prompt: '生成夏日下午茶海报',
+      sendPromptAsIs: true,
       params: expect.objectContaining({ n: 1, transparent_output: false }),
       inputImageDataUrls: [imageA.dataUrl],
     }))
@@ -1729,6 +1837,22 @@ describe('input persistence setting', () => {
 
     expect(persisted.prompt).toBe('')
     expect(persisted.inputImages).toEqual([])
+  })
+
+  it('does not persist tools mode because the URL is its source of truth', () => {
+    useStore.setState({ appMode: 'tools' })
+
+    expect(getPersistedState(useStore.getState())).not.toHaveProperty('appMode')
+
+    useStore.setState({ appMode: 'agent' })
+    expect(getPersistedState(useStore.getState())).toHaveProperty('appMode', 'agent')
+  })
+
+  it('keeps legacy tools cache on gallery while retaining agent cache restoration', () => {
+    const current = useStore.getState()
+
+    expect(mergePersistedState({ appMode: 'tools' }, current).appMode).toBe('gallery')
+    expect(mergePersistedState({ appMode: 'agent' }, current).appMode).toBe('agent')
   })
 })
 

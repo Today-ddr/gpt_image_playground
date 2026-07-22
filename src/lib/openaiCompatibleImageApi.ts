@@ -220,8 +220,8 @@ function createResponsesImageTool(
   return tool
 }
 
-function createResponsesInput(prompt: string, inputImageDataUrls: string[], allowPromptRewrite: boolean): unknown {
-  const text = allowPromptRewrite ? prompt : `${PROMPT_REWRITE_GUARD_PREFIX}\n${prompt}`
+function createResponsesInput(prompt: string, inputImageDataUrls: string[], addPromptRewriteGuard: boolean): unknown {
+  const text = addPromptRewriteGuard ? `${PROMPT_REWRITE_GUARD_PREFIX}\n${prompt}` : prompt
   if (!inputImageDataUrls.length) return text
 
   return [
@@ -552,7 +552,7 @@ async function callImagesApiConcurrent(opts: CallApiOptions, profile: ApiProfile
 
 async function callImagesApiSingle(opts: CallApiOptions, profile: ApiProfile): Promise<CallApiResult> {
   const { prompt: originalPrompt, params, inputImageDataUrls } = opts
-  const prompt = profile.codexCli && !opts.settings.allowPromptRewrite
+  const prompt = profile.codexCli && !opts.settings.allowPromptRewrite && !opts.sendPromptAsIs
     ? `${PROMPT_REWRITE_GUARD_PREFIX}\n${originalPrompt}`
     : originalPrompt
   const isEdit = inputImageDataUrls.length > 0
@@ -1056,7 +1056,7 @@ async function callResponsesImageApiSingle(opts: CallApiOptions, profile: ApiPro
 
     const body: Record<string, unknown> = {
       model: profile.model,
-      input: createResponsesInput(prompt, inputImageDataUrls, opts.settings.allowPromptRewrite),
+      input: createResponsesInput(prompt, inputImageDataUrls, !opts.settings.allowPromptRewrite && !opts.sendPromptAsIs),
       tools: [createResponsesImageTool(params, inputImageDataUrls.length > 0, profile, opts.maskDataUrl)],
       tool_choice: 'required',
     }

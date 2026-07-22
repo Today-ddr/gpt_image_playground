@@ -61,7 +61,7 @@ import { blobToDataUrl, fileToDataUrl } from './lib/dataUrl'
 import { hasActiveDataOperations } from './lib/dataOperations'
 import { formatExportFileTime } from './lib/exportFileName'
 import { buildExportZip, createExportBlob, getExportImageEstimatedBytes, getExportZipPlan, MAX_EXPORT_ZIP_BYTES, readExportZip, readExportZipFileAsDataUrl, readExportZipManifest } from './lib/exportZip'
-import { collectAfternoonTeaConversationSourceImageIds, isEmptyAfternoonTeaConversation, normalizeAfternoonTeaConversations, reconcileAfternoonTeaConversationBatch } from './lib/afternoonTeaConversations'
+import { collectAfternoonTeaConversationSourceImageIds, isEmptyAfternoonTeaConversation, normalizeAfternoonTeaConversations, normalizeAfternoonTeaTitleCount, reconcileAfternoonTeaConversationBatch } from './lib/afternoonTeaConversations'
 import { DEFAULT_DISH_SYSTEM_PROMPT, DEFAULT_DISH_TITLE_COUNT } from './lib/dishAnalysisPrompts'
 
 export const ALL_FAVORITES_COLLECTION_ID = '__all_favorites__'
@@ -676,7 +676,7 @@ function getLatestAgentConversation(conversations: AgentConversation[]) {
   }, null)
 }
 
-function createAfternoonTeaConversation(now = Date.now()): AfternoonTeaConversation {
+function createAfternoonTeaConversation(titleCount: number, now = Date.now()): AfternoonTeaConversation {
   return {
     id: genId(),
     title: '新下午茶会话',
@@ -685,10 +685,11 @@ function createAfternoonTeaConversation(now = Date.now()): AfternoonTeaConversat
     sourceImageId: null,
     sourceImageName: '',
     orderText: '',
-    titleCount: DEFAULT_DISH_TITLE_COUNT,
+    titleCount: normalizeAfternoonTeaTitleCount(titleCount),
     systemPrompt: DEFAULT_DISH_SYSTEM_PROMPT,
     analysisSystemPromptSnapshot: null,
     analysisUserPromptSnapshot: null,
+    analysisElapsed: null,
     orderResult: null,
     posterItems: [],
     batchStartedAt: null,
@@ -727,7 +728,7 @@ export function getPersistedState(state: AppState) {
         }
       : {}),
     dismissedCodexCliPrompts: state.dismissedCodexCliPrompts,
-    appMode: state.appMode,
+    ...(state.appMode === 'agent' ? { appMode: state.appMode } : {}),
     galleryInputDraft: settings.persistInputOnRestart && galleryInputDraft
       ? { ...galleryInputDraft, inputImages: galleryInputDraft.inputImages.map((img) => ({ id: img.id, dataUrl: '' })) }
       : null,
@@ -736,6 +737,7 @@ export function getPersistedState(state: AppState) {
       : {}),
     activeAgentConversationId: state.activeAgentConversationId,
     activeAfternoonTeaConversationId: state.activeAfternoonTeaConversationId,
+    defaultAfternoonTeaTitleCount: state.defaultAfternoonTeaTitleCount,
     agentInputDrafts: getPersistableAgentInputDrafts(state),
     agentSidebarCollapsed: state.agentSidebarCollapsed,
     agentAssetTab: state.agentAssetTab,
@@ -820,6 +822,7 @@ export function mergePersistedState(persistedState: unknown, currentState: AppSt
     afternoonTeaConversationsLoaded: currentState.afternoonTeaConversationsLoaded,
     activeAfternoonTeaConversationId,
     afternoonTeaEditingConversationId: null,
+    defaultAfternoonTeaTitleCount: normalizeAfternoonTeaTitleCount(persisted.defaultAfternoonTeaTitleCount),
     agentInputDrafts,
     agentSidebarCollapsed: Boolean(persisted.agentSidebarCollapsed),
     agentAssetTab: persisted.agentAssetTab === 'references' ? 'references' : 'outputs',
@@ -856,7 +859,9 @@ interface AppState {
   afternoonTeaConversationsLoaded: boolean
   activeAfternoonTeaConversationId: string | null
   afternoonTeaEditingConversationId: string | null
-  createAfternoonTeaConversation: () => string
+  defaultAfternoonTeaTitleCount: number
+  setDefaultAfternoonTeaTitleCount: (value: number) => void
+  createAfternoonTeaConversation: (options?: { force?: boolean }) => string
   setActiveAfternoonTeaConversationId: (id: string | null) => void
   updateAfternoonTeaConversation: (
     id: string,
@@ -1327,14 +1332,20 @@ export const useStore = create<AppState>()(
       afternoonTeaConversationsLoaded: false,
       activeAfternoonTeaConversationId: null,
       afternoonTeaEditingConversationId: null,
-      createAfternoonTeaConversation: () => {
+      defaultAfternoonTeaTitleCount: DEFAULT_DISH_TITLE_COUNT,
+      setDefaultAfternoonTeaTitleCount: (value) => set({
+        defaultAfternoonTeaTitleCount: normalizeAfternoonTeaTitleCount(value),
+      }),
+      createAfternoonTeaConversation: (options) => {
         const now = Date.now()
-        const latestConversation = getLatestAfternoonTeaConversation(get().afternoonTeaConversations)
-        if (latestConversation && isEmptyAfternoonTeaConversation(latestConversation)) {
+        const state = get()
+        const latestConversation = getLatestAfternoonTeaConversation(state.afternoonTeaConversations)
+        const titleCount = state.defaultAfternoonTeaTitleCount
+        if (!options?.force && latestConversation && isEmptyAfternoonTeaConversation(latestConversation)) {
           set((state) => ({
             afternoonTeaConversations: state.afternoonTeaConversations.map((conversation) =>
               conversation.id === latestConversation.id
-                ? { ...conversation, createdAt: now, updatedAt: now }
+                ? { ...conversation, titleCount, createdAt: now, updatedAt: now }
                 : conversation,
             ),
             activeAfternoonTeaConversationId: latestConversation.id,
@@ -1343,7 +1354,7 @@ export const useStore = create<AppState>()(
           return latestConversation.id
         }
 
-        const conversation = createAfternoonTeaConversation(now)
+        const conversation = createAfternoonTeaConversation(titleCount, now)
         set((state) => ({
           afternoonTeaConversations: [...state.afternoonTeaConversations, conversation],
           activeAfternoonTeaConversationId: conversation.id,
@@ -2451,7 +2462,7 @@ export async function initStore() {
     : getLatestAfternoonTeaConversation(loadedAfternoonTeaConversations)?.id ?? null
   useStore.setState({
     afternoonTeaConversations: loadedAfternoonTeaConversations,
-    afternoonTeaConversationsLoaded: true,
+    afternoonTeaConversationsLoaded: false,
     activeAfternoonTeaConversationId,
     afternoonTeaEditingConversationId: null,
   })
@@ -2478,6 +2489,7 @@ export async function initStore() {
     .map((task) => putTask(task)))
   useStore.getState().setTasks(tasks)
   reconcileAfternoonTeaConversationBatches(tasks, { interruptUnclaimed: true })
+  useStore.setState({ afternoonTeaConversationsLoaded: true })
   showSupportPromptForExistingLocalData(tasks)
   for (const task of tasks) {
     if (
@@ -5083,6 +5095,7 @@ async function executeTask(taskId: string, settingsOverride?: AppSettings) {
     const result = await callImageApi({
       settings: requestSettings,
       prompt: replaceImageMentionsForApi(requestPrompt, inputDataUrls.length),
+      sendPromptAsIs: Boolean(task.afternoonTeaBatchId),
       params: task.params,
       inputImageDataUrls: inputDataUrls,
       maskDataUrl,

@@ -21,7 +21,7 @@ afterEach(() => {
 })
 
 describe('analyzeDish', () => {
-  it('sends a multimodal Chat Completions request with the understanding model', async () => {
+  it('sends only order text even if a legacy caller includes an image', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
       choices: [{ message: { content: '一份午餐' } }],
     }), { status: 200 })))
@@ -33,7 +33,8 @@ describe('analyzeDish', () => {
     }))
 
     const init = vi.mocked(fetch).mock.calls[0][1] as RequestInit
-    expect(JSON.parse(String(init.body))).toEqual({
+    const body = JSON.parse(String(init.body))
+    expect(body).toEqual({
       model: 'vision-model',
       messages: [
         { role: 'system', content: '你是餐品分析助手' },
@@ -41,11 +42,12 @@ describe('analyzeDish', () => {
           role: 'user',
           content: [
             { type: 'text', text: '分析这份午餐' },
-            { type: 'image_url', image_url: { url: request.imageDataUrl } },
           ],
         },
       ],
     })
+    expect(JSON.stringify(body)).not.toContain('image_url')
+    expect(JSON.stringify(body)).not.toContain(request.imageDataUrl)
   })
 
   it('joins text parts from array content', async () => {
@@ -54,18 +56,6 @@ describe('analyzeDish', () => {
     }), { status: 200 })))
 
     await expect(analyzeDish(request)).resolves.toBe('第一段\n第二段')
-  })
-
-  it('allows text-only analysis without sending an image part', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      choices: [{ message: { content: '文字分析结果' } }],
-    }), { status: 200 })))
-
-    await expect(analyzeDish({ ...request, imageDataUrl: '' })).resolves.toBe('文字分析结果')
-    const init = vi.mocked(fetch).mock.calls[0][1] as RequestInit
-    expect(JSON.parse(String(init.body)).messages[1].content).toEqual([
-      { type: 'text', text: '分析这份午餐' },
-    ])
   })
 
   it.each([

@@ -6,8 +6,13 @@ import 'streamdown/styles.css'
 import 'katex/dist/katex.min.css'
 import './index.css'
 import { installMobileViewportGuards } from './lib/viewport'
+import { getAppModeFromUrlParams } from './lib/urlSettings'
+import { useStore } from './store'
 
 installMobileViewportGuards()
+
+const initialAppMode = getAppModeFromUrlParams(new URLSearchParams(window.location.search))
+if (initialAppMode) useStore.getState().setAppMode(initialAppMode)
 
 if ('serviceWorker' in navigator) {
   if (import.meta.env.PROD) {

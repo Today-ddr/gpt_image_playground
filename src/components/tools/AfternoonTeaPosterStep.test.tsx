@@ -6,6 +6,8 @@ import {
   getAfternoonTeaPosterErrorMessage,
   type AfternoonTeaPosterViewItem,
 } from './AfternoonTeaPosterStep'
+import posterStepSource from './AfternoonTeaPosterStep.tsx?raw'
+import workspaceSource from '../ToolsWorkspace.tsx?raw'
 
 const taskCardProps = vi.hoisted(() => [] as Array<Record<string, unknown>>)
 vi.mock('../TaskCard', () => ({
@@ -40,7 +42,6 @@ function renderStep(overrides: Partial<Parameters<typeof AfternoonTeaPosterStep>
   taskCardProps.length = 0
   return renderToStaticMarkup(<AfternoonTeaPosterStep
     sourceImageSrc="data:image/png;base64,AQID"
-    sourceImageName="tea.png"
     items={items}
     busy={false}
     batchStartedAt={500}
@@ -56,14 +57,28 @@ function renderStep(overrides: Partial<Parameters<typeof AfternoonTeaPosterStep>
 }
 
 describe('AfternoonTeaPosterStep', () => {
-  it('shows source image and collapsed prompt previews without an image configuration panel', () => {
+  it('shows source image without its filename and keeps prompt previews collapsed', () => {
     const html = renderStep()
-    expect(html).toContain('tea.png')
+    expect(html).toContain('alt="下午茶海报原图"')
+    expect(html).not.toContain('tea.png')
+    expect(html).not.toContain('truncate px-3 py-2')
     expect(html).not.toContain('图片配置')
     expect(html).toContain('<details')
     expect(html).toContain('午后茶歇')
     expect(html).toContain('午后茶歇 prompt')
     expect(html).not.toContain('<textarea')
+  })
+
+  it('does not expose the source filename through poster view props', () => {
+    const propsSource = posterStepSource.slice(
+      posterStepSource.indexOf('type AfternoonTeaPosterStepProps = {'),
+      posterStepSource.indexOf('export function getAfternoonTeaPosterErrorMessage'),
+    )
+    const callStart = workspaceSource.indexOf('<AfternoonTeaPosterStep')
+    const callSource = workspaceSource.slice(callStart, workspaceSource.indexOf('/>', callStart) + 2)
+
+    expect(propsSource).not.toContain('sourceImageName')
+    expect(callSource).not.toContain('sourceImageName')
   })
 
   it('renders one stable result slot per title and all summary counters', () => {
@@ -75,6 +90,17 @@ describe('AfternoonTeaPosterStep', () => {
     expect(html).toContain('成功 1')
     expect(html).toContain('失败 1')
     expect(html).toContain('aspect-[')
+  })
+
+  it('keeps poster controls and counters stable on narrow screens', () => {
+    const html = renderStep({ batchStartedAt: null, batchFinishedAt: null })
+
+    expect(html).toContain('py-4 sm:px-6 sm:py-7')
+    expect(html).toContain('grid grid-cols-2 gap-2 sm:flex')
+    expect(html).toContain('col-span-2')
+    expect(html).toContain('sm:col-auto')
+    expect(html).toContain('grid grid-cols-3')
+    expect(html).toMatch(/<button[^>]*class="[^"]*hidden[^"]*sm:inline-flex[^"]*"[^>]*>返回订单解析<\/button>/)
   })
 
   it('renders completed output with its title and a safe retryable error slot', () => {
@@ -93,7 +119,7 @@ describe('AfternoonTeaPosterStep', () => {
   })
 
   it('disables start without a source image and explains the requirement', () => {
-    const html = renderStep({ sourceImageSrc: '', sourceImageName: '', batchStartedAt: null, batchFinishedAt: null })
+    const html = renderStep({ sourceImageSrc: '', batchStartedAt: null, batchFinishedAt: null })
     expect(html).toContain('请先上传原图')
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>开始批量生成<\/button>/)
   })

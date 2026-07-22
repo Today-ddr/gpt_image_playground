@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { createDefaultFalProfile, createDefaultOpenAIProfile, normalizeSettings } from '../lib/apiProfiles'
 import { AfternoonTeaBatchCoordinator } from '../lib/afternoonTeaBatch'
+import { DEFAULT_DISH_TITLE_COUNT } from '../lib/dishAnalysisPrompts'
 import { DEFAULT_PARAMS, type AfternoonTeaConversation, type AfternoonTeaPosterBatchItem, type AppSettings, type TaskRecord } from '../types'
 import * as workspaceHelpers from './ToolsWorkspace'
 import {
@@ -29,6 +30,7 @@ function afternoonTeaConversation(overrides: Partial<AfternoonTeaConversation> =
     id: 'conversation-a', title: '下午茶', createdAt: 1, updatedAt: 1,
     sourceImageId: 'source-a', sourceImageName: 'tea.png', orderText: '订单', titleCount: 2,
     systemPrompt: '系统', analysisSystemPromptSnapshot: '分析系统', analysisUserPromptSnapshot: '分析用户',
+    analysisElapsed: null,
     orderResult: { titles: ['海报'], items: [{ displayName: '蛋糕', tags: [] }] },
     posterItems: [{ id: 'poster-a', title: '海报', prompt: 'prompt' }],
     batchStartedAt: null, batchFinishedAt: null, ...overrides,
@@ -43,13 +45,14 @@ function renderForm(overrides: Partial<Parameters<typeof DishAnalysisFormView>[0
   return renderToStaticMarkup(<DishAnalysisFormView
     configured
     imageDataUrl=""
-    imageName=""
     userPrompt="请解析这张餐品图片"
     systemPrompt="你是餐品分析助手"
-    titleCount={5}
+    titleCount={DEFAULT_DISH_TITLE_COUNT}
     orderResult={null}
     error=""
     loading={false}
+    analysisStatus="idle"
+    analysisElapsed={null}
     locked={false}
     onImageChange={noop}
     onRemoveImage={noop}
@@ -74,7 +77,9 @@ describe('DishAnalysisFormView', () => {
     const html = renderForm()
     expect(html).toContain('餐品解析')
     expect(html).toContain('上传餐品图片')
-    expect(html).toContain('餐品图片（可选）')
+    expect(html).toContain('餐品图片')
+    expect(html).not.toContain('餐品图片（可选）')
+    expect(html).toContain('Ctrl/⌘ + V 粘贴')
     expect(html).toContain('下午茶订单')
     expect(html).toContain('系统提示词')
     expect(html).toContain('恢复默认')
@@ -83,7 +88,71 @@ describe('DishAnalysisFormView', () => {
     expect(html).toContain('生成数量')
     expect(html).toContain('min="1"')
     expect(html).toContain('max="10"')
-    expect(html).toContain('value="5"')
+    expect(html).toContain('value="4"')
+  })
+
+  it('keeps both empty and uploaded image frames compact', () => {
+    expect(renderForm()).toMatch(/<label class="[^"]*w-full max-w-48[^"]*"/)
+    expect(renderForm({ imageDataUrl: 'data:image/png;base64,AQID' }))
+      .toMatch(/<div class="[^"]*w-full max-w-48[^"]*">/)
+  })
+
+  it('overlays the remove action without a filename footer', () => {
+    const html = renderForm({ imageDataUrl: 'data:image/png;base64,AQID' })
+    const propsSource = workspaceSource.slice(
+      workspaceSource.indexOf('type DishAnalysisFormViewProps = {'),
+      workspaceSource.indexOf('type ToolsWorkflowStepsProps = {'),
+    )
+    const callStart = workspaceSource.indexOf('<DishAnalysisFormView')
+    const callSource = workspaceSource.slice(callStart, workspaceSource.indexOf('/>', callStart) + 2)
+
+    expect(html).toContain('aria-label="移除餐品图片"')
+    expect(html).toMatch(/<button[^>]*class="[^"]*absolute right-2 top-2[^"]*"/)
+    const removeButtonClass = html.match(/<button[^>]*class="([^"]*absolute right-2 top-2[^"]*)"[^>]*aria-label="移除餐品图片"/)?.[1] ?? ''
+    expect(removeButtonClass.split(/\s+/)).not.toContainEqual(expect.stringMatching(/^(?:[^:]+:)*-?z-/))
+    expect(html).toContain('h-7 w-7')
+    expect(html).toContain('focus-visible:')
+    expect(html).not.toContain('border-t')
+    expect(propsSource).not.toContain('imageName')
+    expect(callSource).not.toContain('imageName')
+  })
+
+  it('groups the image with the order and keeps advanced settings collapsed', () => {
+    const html = renderForm()
+
+    expect(html).toContain('grid items-start gap-4 md:grid-cols-[192px_minmax(0,1fr)]')
+    expect(html).toContain('<details')
+    expect(html).not.toContain('<details open')
+    expect(html).toMatch(/<summary[^>]*>[\s\S]*系统提示词[\s\S]*高级设置[\s\S]*<\/summary>/)
+  })
+
+  it('places title count and parsing controls in one action bar', () => {
+    const html = renderForm()
+
+    expect(html).toMatch(/<div[^>]*aria-label="解析操作"[^>]*>[\s\S]*生成数量[\s\S]*开始解析/)
+    expect(html).toContain('grid grid-cols-[7rem_minmax(0,1fr)]')
+    expect(html).toContain('min-h-0')
+    expect(html).toContain('lg:min-h-[360px]')
+  })
+
+  it('renders every analysis status with a stable elapsed time', () => {
+    expect(renderForm()).toContain('等待解析')
+    expect(renderForm()).toContain('耗时 --:--')
+    const runningHtml = renderForm({ loading: true, analysisStatus: 'running', analysisElapsed: 8_000 })
+    expect(runningHtml).toContain('解析中')
+    expect(runningHtml).toContain('耗时 00:08')
+    expect(runningHtml).toContain('取消解析')
+    const successHtml = renderForm({ analysisStatus: 'success', analysisElapsed: 65_000 })
+    expect(successHtml).toContain('解析成功')
+    expect(successHtml).toContain('耗时 01:05')
+    expect(successHtml).toContain('重新解析')
+    const errorHtml = renderForm({ error: '请求失败', analysisStatus: 'error', analysisElapsed: 12_000 })
+    expect(errorHtml).toContain('解析失败')
+    expect(errorHtml).toContain('请检查订单内容后点击“重试解析”')
+    expect(errorHtml).toContain('重试解析')
+    const cancelledHtml = renderForm({ analysisStatus: 'cancelled', analysisElapsed: 5_000 })
+    expect(cancelledHtml).toContain('已取消')
+    expect(cancelledHtml).toContain('重新解析')
   })
 
   it('renders configuration, loading, error, and result states', () => {
@@ -92,7 +161,6 @@ describe('DishAnalysisFormView', () => {
     expect(renderForm({ error: '请求失败' })).toContain('请求失败')
     const resultHtml = renderForm({
       imageDataUrl: 'data:image/png;base64,AQID',
-      imageName: 'dish.png',
       orderResult: {
         titles: ['午后茶歇', '暖心时光'],
         items: [{ displayName: '草莓酸奶碗', tags: ['草莓', '酸奶'] }],
@@ -109,15 +177,17 @@ describe('DishAnalysisFormView', () => {
   })
 
   it('keeps parser failures on the order step without rendering raw JSON', () => {
-    const html = renderForm({ error: '下午茶订单解析结果格式无效' })
+    const html = renderForm({ error: '下午茶订单解析结果格式无效', analysisStatus: 'error' })
     expect(html).toContain('下午茶订单解析结果格式无效')
+    expect(html).toContain('请检查订单内容后点击“重试解析”')
+    expect(html).toContain('重试解析')
     expect(html).toContain('解析结果将显示在这里')
     expect(html).not.toContain('&quot;items&quot;')
   })
 
-  it('disables parsing only when both image and order text are empty', () => {
+  it('requires order text even when an image is uploaded', () => {
     expect(renderForm({ imageDataUrl: '', userPrompt: '' })).toMatch(/<button[^>]*disabled=""[^>]*>开始解析<\/button>/)
-    expect(renderForm({ imageDataUrl: 'data:image/png;base64,AQID', userPrompt: '' })).not.toMatch(/<button[^>]*disabled=""[^>]*>开始解析<\/button>/)
+    expect(renderForm({ imageDataUrl: 'data:image/png;base64,AQID', userPrompt: '' })).toMatch(/<button[^>]*disabled=""[^>]*>开始解析<\/button>/)
     expect(renderForm({ imageDataUrl: '', userPrompt: '今日茶歇' })).not.toMatch(/<button[^>]*disabled=""[^>]*>开始解析<\/button>/)
   })
 })
@@ -153,9 +223,64 @@ describe('ToolsWorkflowSteps', () => {
     expect(busy).toMatch(/<button[^>]*disabled=""[^>]*>订单解析<\/button>/)
     expect(busy).toMatch(/<button[^>]*disabled=""[^>]*>批量海报<\/button>/)
   })
+
+  it('uses a full-width mobile segmented control with touch-sized buttons', () => {
+    const html = renderToStaticMarkup(<ToolsWorkflowSteps
+      step="order"
+      posterEnabled
+      busy={false}
+      onStepChange={noop}
+    />)
+
+    expect(html).toContain('role="group"')
+    expect(html).toContain('grid grid-cols-2')
+    expect(html).toContain('sm:flex')
+    expect((html.match(/min-h-11/g) ?? [])).toHaveLength(2)
+    expect(html).not.toContain('role="tab"')
+    expect(html).toContain('aria-pressed="true"')
+    expect(html).toContain('aria-pressed="false"')
+  })
 })
 
 describe('dish analysis coordination', () => {
+  it('continues only the active unfinished conversation on tool entry', () => {
+    const resolveEntryConversation = helper('resolveAfternoonTeaEntryConversationId')
+    const createCalls: unknown[] = []
+    const createConversation = (options?: unknown) => {
+      createCalls.push(options)
+      return 'new-conversation'
+    }
+
+    expect(resolveEntryConversation).toBeTypeOf('function')
+    expect(resolveEntryConversation?.(afternoonTeaConversation({ batchFinishedAt: null }), createConversation)).toBe('conversation-a')
+    expect(createCalls).toEqual([])
+    expect(resolveEntryConversation?.(afternoonTeaConversation({ batchStartedAt: 10, batchFinishedAt: 20 }), createConversation)).toBe('new-conversation')
+    expect(resolveEntryConversation?.(null, createConversation)).toBe('new-conversation')
+    expect(createCalls).toEqual([{ force: true }, { force: true }])
+    expect(workspaceSource).toContain('initialConversationResolvedRef')
+    expect(workspaceSource).toContain('resolveAfternoonTeaEntryConversationId')
+  })
+
+  it('derives status only from the active conversation run', () => {
+    const deriveViewState = helper('deriveDishAnalysisViewState')
+    const conversation = afternoonTeaConversation({ analysisElapsed: 65_000 })
+
+    expect(deriveViewState).toBeTypeOf('function')
+    expect(deriveViewState?.(conversation, null, 1_000)).toEqual({ status: 'success', elapsed: 65_000 })
+    expect(deriveViewState?.(conversation, {
+      conversationId: conversation.id,
+      status: 'running',
+      startedAt: 1_000,
+      finishedAt: null,
+    }, 9_000)).toEqual({ status: 'running', elapsed: 8_000 })
+    expect(deriveViewState?.(conversation, {
+      conversationId: 'other-conversation',
+      status: 'error',
+      startedAt: 1_000,
+      finishedAt: 2_000,
+    }, 9_000)).toEqual({ status: 'success', elapsed: 65_000 })
+  })
+
   it('validates image type and the 20 MiB file limit', () => {
     expect(() => validateDishImageFile({ type: 'text/plain', size: 1 })).toThrow('请选择图片文件')
     expect(() => validateDishImageFile({ type: 'image/png', size: MAX_DISH_IMAGE_BYTES + 1 })).toThrow('餐品图片不能超过 20 MiB')
@@ -174,15 +299,20 @@ describe('dish analysis coordination', () => {
     expect(normalizeDishTitleCount(0)).toBe(1)
     expect(normalizeDishTitleCount(7.9)).toBe(7)
     expect(normalizeDishTitleCount(11)).toBe(10)
-    expect(normalizeDishTitleCount(Number.NaN)).toBe(5)
+    expect(normalizeDishTitleCount(Number.NaN)).toBe(4)
   })
 
-  it('rejects an empty image and order before any API request', () => {
-    expect(() => validateDishAnalysisInput('', '   ')).toThrow('请上传餐品图片或填写下午茶订单')
-    expect(() => validateDishAnalysisInput('data:image/png;base64,AQID', '   ')).not.toThrow()
-    expect(() => validateDishAnalysisInput('', '今日茶歇')).not.toThrow()
-    expect(workspaceSource).toContain('validateDishAnalysisInput(requestImageDataUrl, requestUserPrompt)')
-    expect(workspaceSource.indexOf('validateDishAnalysisInput(requestImageDataUrl, requestUserPrompt)'))
+  it('stores title count changes as the next conversation preference', () => {
+    expect(workspaceSource).toContain('const setDefaultAfternoonTeaTitleCount = useStore((state) => state.setDefaultAfternoonTeaTitleCount)')
+    expect(workspaceSource).toContain('setDefaultAfternoonTeaTitleCount(normalizedCount)')
+  })
+
+  it('requires an order and keeps the analysis request text-only', () => {
+    expect(() => validateDishAnalysisInput('   ')).toThrow('请填写下午茶订单')
+    expect(() => validateDishAnalysisInput('今日茶歇')).not.toThrow()
+    expect(workspaceSource).toContain('validateDishAnalysisInput(requestUserPrompt)')
+    expect(workspaceSource).not.toContain('imageDataUrl: requestImageDataUrl,')
+    expect(workspaceSource.indexOf('validateDishAnalysisInput(requestUserPrompt)'))
       .toBeLessThan(workspaceSource.indexOf('await analyzeDish({'))
   })
 
@@ -309,6 +439,37 @@ describe('dish analysis coordination', () => {
     expect(nextRequest).toBeInstanceOf(AbortController)
     coordinator.dispose()
     expect(nextRequest?.signal.aborted).toBe(true)
+  })
+
+  it('keeps a just-started reparse request alive when consuming the cloned conversation restore', () => {
+    const coordinator = new DishAnalysisCoordinator()
+    coordinator.skipNextRestore('cloned-conversation')
+    const request = coordinator.beginRequest()
+
+    expect(coordinator.consumeRestoreSkip('cloned-conversation')).toBe(true)
+    expect(coordinator.isCurrentRequest(request!)).toBe(true)
+    expect(request?.signal.aborted).toBe(false)
+    expect(workspaceSource).toContain('coordinatorRef.current.skipNextRestore(conversationId)')
+    expect(workspaceSource).toContain('coordinatorRef.current.consumeRestoreSkip(activeAfternoonTeaConversationId)')
+  })
+
+  it('returns a cloned completed conversation to the order step before skipping restore', () => {
+    const cloneSource = workspaceSource.slice(
+      workspaceSource.indexOf('const createEditableConversationFrom ='),
+      workspaceSource.indexOf('const initializeNewConversationPrompt ='),
+    )
+
+    expect(cloneSource).toContain("setStep('order')")
+    expect(cloneSource.indexOf("setStep('order')"))
+      .toBeLessThan(cloneSource.indexOf('coordinatorRef.current.skipNextRestore(conversationId)'))
+  })
+
+  it('clears a cloned conversation restore skip when a different conversation becomes active', () => {
+    const coordinator = new DishAnalysisCoordinator()
+    coordinator.skipNextRestore('cloned-conversation')
+
+    expect(coordinator.consumeRestoreSkip('other-conversation')).toBe(false)
+    expect(coordinator.consumeRestoreSkip('cloned-conversation')).toBe(false)
   })
 
   it('routes mock Chat Completions before image API fallbacks', () => {
@@ -446,7 +607,7 @@ describe('dish analysis coordination', () => {
     expect(confirmDialog).toMatchObject({ title: '删除任务', message: expect.stringContaining('关联的图片资源') })
   })
 
-  it('restores an afternoon tea conversation draft without inventing a batch step', () => {
+  it('restores a historical conversation count without inventing a batch step', () => {
     const getRestoreState = helper('getAfternoonTeaConversationRestoreState')
     const restore = getRestoreState?.(afternoonTeaConversation({
       sourceImageId: null,
@@ -519,13 +680,21 @@ describe('dish analysis coordination', () => {
     )
 
     expect(navSource).toMatch(
-      /<div className="[^"]*relative[^"]*">[\s\S]*?<button[^>]*className="[^"]*whitespace-nowrap[^"]*"[^>]*>[\s\S]*?餐品解析/,
+      /<div className="[^"]*relative[^"]*">[\s\S]*?<div[^>]*aria-current="page"[^>]*>[\s\S]*?餐品解析/,
     )
     expect(navSource).toMatch(
       /<div className="[^"]*absolute[^"]*right-[^"]*">[\s\S]*?<MessageCircleIcon[\s\S]*?<EditIcon/,
     )
-    expect(navSource.match(/className="[^"]*h-9 w-9[^"]*"/g)).toHaveLength(2)
-    expect(navSource).toContain('<MessageCircleIcon className="h-4 w-4 translate-x-2" />')
+    expect(navSource).toContain('hidden text-xs font-medium text-gray-400 sm:block')
+    expect(navSource).toContain('flex h-14 items-center')
+    expect(navSource).toContain('sm:block sm:h-auto')
+    expect(navSource).toContain('aria-current="page"')
+    expect(navSource.match(/className="[^"]*h-11 w-11[^"]*sm:h-9 sm:w-8[^"]*"/g)).toHaveLength(2)
+    expect(navSource).toContain('aria-expanded={historyOpen}')
+    expect(navSource).toContain('className="relative z-10')
+    expect(navSource).toContain('<MessageCircleIcon className="h-5 w-5 sm:h-4 sm:w-4" />')
+    expect(navSource).toContain('<EditIcon className="h-5 w-5 sm:h-4 sm:w-4" />')
+    expect(navSource).not.toContain('translate-x-')
     expect(navSource).not.toContain('<HistoryIcon')
     expect(iconsSource).toContain('export function MessageCircleIcon')
     expect(iconsSource).toContain('M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29')

@@ -17,6 +17,7 @@ describe('exportZip', () => {
     systemPrompt: '系统提示词',
     analysisSystemPromptSnapshot: null,
     analysisUserPromptSnapshot: null,
+    analysisElapsed: null,
     orderResult: null,
     posterItems: [],
     batchStartedAt: null,

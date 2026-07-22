@@ -173,6 +173,7 @@ export interface AfternoonTeaConversation {
   systemPrompt: string
   analysisSystemPromptSnapshot: string | null
   analysisUserPromptSnapshot: string | null
+  analysisElapsed: number | null
   orderResult: AfternoonTeaOrderResult | null
   posterItems: AfternoonTeaPosterBatchItem[]
   batchStartedAt: number | null

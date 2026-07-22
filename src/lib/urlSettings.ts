@@ -1,4 +1,4 @@
-import type { ApiMode, ApiProfile, AppSettings } from '../types'
+import type { ApiMode, ApiProfile, AppMode, AppSettings } from '../types'
 import { normalizeBaseUrl } from './devProxy'
 import {
   createDefaultOpenAIProfile,
@@ -12,6 +12,20 @@ import {
 } from './apiProfiles'
 
 const URL_SETTING_KEYS = ['settings', 'apiUrl', 'apiKey', 'codexCli', 'apiMode', 'model', 'understandingModel', 'profileName', 'streamImages', 'streamPartialImages']
+const APP_MODE_URL_KEY = 'appMode'
+
+export function getAppModeFromUrlParams(searchParams: URLSearchParams): AppMode | null {
+  return searchParams.get(APP_MODE_URL_KEY) === 'tools' ? 'tools' : null
+}
+
+export function setAppModeUrlParams(searchParams: URLSearchParams, appMode: AppMode) {
+  if (appMode === 'tools') {
+    searchParams.set(APP_MODE_URL_KEY, 'tools')
+    return
+  }
+
+  searchParams.delete(APP_MODE_URL_KEY)
+}
 
 function getProfileDedupKey(profile: Pick<AppSettings['profiles'][number], 'provider' | 'baseUrl' | 'apiKey' | 'model' | 'understandingModel' | 'apiMode' | 'codexCli' | 'streamImages' | 'streamPartialImages'>) {
   return JSON.stringify([

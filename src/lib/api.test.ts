@@ -59,6 +59,30 @@ describe('callImageApi', () => {
     expect(body.input).toBe('prompt')
   })
 
+  it('sends an afternoon tea prompt as-is on Responses API', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      output: [{
+        type: 'image_generation_call',
+        result: 'aW1hZ2U=',
+      }],
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+
+    await callImageApi({
+      settings: { ...DEFAULT_SETTINGS, apiKey: 'test-key', apiMode: 'responses', allowPromptRewrite: false },
+      prompt: '下午茶完整提示词',
+      params: { ...DEFAULT_PARAMS },
+      inputImageDataUrls: ['data:image/png;base64,aW1hZ2U='],
+      sendPromptAsIs: true,
+    })
+
+    const [, init] = fetchMock.mock.calls[0]
+    const body = JSON.parse(String((init as RequestInit).body))
+    expect(body.input[0].content[0].text).toBe('下午茶完整提示词')
+  })
+
   it('does not add the prompt rewrite guard on Codex CLI Images API when prompt rewrite is allowed', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
       data: [{ b64_json: 'aW1hZ2U=' }],
@@ -77,6 +101,31 @@ describe('callImageApi', () => {
     const [, init] = fetchMock.mock.calls[0]
     const body = JSON.parse(String((init as RequestInit).body))
     expect(body.prompt).toBe('prompt')
+  })
+
+  it('sends an afternoon tea prompt as-is on Codex CLI Images API', async () => {
+    const nativeFetch = globalThis.fetch
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      if (String(input).startsWith('data:')) return nativeFetch(input, init)
+      return Promise.resolve(new Response(JSON.stringify({
+        data: [{ b64_json: 'aW1hZ2U=' }],
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+    })
+
+    await callImageApi({
+      settings: { ...DEFAULT_SETTINGS, apiKey: 'test-key', codexCli: true, allowPromptRewrite: false },
+      prompt: '下午茶完整提示词',
+      params: { ...DEFAULT_PARAMS },
+      inputImageDataUrls: ['data:image/png;base64,aW1hZ2U='],
+      sendPromptAsIs: true,
+    })
+
+    const [, init] = fetchMock.mock.calls.find(([, request]) => request?.method === 'POST')!
+    const body = (init as RequestInit).body as FormData
+    expect(body.get('prompt')).toBe('下午茶完整提示词')
   })
 
   it('records actual params returned on Images API responses in Codex CLI mode', async () => {
