@@ -1159,11 +1159,11 @@ export default function ToolsWorkspace() {
       <div className="grid min-h-[calc(100vh-8rem)] sm:grid-cols-[180px_minmax(0,1fr)]">
         <nav className="border-b border-gray-200 py-3 dark:border-white/[0.08] sm:border-b-0 sm:border-r sm:py-6" aria-label="工具列表">
           <div className="px-2 text-xs font-medium text-gray-400 sm:px-3">工具</div>
-          <div className="mt-2 flex min-w-0 items-center gap-1 px-2 sm:px-3">
-            <button type="button" className="min-w-0 flex-1 border-l-2 border-blue-500 bg-blue-50/70 px-3 py-2 text-left text-sm font-medium text-blue-700 dark:bg-blue-500/10 dark:text-blue-300">
+          <div className="relative mx-2 mt-2 min-w-0 sm:mx-3">
+            <button type="button" className="w-full whitespace-nowrap border-l-2 border-blue-500 bg-blue-50/70 px-3 py-2 pr-20 text-left text-sm font-medium text-blue-700 dark:bg-blue-500/10 dark:text-blue-300">
               餐品解析
             </button>
-            <div className="relative flex shrink-0 items-center gap-1">
+            <div className="absolute right-1 top-1/2 z-10 flex -translate-y-1/2 items-center gap-1">
               <button
                 ref={historyButtonRef}
                 type="button"

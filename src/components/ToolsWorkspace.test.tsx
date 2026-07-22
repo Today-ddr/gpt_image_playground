@@ -511,6 +511,21 @@ describe('dish analysis coordination', () => {
     expect(isDisabled?.(false, afternoonTeaConversation({ batchStartedAt: 10, batchFinishedAt: 20 }), afternoonTeaSettings())).toBe(false)
   })
 
+  it('keeps the tool title on one line while overlaying its actions inside the same item', () => {
+    const navSource = workspaceSource.slice(
+      workspaceSource.indexOf('<nav className='),
+      workspaceSource.indexOf('</nav>'),
+    )
+
+    expect(navSource).toMatch(
+      /<div className="[^"]*relative[^"]*">[\s\S]*?<button[^>]*className="[^"]*whitespace-nowrap[^"]*"[^>]*>[\s\S]*?餐品解析/,
+    )
+    expect(navSource).toMatch(
+      /<div className="[^"]*absolute[^"]*right-[^"]*">[\s\S]*?<HistoryIcon[\s\S]*?<EditIcon/,
+    )
+    expect(navSource.match(/className="[^"]*h-9 w-9[^"]*"/g)).toHaveLength(2)
+  })
+
   it('binds the tools navigation actions to the independent afternoon tea history flow', () => {
     expect(workspaceSource).toContain('<HistoryIcon')
     expect(workspaceSource).toContain('<EditIcon')
