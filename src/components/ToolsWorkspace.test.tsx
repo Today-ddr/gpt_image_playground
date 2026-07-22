@@ -524,6 +524,7 @@ describe('dish analysis coordination', () => {
       /<div className="[^"]*absolute[^"]*right-[^"]*">[\s\S]*?<HistoryIcon[\s\S]*?<EditIcon/,
     )
     expect(navSource.match(/className="[^"]*h-9 w-9[^"]*"/g)).toHaveLength(2)
+    expect(navSource).toContain('<HistoryIcon className="h-4 w-4 translate-x-2" />')
   })
 
   it('binds the tools navigation actions to the independent afternoon tea history flow', () => {

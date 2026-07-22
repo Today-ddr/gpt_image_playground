@@ -1172,7 +1172,7 @@ export default function ToolsWorkspace() {
                 title="餐品解析历史"
                 aria-label="餐品解析历史"
               >
-                <HistoryIcon className="h-4 w-4" />
+                <HistoryIcon className="h-4 w-4 translate-x-2" />
               </button>
               <button
                 type="button"
