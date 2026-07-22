@@ -31,7 +31,7 @@ import {
 import { normalizeParamsForSettings } from '../lib/paramCompatibility'
 import { getAfternoonTeaConversationSearchText, reconcileAfternoonTeaConversationBatch } from '../lib/afternoonTeaConversations'
 import { useDocumentImagePaste } from '../lib/useDocumentImagePaste'
-import { CloseIcon, EditIcon, HistoryIcon, ImportIcon } from './icons'
+import { CloseIcon, EditIcon, ImportIcon, MessageCircleIcon } from './icons'
 import { ConversationHistoryPopover, type ConversationHistoryItem } from './ConversationHistoryPopover'
 import {
   AfternoonTeaPosterStep,
@@ -1172,7 +1172,7 @@ export default function ToolsWorkspace() {
                 title="餐品解析历史"
                 aria-label="餐品解析历史"
               >
-                <HistoryIcon className="h-4 w-4 translate-x-2" />
+                <MessageCircleIcon className="h-4 w-4 translate-x-2" />
               </button>
               <button
                 type="button"

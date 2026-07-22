@@ -16,6 +16,7 @@ import {
   validateDishImageFile,
 } from './ToolsWorkspace'
 import appSource from '../App.tsx?raw'
+import iconsSource from './icons.tsx?raw'
 import workspaceSource from './ToolsWorkspace.tsx?raw'
 import mockApiSource from '../../scripts/mock-image-api.mjs?raw'
 
@@ -521,14 +522,17 @@ describe('dish analysis coordination', () => {
       /<div className="[^"]*relative[^"]*">[\s\S]*?<button[^>]*className="[^"]*whitespace-nowrap[^"]*"[^>]*>[\s\S]*?餐品解析/,
     )
     expect(navSource).toMatch(
-      /<div className="[^"]*absolute[^"]*right-[^"]*">[\s\S]*?<HistoryIcon[\s\S]*?<EditIcon/,
+      /<div className="[^"]*absolute[^"]*right-[^"]*">[\s\S]*?<MessageCircleIcon[\s\S]*?<EditIcon/,
     )
     expect(navSource.match(/className="[^"]*h-9 w-9[^"]*"/g)).toHaveLength(2)
-    expect(navSource).toContain('<HistoryIcon className="h-4 w-4 translate-x-2" />')
+    expect(navSource).toContain('<MessageCircleIcon className="h-4 w-4 translate-x-2" />')
+    expect(navSource).not.toContain('<HistoryIcon')
+    expect(iconsSource).toContain('export function MessageCircleIcon')
+    expect(iconsSource).toContain('M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29')
   })
 
   it('binds the tools navigation actions to the independent afternoon tea history flow', () => {
-    expect(workspaceSource).toContain('<HistoryIcon')
+    expect(workspaceSource).toContain('<MessageCircleIcon')
     expect(workspaceSource).toContain('<EditIcon')
     expect(workspaceSource).toContain('<ConversationHistoryPopover')
     expect(workspaceSource).toContain('useDocumentImagePaste')
