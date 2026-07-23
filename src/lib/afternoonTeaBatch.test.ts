@@ -49,8 +49,12 @@ async function flushMicrotasks() {
 }
 
 describe('runAfternoonTeaPosterBatch', () => {
-  it('最多同时提交两项，并等待一项终态后才领取下一项', async () => {
-    const pending = items.map(() => deferred<ReturnType<typeof taskResult>>())
+  it('同一轮提交全部项目，并等待全部终态后结束批次', async () => {
+    const batchItems = [
+      ...items,
+      { id: 'item-d', title: '标题 D', prompt: '提示词 D' },
+    ]
+    const pending = batchItems.map(() => deferred<ReturnType<typeof taskResult>>())
     const calls: Array<{
       settingsSnapshot: AppSettings
       paramsSnapshot: TaskParams
@@ -60,6 +64,7 @@ describe('runAfternoonTeaPosterBatch', () => {
       prompt: string
     }> = []
     const created = vi.fn()
+    const finished = vi.fn()
     let active = 0
     let maxActive = 0
     const submit = vi.fn((opts) => {
@@ -77,40 +82,47 @@ describe('runAfternoonTeaPosterBatch', () => {
     const run = runAfternoonTeaPosterBatch({
       coordinator,
       batchId: 'batch-a',
-      items,
+      items: batchItems,
       settingsSnapshot,
       paramsSnapshot,
       inputImage,
       submit,
       onTaskCreated: created,
       onItemSetupError: vi.fn(),
+      onBatchFinished: finished,
     })
     await flushMicrotasks()
 
-    expect(calls).toHaveLength(2)
-    expect(maxActive).toBe(2)
-
-    pending[0].resolve(taskResult('task-0', items[0].prompt))
-    await flushMicrotasks()
-
-    expect(calls).toHaveLength(3)
-    expect(calls.map((call) => call.prompt)).toEqual(items.map((item) => item.prompt))
-    expect(calls.map((call) => call.title)).toEqual(items.map((item) => item.title))
+    expect(calls).toHaveLength(batchItems.length)
+    expect(maxActive).toBe(batchItems.length)
+    expect(calls.map((call) => call.prompt)).toEqual(batchItems.map((item) => item.prompt))
+    expect(calls.map((call) => call.title)).toEqual(batchItems.map((item) => item.title))
     expect(calls.every((call) => call.settingsSnapshot === settingsSnapshot)).toBe(true)
     expect(calls.every((call) => call.paramsSnapshot === paramsSnapshot)).toBe(true)
     expect(calls.every((call) => call.inputImage === inputImage)).toBe(true)
     expect(calls.every((call) => call.batchId === 'batch-a')).toBe(true)
-    expect(created.mock.calls).toEqual([
-      ['batch-a', 'item-a', 'task-0'],
-      ['batch-a', 'item-b', 'task-1'],
-      ['batch-a', 'item-c', 'task-2'],
-    ])
+    expect(created.mock.calls).toEqual(batchItems.map((item, idx) => [
+      'batch-a',
+      item.id,
+      `task-${idx}`,
+    ]))
+    expect(finished).not.toHaveBeenCalled()
+    expect(coordinator.isTerminal('batch-a')).toBe(false)
 
-    pending[1].resolve(taskResult('task-1', items[1].prompt))
-    pending[2].resolve(taskResult('task-2', items[2].prompt))
+    pending[0].resolve(taskResult('task-0', batchItems[0].prompt))
+    await flushMicrotasks()
+
+    expect(finished).not.toHaveBeenCalled()
+    expect(coordinator.isTerminal('batch-a')).toBe(false)
+
+    pending.slice(1).forEach((entry, idx) => {
+      entry.resolve(taskResult(`task-${idx + 1}`, batchItems[idx + 1].prompt))
+    })
     await run
 
-    expect(maxActive).toBe(2)
+    expect(maxActive).toBe(batchItems.length)
+    expect(finished).toHaveBeenCalledOnce()
+    expect(finished).toHaveBeenCalledWith('batch-a')
     expect(coordinator.isTerminal('batch-a')).toBe(true)
     expect(coordinator.hasActiveWork()).toBe(false)
   })
@@ -324,37 +336,36 @@ describe('runAfternoonTeaPosterBatch', () => {
     expect(finished).toHaveBeenCalledWith('batch-current')
   })
 
-  it('dispose 后不再领取队列中尚未开始的项目', async () => {
+  it('所有项目提交后 dispose 不会撤销已发出的请求', async () => {
     const coordinator = new AfternoonTeaBatchCoordinator()
-    const pending = [
-      deferred<ReturnType<typeof taskResult>>(),
-      deferred<ReturnType<typeof taskResult>>(),
-    ]
+    const batchItems = [...items, { id: 'item-d', title: '标题 D', prompt: '提示词 D' }]
+    const pending = batchItems.map(() => deferred<ReturnType<typeof taskResult>>())
     const submitted: string[] = []
     const run = runAfternoonTeaPosterBatch({
       coordinator,
       batchId: 'batch-dispose-queue',
-      items: [...items, { id: 'item-d', title: '标题 D', prompt: '提示词 D' }],
+      items: batchItems,
       settingsSnapshot,
       paramsSnapshot,
       inputImage,
       submit: (opts) => {
         const idx = submitted.length
         submitted.push(opts.prompt)
-        return pending[idx]?.promise ?? Promise.resolve(taskResult(`task-${idx}`, opts.prompt))
+        return pending[idx].promise
       },
       onTaskCreated: vi.fn(),
       onItemSetupError: vi.fn(),
     })
     await flushMicrotasks()
 
-    expect(submitted).toEqual(['提示词 A', '提示词 B'])
+    expect(submitted).toEqual(batchItems.map((item) => item.prompt))
     coordinator.dispose()
-    pending[0].resolve(taskResult('task-a', '提示词 A'))
-    pending[1].resolve(taskResult('task-b', '提示词 B'))
+    pending.forEach((entry, idx) => {
+      entry.resolve(taskResult(`task-${idx}`, batchItems[idx].prompt))
+    })
     await run
 
-    expect(submitted).toEqual(['提示词 A', '提示词 B'])
+    expect(submitted).toEqual(batchItems.map((item) => item.prompt))
   })
 
   it('in-flight submit 在 dispose 后 reject 时仍触发 setup-error callback 和完成通知', async () => {

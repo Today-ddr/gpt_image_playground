@@ -6,8 +6,6 @@ import type {
   TaskRecord,
 } from '../types'
 
-const AFTERNOON_TEA_BATCH_CONCURRENCY = 2
-
 export interface AfternoonTeaPosterSubmitOptions {
   settingsSnapshot: AppSettings
   paramsSnapshot: TaskParams
@@ -133,7 +131,6 @@ export async function runAfternoonTeaPosterBatch({
   onBatchFinished,
 }: RunAfternoonTeaPosterBatchOptions) {
   const batchGeneration = coordinator.start(batchId)
-  let cursor = 0
   let hasCallbackFailure = false
   let callbackFailure: unknown
 
@@ -143,12 +140,8 @@ export async function runAfternoonTeaPosterBatch({
     callbackFailure = error
   }
 
-  const worker = async () => {
-    while (cursor < items.length) {
-      const claimGeneration = coordinator.claim(batchId)
-      if (claimGeneration === null) return
-      const item = items[cursor]
-      cursor += 1
+  const results = await Promise.allSettled(
+    items.map(async (item) => {
       try {
         await submit({
           settingsSnapshot,
@@ -158,7 +151,7 @@ export async function runAfternoonTeaPosterBatch({
           title: item.title,
           prompt: item.prompt,
           onTaskCreated: (taskId) => {
-            if (!coordinator.acceptsClaim(batchId, claimGeneration)) return
+            if (!coordinator.acceptsClaim(batchId, batchGeneration)) return
             try {
               onTaskCreated(batchId, item.id, taskId)
             } catch (callbackError) {
@@ -167,7 +160,7 @@ export async function runAfternoonTeaPosterBatch({
           },
         })
       } catch (error) {
-        if (coordinator.acceptsClaim(batchId, claimGeneration)) {
+        if (coordinator.acceptsClaim(batchId, batchGeneration)) {
           try {
             onItemSetupError(batchId, item.id, error)
           } catch (callbackError) {
@@ -175,11 +168,7 @@ export async function runAfternoonTeaPosterBatch({
           }
         }
       }
-    }
-  }
-
-  const results = await Promise.allSettled(
-    Array.from({ length: AFTERNOON_TEA_BATCH_CONCURRENCY }, () => worker()),
+    }),
   )
   if (coordinator.finish(batchId, batchGeneration)) {
     if (onBatchFinished) {
