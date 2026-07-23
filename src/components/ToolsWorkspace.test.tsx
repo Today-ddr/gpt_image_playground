@@ -73,6 +73,11 @@ describe('DishAnalysisFormView', () => {
     expect(appSource).toContain("appMode === 'tools' && <ToolsWorkspace />")
   })
 
+  it('does not stretch the mobile tools navigation row to the full viewport height', () => {
+    expect(workspaceSource).toContain('grid min-h-0 sm:min-h-[calc(100vh-8rem)]')
+    expect(workspaceSource).not.toContain('min-h-[calc(100dvh-8rem)] sm:min-h-[calc(100vh-8rem)]')
+  })
+
   it('renders the complete dish analysis workflow', () => {
     const html = renderForm()
     expect(html).toContain('餐品解析')
@@ -95,6 +100,16 @@ describe('DishAnalysisFormView', () => {
     expect(renderForm()).toMatch(/<label class="[^"]*w-full max-w-48[^"]*"/)
     expect(renderForm({ imageDataUrl: 'data:image/png;base64,AQID' }))
       .toMatch(/<div class="[^"]*w-full max-w-48[^"]*">/)
+  })
+
+  it('offers touch-sized camera and upload actions on mobile', () => {
+    const html = renderForm()
+
+    expect(html).toContain('grid grid-cols-2 gap-2 md:hidden')
+    expect(html).toMatch(/<label class="[^"]*min-h-11[^"]*">[\s\S]*?拍照[\s\S]*?<input[^>]*capture="environment"[^>]*aria-label="拍照"/)
+    expect(html).toMatch(/<label class="[^"]*min-h-11[^"]*">[\s\S]*?上传图片[\s\S]*?<input[^>]*aria-label="上传餐品图片"/)
+    expect(html).toMatch(/class="[^"]*hidden[^"]*md:flex[^"]*"/)
+    expect(iconsSource).toContain('export function CameraIcon')
   })
 
   it('overlays the remove action without a filename footer', () => {
@@ -121,6 +136,9 @@ describe('DishAnalysisFormView', () => {
     const html = renderForm()
 
     expect(html).toContain('grid items-start gap-4 md:grid-cols-[192px_minmax(0,1fr)]')
+    expect(html.indexOf('下午茶订单')).toBeLessThan(html.indexOf('餐品图片'))
+    expect(html).toContain('md:col-start-2 md:row-start-1')
+    expect(html).toContain('md:col-start-1 md:row-start-1')
     expect(html).toContain('<details')
     expect(html).not.toContain('<details open')
     expect(html).toMatch(/<summary[^>]*>[\s\S]*系统提示词[\s\S]*高级设置[\s\S]*<\/summary>/)

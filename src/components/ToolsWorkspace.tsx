@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ChangeEvent } from 'react'
 import type {
   AfternoonTeaOrderResult,
   AfternoonTeaConversation,
@@ -31,7 +31,7 @@ import {
 import { normalizeParamsForSettings } from '../lib/paramCompatibility'
 import { getAfternoonTeaConversationSearchText, reconcileAfternoonTeaConversationBatch } from '../lib/afternoonTeaConversations'
 import { useDocumentImagePaste } from '../lib/useDocumentImagePaste'
-import { ChevronDownIcon, CloseIcon, EditIcon, ImportIcon, MessageCircleIcon } from './icons'
+import { CameraIcon, ChevronDownIcon, CloseIcon, EditIcon, ImportIcon, MessageCircleIcon } from './icons'
 import { ConversationHistoryPopover, type ConversationHistoryItem } from './ConversationHistoryPopover'
 import {
   AfternoonTeaPosterStep,
@@ -405,6 +405,10 @@ export function ToolsWorkflowSteps(props: ToolsWorkflowStepsProps) {
 
 export function DishAnalysisFormView(props: DishAnalysisFormViewProps) {
   const disabled = Boolean(props.loading || props.locked || props.imageLoading)
+  const handleImageInputChange = (event: ChangeEvent<HTMLInputElement>) => {
+    props.onImageChange(event.target.files?.[0] ?? null)
+    event.target.value = ''
+  }
   const analysisStatusLabel = props.analysisStatus === 'running'
     ? '解析中'
     : props.analysisStatus === 'success'
@@ -452,36 +456,7 @@ export function DishAnalysisFormView(props: DishAnalysisFormViewProps) {
       <div className="grid gap-4 sm:gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(320px,0.9fr)]">
         <section className="min-w-0 space-y-5" aria-label="餐品解析输入">
           <div className="grid items-start gap-4 md:grid-cols-[192px_minmax(0,1fr)]">
-            <div className="min-w-0">
-              <div className="mb-1.5 text-sm text-gray-600 dark:text-gray-300">餐品图片</div>
-              {props.imageDataUrl ? (
-                <div className="relative w-full max-w-48 overflow-hidden rounded-md border border-gray-200 bg-gray-50 dark:border-white/[0.08] dark:bg-white/[0.03]">
-                  <img src={props.imageDataUrl} alt="待解析餐品" className="aspect-[4/3] w-full object-contain" />
-                  <button type="button" onClick={props.onRemoveImage} disabled={disabled} className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-md bg-black/55 text-white shadow-sm transition hover:bg-black/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50" aria-label="移除餐品图片">
-                    <CloseIcon className="h-4 w-4" />
-                  </button>
-                </div>
-              ) : (
-                <label className="flex aspect-[4/3] w-full max-w-48 cursor-pointer flex-col items-center justify-center rounded-md border border-dashed border-gray-300 bg-gray-50/60 text-center transition hover:border-blue-300 hover:bg-blue-50/40 dark:border-white/[0.12] dark:bg-white/[0.02] dark:hover:border-blue-500/40 dark:hover:bg-blue-500/[0.04]">
-                  <ImportIcon className="mb-3 h-7 w-7 text-gray-400" />
-                  <span className="text-sm font-medium text-gray-700 dark:text-gray-200">{props.imageLoading ? '正在读取图片...' : props.imageMissing ? '原图不可用，重新上传' : '上传餐品图片'}</span>
-                  <span className="mt-1 text-xs text-gray-400">或按 Ctrl/⌘ + V 粘贴</span>
-                  <span className="mt-1 text-xs text-gray-400">单张图片，最大 20 MiB</span>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    disabled={disabled}
-                    onChange={(event) => {
-                      props.onImageChange(event.target.files?.[0] ?? null)
-                      event.target.value = ''
-                    }}
-                    className="sr-only"
-                  />
-                </label>
-              )}
-            </div>
-
-            <label className="block min-w-0">
+            <label className="order-1 block min-w-0 md:col-start-2 md:row-start-1">
               <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">下午茶订单</span>
               <textarea
                 value={props.userPrompt}
@@ -491,6 +466,61 @@ export function DishAnalysisFormView(props: DishAnalysisFormViewProps) {
                 className="min-h-36 w-full resize-y rounded-md border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-800 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-100 dark:focus:border-blue-500/50"
               />
             </label>
+
+            <div className="order-2 min-w-0 md:col-start-1 md:row-start-1">
+              <div className="mb-1.5 text-sm text-gray-600 dark:text-gray-300">餐品图片</div>
+              {props.imageDataUrl ? (
+                <div className="relative w-full max-w-48 overflow-hidden rounded-md border border-gray-200 bg-gray-50 dark:border-white/[0.08] dark:bg-white/[0.03]">
+                  <img src={props.imageDataUrl} alt="待解析餐品" className="aspect-[4/3] w-full object-contain" />
+                  <button type="button" onClick={props.onRemoveImage} disabled={disabled} className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-md bg-black/55 text-white shadow-sm transition hover:bg-black/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50" aria-label="移除餐品图片">
+                    <CloseIcon className="h-4 w-4" />
+                  </button>
+                </div>
+              ) : (
+                <label className="hidden aspect-[4/3] w-full max-w-48 cursor-pointer flex-col items-center justify-center rounded-md border border-dashed border-gray-300 bg-gray-50/60 text-center transition hover:border-blue-300 hover:bg-blue-50/40 md:flex dark:border-white/[0.12] dark:bg-white/[0.02] dark:hover:border-blue-500/40 dark:hover:bg-blue-500/[0.04]">
+                  <ImportIcon className="mb-3 h-7 w-7 text-gray-400" />
+                  <span className="text-sm font-medium text-gray-700 dark:text-gray-200">{props.imageLoading ? '正在读取图片...' : props.imageMissing ? '原图不可用，重新上传' : '上传餐品图片'}</span>
+                  <span className="mt-1 text-xs text-gray-400">或按 Ctrl/⌘ + V 粘贴</span>
+                  <span className="mt-1 text-xs text-gray-400">单张图片，最大 20 MiB</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    disabled={disabled}
+                    aria-label="上传餐品图片"
+                    onChange={handleImageInputChange}
+                    className="sr-only"
+                  />
+                </label>
+              )}
+              <div className="grid grid-cols-2 gap-2 md:hidden">
+                <label className={`flex min-h-11 cursor-pointer touch-manipulation items-center justify-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 text-sm font-medium text-blue-700 transition hover:bg-blue-100 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-300 dark:hover:bg-blue-500/20 ${disabled ? 'pointer-events-none opacity-60' : ''}`}>
+                  <CameraIcon className="h-5 w-5" />
+                  <span>拍照</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    aria-label="拍照"
+                    disabled={disabled}
+                    onChange={handleImageInputChange}
+                    className="sr-only"
+                  />
+                </label>
+                <label className={`flex min-h-11 cursor-pointer touch-manipulation items-center justify-center gap-2 rounded-md border border-gray-200 bg-white px-3 text-sm font-medium text-gray-700 transition hover:bg-gray-50 dark:border-white/[0.1] dark:bg-white/[0.04] dark:text-gray-200 dark:hover:bg-white/[0.08] ${disabled ? 'pointer-events-none opacity-60' : ''}`}>
+                  <ImportIcon className="h-5 w-5" />
+                  <span>上传图片</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    aria-label="上传餐品图片"
+                    disabled={disabled}
+                    onChange={handleImageInputChange}
+                    className="sr-only"
+                  />
+                </label>
+              </div>
+              {!props.imageDataUrl && <div className="mt-2 text-center text-xs text-gray-400 md:hidden">也可以 Ctrl/⌘ + V 粘贴，单张最大 20 MiB</div>}
+            </div>
           </div>
 
           <details className="group border-y border-gray-200 py-3 dark:border-white/[0.08]">
@@ -1310,7 +1340,7 @@ export default function ToolsWorkspace() {
 
   return (
     <main className="safe-area-x mx-auto max-w-7xl pb-12">
-      <div className="grid min-h-[calc(100dvh-8rem)] sm:min-h-[calc(100vh-8rem)] sm:grid-cols-[180px_minmax(0,1fr)]">
+      <div className="grid min-h-0 sm:min-h-[calc(100vh-8rem)] sm:grid-cols-[180px_minmax(0,1fr)]">
         <nav className="relative flex h-14 items-center border-b border-gray-200 dark:border-white/[0.08] sm:block sm:h-auto sm:border-b-0 sm:border-r sm:py-6" aria-label="工具列表">
           <div className="hidden text-xs font-medium text-gray-400 sm:block sm:px-3">工具</div>
           <div className="relative flex min-w-0 flex-1 items-center sm:mx-3 sm:mt-2 sm:block">
