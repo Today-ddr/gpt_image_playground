@@ -1,10 +1,19 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { AfternoonTeaPosterBatchItem, AppSettings, InputImage, TaskParams, TaskRecord } from '../types'
+import { DEFAULT_PARAMS, type AfternoonTeaPosterBatchItem, type AppSettings, type InputImage, type TaskParams, type TaskRecord } from '../types'
+import { createDefaultOpenAIProfile, normalizeSettings } from './apiProfiles'
+import { loadImage } from './canvasImage'
+import { normalizeImageSize } from './size'
 import {
   AfternoonTeaBatchCoordinator,
+  createAfternoonTeaPosterParamsSnapshot,
+  readAfternoonTeaPosterSourceSize,
   retryAfternoonTeaPosterItem,
   runAfternoonTeaPosterBatch,
 } from './afternoonTeaBatch'
+
+vi.mock('./canvasImage', () => ({
+  loadImage: vi.fn(),
+}))
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -48,6 +57,34 @@ async function flushMicrotasks() {
   await Promise.resolve()
 }
 
+describe('createAfternoonTeaPosterParamsSnapshot', () => {
+  it('derives the poster size from the source image instead of the gallery size', () => {
+    const profile = createDefaultOpenAIProfile({ id: 'openai', apiKey: 'secret', model: 'gpt-image-2' })
+    const settings = normalizeSettings({ profiles: [profile], activeProfileId: profile.id })
+    const galleryParams = { ...DEFAULT_PARAMS, size: '1920x1080', n: 4 }
+
+    const snapshot = createAfternoonTeaPosterParamsSnapshot(galleryParams, settings, { width: 3024, height: 4032 })
+
+    expect(snapshot).toMatchObject({
+      size: normalizeImageSize('3024x4032'),
+      n: 4,
+    })
+    expect(snapshot.size).not.toBe(galleryParams.size)
+    expect(galleryParams.size).toBe('1920x1080')
+  })
+
+  it('reads the source natural dimensions before creating a poster snapshot', async () => {
+    vi.mocked(loadImage).mockResolvedValueOnce({
+      naturalWidth: 3024,
+      naturalHeight: 4032,
+    } as HTMLImageElement)
+
+    await expect(readAfternoonTeaPosterSourceSize('data:image/jpeg;base64,source'))
+      .resolves.toEqual({ width: 3024, height: 4032 })
+    expect(loadImage).toHaveBeenCalledWith('data:image/jpeg;base64,source')
+  })
+})
+
 describe('runAfternoonTeaPosterBatch', () => {
   it('同一轮提交全部项目，并等待全部终态后结束批次', async () => {
     const batchItems = [
@@ -62,6 +99,7 @@ describe('runAfternoonTeaPosterBatch', () => {
       batchId: string
       title: string
       prompt: string
+      executionMode?: 'browser' | 'server'
     }> = []
     const created = vi.fn()
     const finished = vi.fn()
@@ -86,6 +124,7 @@ describe('runAfternoonTeaPosterBatch', () => {
       settingsSnapshot,
       paramsSnapshot,
       inputImage,
+      executionMode: 'server',
       submit,
       onTaskCreated: created,
       onItemSetupError: vi.fn(),
@@ -101,6 +140,7 @@ describe('runAfternoonTeaPosterBatch', () => {
     expect(calls.every((call) => call.paramsSnapshot === paramsSnapshot)).toBe(true)
     expect(calls.every((call) => call.inputImage === inputImage)).toBe(true)
     expect(calls.every((call) => call.batchId === 'batch-a')).toBe(true)
+    expect(calls.every((call) => call.executionMode === 'server')).toBe(true)
     expect(created.mock.calls).toEqual(batchItems.map((item, idx) => [
       'batch-a',
       item.id,
@@ -513,10 +553,12 @@ describe('retryAfternoonTeaPosterItem', () => {
     await flushMicrotasks()
 
     const retrySubmit = vi.fn()
+    const frozenPrompt = '冻结位置：下方偏左，left=11,top=63,right=48,bottom=84'
+    const retryItem = { ...items[1], prompt: frozenPrompt }
     const retryOptions = {
       coordinator,
       batchId: 'batch-retry',
-      item: items[1],
+      item: retryItem,
       settingsSnapshot,
       paramsSnapshot,
       inputImage,
@@ -549,13 +591,13 @@ describe('retryAfternoonTeaPosterItem', () => {
     expect(retrySubmit.mock.calls[0][0]).toMatchObject({
       batchId: 'batch-retry',
       title: items[1].title,
-      prompt: items[1].prompt,
+      prompt: frozenPrompt,
       settingsSnapshot,
       paramsSnapshot,
       inputImage,
     })
 
-    retryPending.resolve(taskResult('task-retry-ok', items[1].prompt))
+    retryPending.resolve(taskResult('task-retry-ok', frozenPrompt))
     await firstRetry
     expect(coordinator.hasRetryInProgress()).toBe(false)
 
@@ -565,9 +607,9 @@ describe('retryAfternoonTeaPosterItem', () => {
     expect(retryOptions.onItemSetupError).toHaveBeenCalledWith('batch-retry', 'item-b', retryError)
     expect(coordinator.hasRetryInProgress()).toBe(false)
 
-    retrySubmit.mockResolvedValueOnce(taskResult('task-retry-after-error', items[1].prompt))
+    retrySubmit.mockResolvedValueOnce(taskResult('task-retry-after-error', frozenPrompt))
     await expect(retryAfternoonTeaPosterItem(retryOptions)).resolves.toEqual(
-      taskResult('task-retry-after-error', items[1].prompt),
+      taskResult('task-retry-after-error', frozenPrompt),
     )
     expect(retrySubmit).toHaveBeenCalledTimes(3)
   })

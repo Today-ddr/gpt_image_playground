@@ -5,6 +5,40 @@ import type {
   TaskParams,
   TaskRecord,
 } from '../types'
+import { loadImage } from './canvasImage'
+import { normalizeParamsForSettings } from './paramCompatibility'
+import { normalizeImageSize } from './size'
+
+export type AfternoonTeaPosterSourceSize = {
+  width: number
+  height: number
+}
+
+export function createAfternoonTeaPosterParamsSnapshot(
+  params: TaskParams,
+  settings: AppSettings,
+  sourceSize: AfternoonTeaPosterSourceSize,
+) {
+  const width = Math.round(sourceSize.width)
+  const height = Math.round(sourceSize.height)
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    throw new Error('无法读取原图尺寸，请重新上传餐品图片')
+  }
+  return normalizeParamsForSettings({
+    ...params,
+    size: normalizeImageSize(`${width}x${height}`),
+  }, settings, { hasInputImages: true })
+}
+
+export async function readAfternoonTeaPosterSourceSize(dataUrl: string): Promise<AfternoonTeaPosterSourceSize> {
+  try {
+    const image = await loadImage(dataUrl)
+    if (image.naturalWidth <= 0 || image.naturalHeight <= 0) throw new Error('图片尺寸无效')
+    return { width: image.naturalWidth, height: image.naturalHeight }
+  } catch {
+    throw new Error('无法读取原图尺寸，请重新上传餐品图片')
+  }
+}
 
 export interface AfternoonTeaPosterSubmitOptions {
   settingsSnapshot: AppSettings
@@ -13,6 +47,7 @@ export interface AfternoonTeaPosterSubmitOptions {
   batchId: string
   title: string
   prompt: string
+  executionMode?: 'browser' | 'server'
   onTaskCreated: (taskId: string) => void
 }
 
@@ -27,6 +62,7 @@ export interface RunAfternoonTeaPosterBatchOptions {
   settingsSnapshot: AppSettings
   paramsSnapshot: TaskParams
   inputImage: InputImage
+  executionMode?: 'browser' | 'server'
   submit: AfternoonTeaPosterSubmit
   onTaskCreated: (batchId: string, itemId: string, taskId: string) => void
   onItemSetupError: (batchId: string, itemId: string, error: unknown) => void
@@ -40,6 +76,7 @@ export interface RetryAfternoonTeaPosterItemOptions {
   settingsSnapshot: AppSettings
   paramsSnapshot: TaskParams
   inputImage: InputImage
+  executionMode?: 'browser' | 'server'
   submit: AfternoonTeaPosterSubmit
   onTaskCreated?: (batchId: string, itemId: string, taskId: string) => void
   onItemSetupError?: (batchId: string, itemId: string, error: unknown) => void
@@ -125,6 +162,7 @@ export async function runAfternoonTeaPosterBatch({
   settingsSnapshot,
   paramsSnapshot,
   inputImage,
+  executionMode,
   submit,
   onTaskCreated,
   onItemSetupError,
@@ -150,6 +188,7 @@ export async function runAfternoonTeaPosterBatch({
           batchId,
           title: item.title,
           prompt: item.prompt,
+          executionMode,
           onTaskCreated: (taskId) => {
             if (!coordinator.acceptsClaim(batchId, batchGeneration)) return
             try {
@@ -191,6 +230,7 @@ export async function retryAfternoonTeaPosterItem({
   settingsSnapshot,
   paramsSnapshot,
   inputImage,
+  executionMode,
   submit,
   onTaskCreated,
   onItemSetupError,
@@ -204,6 +244,7 @@ export async function retryAfternoonTeaPosterItem({
       batchId,
       title: item.title,
       prompt: item.prompt,
+      executionMode,
       onTaskCreated: (taskId) => {
         if (onTaskCreated && coordinator.accepts(batchId)) onTaskCreated(batchId, item.id, taskId)
       },

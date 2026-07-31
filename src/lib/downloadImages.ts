@@ -22,7 +22,58 @@ export interface DownloadImageZipEntry {
 
 type TaskOutputZipTask = Pick<TaskRecord, 'id' | 'createdAt' | 'outputImages'>
 
+interface SavePreparedImageFileEnvironment {
+  isSecureContext: boolean
+  navigator: Partial<Pick<Navigator, 'canShare' | 'share'>>
+  triggerDownload: (blob: Blob, fileName: string) => void
+}
+
 export { formatExportFileTime } from './exportFileName'
+
+export async function prepareImageFile(imageIdOrUrl: string, fileNameBase = 'image'): Promise<File> {
+  const blob = await getImageBlob(imageIdOrUrl)
+  const base = sanitizeFileNamePart(fileNameBase) || 'image'
+  return new File([blob], `${base}.${getBlobExtension(blob)}`, { type: blob.type })
+}
+
+export async function savePreparedImageFile(
+  file: File,
+  env?: SavePreparedImageFileEnvironment,
+): Promise<'shared' | 'downloaded' | 'cancelled'> {
+  const target = env ?? {
+    isSecureContext: window.isSecureContext,
+    navigator,
+    triggerDownload,
+  }
+  const download = () => {
+    target.triggerDownload(file, file.name)
+    return 'downloaded' as const
+  }
+
+  if (!target.isSecureContext || !target.navigator.canShare || !target.navigator.share) return download()
+
+  try {
+    if (!target.navigator.canShare({ files: [file] })) return download()
+  } catch {
+    return download()
+  }
+
+  let shareResult: Promise<void>
+  try {
+    shareResult = target.navigator.share({ files: [file] })
+  } catch (err) {
+    if (isAbortError(err)) return 'cancelled'
+    return download()
+  }
+
+  try {
+    await shareResult
+    return 'shared'
+  } catch (err) {
+    if (isAbortError(err)) return 'cancelled'
+    return download()
+  }
+}
 
 export async function downloadImageIds(imageIds: string[], fileNameBase = 'images'): Promise<DownloadImagesResult> {
   if (imageIds.length === 0) return { successCount: 0, failCount: 0 }
@@ -128,7 +179,10 @@ function getBlobExtension(blob: Blob): string {
   return MIME_EXTENSIONS[blob.type.toLowerCase()] ?? blob.type.split('/')[1] ?? 'png'
 }
 
+function isAbortError(err: unknown): boolean {
+  return err instanceof DOMException && err.name === 'AbortError'
+}
+
 function delay(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms))
 }
-

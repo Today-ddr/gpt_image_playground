@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { createDefaultFalProfile, createDefaultOpenAIProfile, normalizeSettings } from '../lib/apiProfiles'
 import { AfternoonTeaBatchCoordinator } from '../lib/afternoonTeaBatch'
 import { DEFAULT_DISH_TITLE_COUNT } from '../lib/dishAnalysisPrompts'
+import { DEFAULT_AFTERNOON_TEA_TITLE_REGION } from '../lib/afternoonTeaTitlePlacement'
 import { DEFAULT_PARAMS, type AfternoonTeaConversation, type AfternoonTeaPosterBatchItem, type AppSettings, type TaskRecord } from '../types'
 import * as workspaceHelpers from './ToolsWorkspace'
 import {
@@ -11,6 +12,7 @@ import {
   MAX_DISH_IMAGE_BYTES,
   ToolsWorkflowSteps,
   deriveAfternoonTeaPosterViewItems,
+  commitDishTitleCountDraft,
   getDishAnalysisProfile,
   normalizeDishTitleCount,
   validateDishAnalysisInput,
@@ -29,6 +31,7 @@ function afternoonTeaConversation(overrides: Partial<AfternoonTeaConversation> =
   return {
     id: 'conversation-a', title: '下午茶', createdAt: 1, updatedAt: 1,
     sourceImageId: 'source-a', sourceImageName: 'tea.png', orderText: '订单', titleCount: 2,
+    itemTitleRegions: [{ ...DEFAULT_AFTERNOON_TEA_TITLE_REGION }],
     systemPrompt: '系统', analysisSystemPromptSnapshot: '分析系统', analysisUserPromptSnapshot: '分析用户',
     analysisElapsed: null,
     orderResult: { titles: ['海报'], items: [{ displayName: '蛋糕', tags: [] }] },
@@ -49,6 +52,7 @@ function renderForm(overrides: Partial<Parameters<typeof DishAnalysisFormView>[0
     systemPrompt="你是餐品分析助手"
     titleCount={DEFAULT_DISH_TITLE_COUNT}
     orderResult={null}
+    itemTitleRegions={[]}
     error=""
     loading={false}
     analysisStatus="idle"
@@ -64,6 +68,10 @@ function renderForm(overrides: Partial<Parameters<typeof DishAnalysisFormView>[0
     onCancel={noop}
     onClear={noop}
     onGoPoster={noop}
+    onPosterTitleChange={noop}
+    onItemTitleRegionsChange={noop}
+    onItemNameChange={noop}
+    onItemTagsChange={noop}
     {...overrides}
   />)
 }
@@ -96,10 +104,55 @@ describe('DishAnalysisFormView', () => {
     expect(html).toContain('value="4"')
   })
 
-  it('keeps both empty and uploaded image frames compact', () => {
-    expect(renderForm()).toMatch(/<label class="[^"]*w-full max-w-48[^"]*"/)
-    expect(renderForm({ imageDataUrl: 'data:image/png;base64,AQID' }))
-      .toMatch(/<div class="[^"]*w-full max-w-48[^"]*">/)
+  it('keeps the empty uploader compact and gives parsed images a wider frame', () => {
+    expect(renderForm()).toMatch(/<label class="[^"]*md:max-w-48[^"]*"/)
+    const previewHtml = renderForm({ imageDataUrl: 'data:image/png;base64,AQID' })
+    expect(previewHtml).toMatch(/w-full max-w-none[^"]*md:max-w-48/)
+    const parsedHtml = renderForm({
+      imageDataUrl: 'data:image/png;base64,AQID',
+      orderResult: { titles: ['今日下午茶'], items: [{ displayName: '草莓蛋糕', tags: [] }] },
+    })
+    expect(parsedHtml).toContain('aria-label="订单商品位置设置"')
+    expect(parsedHtml).not.toMatch(/md:max-w-48/)
+  })
+
+  it('keeps the parsed image area together with placement and remove controls', () => {
+    const html = renderForm({
+      imageDataUrl: 'data:image/png;base64,AQID',
+      orderResult: {
+        titles: ['今日下午茶'],
+        items: [{ displayName: '草莓蛋糕', tags: ['草莓'] }],
+      },
+    })
+    const imageStart = html.indexOf('>餐品图片</')
+    const imageEnd = html.indexOf('系统提示词', imageStart)
+    const imageArea = html.slice(imageStart, imageEnd)
+    const placementCount = html.match(/aria-label="订单商品位置设置"/g) ?? []
+
+    expect(imageStart).toBeGreaterThan(-1)
+    expect(imageEnd).toBeGreaterThan(imageStart)
+    expect(imageArea).toContain('aria-label="移除餐品图片"')
+    expect(imageArea).toContain('aria-label="订单商品位置设置"')
+    expect(imageArea).toContain('图片加载中')
+    expect(imageArea.indexOf('移除餐品图片')).toBeLessThan(imageArea.indexOf('订单商品位置设置'))
+    expect(placementCount).toHaveLength(1)
+
+    const placementStart = html.indexOf('aria-label="订单商品位置设置"')
+    const placementEnd = html.indexOf('</section>', placementStart)
+    expect(html.slice(placementStart, placementEnd)).not.toContain('移除餐品图片')
+  })
+
+  it('gives every desktop poster title an explicit edit action', () => {
+    const html = renderForm({
+      orderResult: {
+        titles: ['今日下午茶', '暖心时光'],
+        items: [{ displayName: '草莓蛋糕', tags: ['草莓'] }],
+      },
+    })
+
+    expect(html).toContain('aria-label="编辑海报标题 1"')
+    expect(html).toContain('aria-label="编辑海报标题 2"')
+    expect(html).toContain('海报标题可修改')
   })
 
   it('offers touch-sized camera and upload actions on mobile', () => {
@@ -118,14 +171,15 @@ describe('DishAnalysisFormView', () => {
       workspaceSource.indexOf('type DishAnalysisFormViewProps = {'),
       workspaceSource.indexOf('type ToolsWorkflowStepsProps = {'),
     )
-    const callStart = workspaceSource.indexOf('<DishAnalysisFormView')
+    const callStart = workspaceSource.indexOf('<AfternoonTeaMobileWorkflow')
     const callSource = workspaceSource.slice(callStart, workspaceSource.indexOf('/>', callStart) + 2)
 
     expect(html).toContain('aria-label="移除餐品图片"')
     expect(html).toMatch(/<button[^>]*class="[^"]*absolute right-2 top-2[^"]*"/)
     const removeButtonClass = html.match(/<button[^>]*class="([^"]*absolute right-2 top-2[^"]*)"[^>]*aria-label="移除餐品图片"/)?.[1] ?? ''
     expect(removeButtonClass.split(/\s+/)).not.toContainEqual(expect.stringMatching(/^(?:[^:]+:)*-?z-/))
-    expect(html).toContain('h-7 w-7')
+    expect(html).toContain('h-11 w-11')
+    expect(html).toContain('sm:h-7 sm:w-7')
     expect(html).toContain('focus-visible:')
     expect(html).not.toContain('border-t')
     expect(propsSource).not.toContain('imageName')
@@ -135,22 +189,65 @@ describe('DishAnalysisFormView', () => {
   it('groups the image with the order and keeps advanced settings collapsed', () => {
     const html = renderForm()
 
-    expect(html).toContain('grid items-start gap-4 md:grid-cols-[192px_minmax(0,1fr)]')
-    expect(html.indexOf('下午茶订单')).toBeLessThan(html.indexOf('餐品图片'))
+    expect(html).toContain('grid items-start gap-3 sm:gap-4 md:grid-cols-[192px_minmax(0,1fr)]')
+    expect(html.indexOf('餐品图片')).toBeLessThan(html.indexOf('下午茶订单'))
     expect(html).toContain('md:col-start-2 md:row-start-1')
     expect(html).toContain('md:col-start-1 md:row-start-1')
+    expect(html).toContain('order-1')
+    expect(html).toContain('order-2')
     expect(html).toContain('<details')
     expect(html).not.toContain('<details open')
     expect(html).toMatch(/<summary[^>]*>[\s\S]*系统提示词[\s\S]*高级设置[\s\S]*<\/summary>/)
   })
 
+  it('remounts local input drafts when the active conversation changes', () => {
+    const callStart = workspaceSource.indexOf('<AfternoonTeaMobileWorkflow')
+    const callSource = workspaceSource.slice(callStart, workspaceSource.indexOf('/>', callStart) + 2)
+
+    expect(callSource).toContain("key={activeConversation?.id ?? 'no-afternoon-tea-conversation'}")
+  })
+
+  it('keeps the outer workflow stacked until the wider parsed input grid fits', () => {
+    expect(workspaceSource).toContain('grid gap-4 sm:gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]')
+    expect(workspaceSource).not.toContain('grid gap-4 sm:gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(320px,0.9fr)]')
+  })
+
+  it('keeps the parsed image and order stacked on mobile and side-by-side on large screens', () => {
+    const html = renderForm({
+      imageDataUrl: 'data:image/png;base64,AQID',
+      orderResult: {
+        titles: ['今日下午茶'],
+        items: [{ displayName: '草莓蛋糕', tags: ['草莓'] }],
+      },
+    })
+
+    expect(html).toContain('lg:grid-cols-[minmax(280px,1.2fr)_minmax(220px,0.8fr)]')
+    expect(html).toContain('order-1 min-w-0 lg:col-start-1 lg:row-start-1')
+    expect(html).toContain('order-2 block min-w-0 lg:col-start-2 lg:row-start-1')
+    expect(html).not.toContain('md:grid-cols-[minmax(280px,1.2fr)_minmax(220px,0.8fr)]')
+    expect(html).toContain('aria-label="订单商品位置设置"')
+  })
+
   it('places title count and parsing controls in one action bar', () => {
     const html = renderForm()
 
-    expect(html).toMatch(/<div[^>]*aria-label="解析操作"[^>]*>[\s\S]*生成数量[\s\S]*开始解析/)
-    expect(html).toContain('grid grid-cols-[7rem_minmax(0,1fr)]')
+    expect(html).toMatch(/aria-label="解析操作"[\s\S]*生成数量[\s\S]*开始解析/)
+    expect(html).toContain('grid grid-cols-1 gap-2 sm:flex')
+    expect(html).toContain('grid grid-cols-2 gap-2 sm:ml-auto')
     expect(html).toContain('min-h-0')
     expect(html).toContain('lg:min-h-[360px]')
+  })
+
+  it('keeps an empty title count draft until blur or Enter commits it', () => {
+    expect(commitDishTitleCountDraft('', 4)).toBe(4)
+    expect(commitDishTitleCountDraft('4', 1)).toBe(4)
+    expect(commitDishTitleCountDraft('e', 7)).toBe(7)
+    expect(commitDishTitleCountDraft('Infinity', 7)).toBe(7)
+    expect(commitDishTitleCountDraft('0', 4)).toBe(1)
+    expect(commitDishTitleCountDraft('12', 4)).toBe(10)
+    expect(workspaceSource).toContain('const [titleCountDraft, setTitleCountDraft] = useState(String(props.titleCount))')
+    expect(workspaceSource).toContain('value={titleCountDraft}')
+    expect(workspaceSource).not.toContain('onChange={(event) => props.onTitleCountChange(normalizeDishTitleCount(Number(event.target.value)))}')
   })
 
   it('renders every analysis status with a stable elapsed time', () => {
@@ -192,6 +289,83 @@ describe('DishAnalysisFormView', () => {
     expect(resultHtml).toContain('进入批量海报')
     expect(resultHtml).not.toContain('&quot;titles&quot;')
     expect(resultHtml).toContain('清空')
+  })
+
+  it('renders one editable name and one draggable box for every order product', () => {
+    const orderResult = {
+      titles: ['今日下午茶'],
+      items: [
+        { displayName: '蟹肉沙拉紫菜包饭', tags: ['蟹肉'] },
+        { displayName: '金枪鱼紫菜包饭', tags: ['金枪鱼'] },
+        { displayName: '蛋黄肉松紫菜包饭', tags: ['蛋黄', '肉松'] },
+      ],
+    }
+    const html = renderForm({ imageDataUrl: 'data:image/png;base64,AQID', orderResult })
+    const lockedHtml = renderForm({ imageDataUrl: 'data:image/png;base64,AQID', orderResult, locked: true })
+
+    expect((html.match(/data-order-item-name=/g) ?? [])).toHaveLength(3)
+    expect((html.match(/data-item-title-box=/g) ?? [])).toHaveLength(3)
+    expect(html).toContain('蟹肉沙拉紫菜包饭')
+    expect(html).toContain('金枪鱼紫菜包饭')
+    expect(html).toContain('蛋黄肉松紫菜包饭')
+    expect(html).toContain('名称可修改')
+    expect(html.match(/<input[^>]*data-order-item-name="0"[^>]*>/)?.[0]).toContain('min-h-10')
+    expect(lockedHtml).toMatch(/<input[^>]*disabled=""[^>]*data-order-item-name="0"/)
+    expect(lockedHtml).toContain('已锁定')
+  })
+
+  it('offers deferred tag editing, adding, and removal for every order product', () => {
+    const html = renderForm({
+      imageDataUrl: 'data:image/png;base64,AQID',
+      orderResult: {
+        titles: ['今日下午茶'],
+        items: [{ displayName: '草莓蛋糕', tags: ['草莓', '奶油'] }],
+      },
+    })
+
+    expect((html.match(/data-order-item-tag=/g) ?? [])).toHaveLength(2)
+    expect(html).toContain('aria-label="商品 1 新增标签"')
+    expect(html).not.toContain('placeholder="新增标签"')
+    expect(html).toContain('删除商品 1 标签 草莓')
+    expect(workspaceSource).toContain('onItemTagsChange: (index: number, tags: string[]) => void')
+    expect(workspaceSource).toContain('createAfternoonTeaOrderItemTagsPatch(conversation, index, tags)')
+    expect(workspaceSource).toContain('key={tagIndex}')
+    expect(workspaceSource).not.toContain('<span key={`${tag}-${tagIndex}`}')
+    expect(workspaceSource).toContain('data-order-item-new-tag={idx}')
+    expect(workspaceSource).toContain('setAddingTagIndexes')
+  })
+
+  it('keeps tag chips compact with a plus icon for adding tags', () => {
+    const html = renderForm({
+      imageDataUrl: 'data:image/png;base64,AQID',
+      orderResult: {
+        titles: ['今日下午茶'],
+        items: [{ displayName: '草莓蛋糕', tags: ['草莓'] }],
+      },
+    })
+
+    expect(html).toMatch(/<div class="[^"]*flex[^"]*min-w-0[^"]*flex-wrap[^"]*"/)
+    expect(html).toMatch(/<span class="[^"]*rounded-full[^"]*"/)
+    expect(html).toMatch(/<input[^>]*data-order-item-tag="0-0"[^>]*class="[^"]*text-xs[^"]*"/)
+    expect(html).toMatch(/<button[^>]*aria-label="删除商品 1 标签 草莓"[^>]*class="[^"]*h-5 w-5[^"]*"/)
+    expect(html).toContain('invisible')
+    expect(html).toContain('inline-grid')
+    expect(html).toMatch(/<input[^>]*data-order-item-tag="0-0"[^>]*>/)
+    expect(html.match(/<input[^>]*data-order-item-tag="0-0"[^>]*>/)?.[0]).toContain('size="1"')
+    expect(html).toContain('w-fit')
+    expect(workspaceSource).toContain('[field-sizing:content]')
+    expect(workspaceSource).toContain('size={1}')
+    expect(html).toMatch(/<button[^>]*aria-label="商品 1 新增标签"[^>]*class="[^"]*h-7 w-7[^"]*"/)
+    expect(html).toContain('M5 12h14')
+    expect(html).toContain('M12 5v14')
+    expect(iconsSource).toContain('export function PlusIcon')
+    expect(iconsSource).toContain('M5 12h14')
+    expect(iconsSource).toContain('M12 5v14')
+  })
+
+  it('does not commit a product name while an IME is composing', () => {
+    expect(workspaceSource).toContain('event.nativeEvent.isComposing')
+    expect(workspaceSource).toContain('event.nativeEvent.keyCode === 229')
   })
 
   it('keeps parser failures on the order step without rendering raw JSON', () => {
@@ -347,6 +521,7 @@ describe('dish analysis coordination', () => {
       { id: 'done', title: '成功', prompt: 'prompt done', taskId: 'task-done' },
       { id: 'failed', title: '失败', prompt: 'prompt failed', taskId: 'task-failed' },
       { id: 'setup', title: '创建失败', prompt: 'prompt setup', setupError: '创建失败' },
+      { id: 'setup-linked', title: '创建后失败', prompt: 'prompt setup linked', taskId: 'task-setup', setupError: '创建后失败' },
     ]
     const task = (id: string, status: TaskRecord['status'], outputImages: string[] = [], error: string | null = null) => ({
       id,
@@ -372,12 +547,14 @@ describe('dish analysis coordination', () => {
       task('task-running', 'running'),
       task('task-done', 'done', ['image-first', 'image-second']),
       task('task-failed', 'error', [], '服务暂不可用'),
+      task('task-setup', 'running'),
     ])
 
-    expect(viewItems.map((item) => item.status)).toEqual(['queued', 'running', 'done', 'error', 'error'])
+    expect(viewItems.map((item) => item.status)).toEqual(['queued', 'running', 'done', 'error', 'error', 'error'])
     expect(viewItems[2].task?.id).toBe('task-done')
     expect(viewItems[3].error).toContain('服务暂不可用')
     expect(viewItems[4].error).toBe('创建失败')
+    expect(viewItems[5]).toMatchObject({ error: '创建后失败', task: { id: 'task-setup' } })
   })
 
   it('treats a missing linked task record as a retryable error', () => {
@@ -393,7 +570,9 @@ describe('dish analysis coordination', () => {
     expect(workspaceSource).toContain('createInputImageFromFile(file)')
     expect(workspaceSource).toContain("storeImage(requestImageDataUrl, 'upload')")
     expect(workspaceSource).toContain('const settingsSnapshot = normalizeSettings(settings)')
-    expect(workspaceSource).toContain('normalizeParamsForSettings({ ...params }, settingsSnapshot, { hasInputImages: true })')
+    expect(workspaceSource).toContain('readAfternoonTeaPosterSourceSize(sourceImage)')
+    expect(workspaceSource).toContain('createAfternoonTeaPosterParamsSnapshot(state.params, settingsSnapshot, sourceImageSize)')
+    expect(workspaceSource).not.toContain('normalizeParamsForSettings({ ...state.params }, settingsSnapshot, { hasInputImages: true })')
     expect(workspaceSource).toContain('runAfternoonTeaPosterBatch({')
     expect(workspaceSource).toContain('retryAfternoonTeaPosterItem({')
     expect(workspaceSource).toContain('submit: submitAfternoonTeaPosterTask')
@@ -403,6 +582,39 @@ describe('dish analysis coordination', () => {
     expect(workspaceSource).toContain('busy={batchBusy || loading}')
   })
 
+  it('commits product placement and names only for the active editable conversation', () => {
+    const handlerStart = workspaceSource.indexOf('const updateItemTitleRegions = (conversationId: string, itemTitleRegions: AfternoonTeaTitleRegion[]) => {')
+    const handlerEnd = workspaceSource.indexOf('const reparse = () => {', handlerStart)
+    const handlerSource = workspaceSource.slice(handlerStart, handlerEnd)
+    const callStart = workspaceSource.indexOf('<AfternoonTeaMobileWorkflow')
+    const callSource = workspaceSource.slice(callStart, workspaceSource.indexOf('/>', callStart) + 2)
+
+    expect(handlerStart).toBeGreaterThan(-1)
+    expect(handlerSource).toContain('state.activeAfternoonTeaConversationId !== conversationId')
+    expect(handlerSource).toContain('state.afternoonTeaBatchOperationId')
+    expect(handlerSource).toContain('batchStartingConversationIdsRef.current.has(conversationId)')
+    expect(handlerSource).toContain('createAfternoonTeaItemTitleRegionsPatch(conversation, itemTitleRegions)')
+    expect(workspaceSource).toContain('createAfternoonTeaOrderItemNamePatch(conversation, index, displayName)')
+    expect(handlerSource).toContain('state.updateAfternoonTeaConversation(conversation.id, patch)')
+    expect(callSource).toContain('itemTitleRegions={activeConversation?.itemTitleRegions ?? []}')
+    expect(callSource).toContain('updateItemTitleRegions(activeConversation.id, regions)')
+    expect(callSource).toContain('updateItemName(activeConversation.id, index, displayName)')
+  })
+
+  it('freezes the latest product names and regions before starting generation', () => {
+    const prepareStart = workspaceSource.indexOf('const prepareAfternoonTeaPosterItems = () => {')
+    const prepareSource = workspaceSource.slice(prepareStart, workspaceSource.indexOf('const handleNewConversation', prepareStart))
+
+    expect(prepareStart).toBeGreaterThan(-1)
+    expect(prepareSource).toContain('const state = useStore.getState()')
+    expect(prepareSource).toContain('const conversation = state.afternoonTeaConversations.find')
+    expect(prepareSource).toContain('const itemTitleRegions = normalizeAfternoonTeaItemTitleRegions(')
+    expect(prepareSource).toContain('const prompts = buildAfternoonTeaPosterPrompts(conversation.orderResult, itemTitleRegions)')
+    expect(prepareSource).toContain('state.updateAfternoonTeaConversation(conversation.id, { itemTitleRegions, posterItems })')
+    expect(prepareSource).toContain('if (existing?.taskId || existing?.setupError) return existing')
+    expect(prepareSource).not.toContain('setStep')
+  })
+
   it('holds one global operation lease across source setup, batch run, and retry', () => {
     const startSource = workspaceSource.slice(
       workspaceSource.indexOf('const startBatch = async () => {'),
@@ -410,7 +622,7 @@ describe('dish analysis coordination', () => {
     )
     const retrySource = workspaceSource.slice(
       workspaceSource.indexOf('const retryItem = async (itemId: string) => {'),
-      workspaceSource.indexOf('const updateUserPrompt = (value: string) => {'),
+      workspaceSource.indexOf('const updateUserPrompt = (conversationId: string | null, value: string) => {'),
     )
     expect(workspaceSource).toContain('const afternoonTeaBatchOperationId = useStore((state) => state.afternoonTeaBatchOperationId)')
     expect(workspaceSource).toContain('const batchBusy = Boolean(afternoonTeaBatchOperationId) || batchRunning || retrying')
@@ -425,6 +637,66 @@ describe('dish analysis coordination', () => {
     expect(workspaceSource).not.toMatch(/onTaskCreated:[\s\S]{0,180}if \(!mountedRef\.current\) return/)
     expect(workspaceSource).toContain('disposeAfternoonTeaBatchRuntime(runtime, useStore.getState)')
     expect(workspaceSource).toContain('interruptUnclaimed: true')
+  })
+
+  it('rejects delayed menu writes after the active conversation changes', () => {
+    const handlerStart = workspaceSource.indexOf('const updateUserPrompt = (conversationId: string | null, value: string) => {')
+    const handlerSource = workspaceSource.slice(handlerStart, workspaceSource.indexOf('const updateTitleCount', handlerStart))
+    const callStart = workspaceSource.indexOf('<AfternoonTeaMobileWorkflow')
+    const callSource = workspaceSource.slice(callStart, workspaceSource.indexOf('/>', callStart) + 2)
+
+    expect(handlerStart).toBeGreaterThan(-1)
+    expect(handlerSource).toContain('const state = useStore.getState()')
+    expect(handlerSource).toContain('state.activeAfternoonTeaConversationId !== conversationId')
+    expect(callSource).toContain('updateUserPrompt(activeConversation?.id ?? null, value)')
+  })
+
+  it('mounts one shared continuous workflow without viewport branching or legacy steps', () => {
+    const renderStart = workspaceSource.indexOf('<div className="min-w-0">')
+    const renderSource = workspaceSource.slice(renderStart, workspaceSource.indexOf('</main>', renderStart))
+    const confirmStart = workspaceSource.indexOf('const confirmAndGenerate = () => {')
+    const confirmSource = workspaceSource.slice(confirmStart, workspaceSource.indexOf('const handleNewConversation', confirmStart))
+
+    expect(workspaceSource).not.toContain('useIsMobileToolsWorkflow')
+    expect(workspaceSource).not.toContain("window.matchMedia('(max-width: 639px)')")
+    expect(workspaceSource).not.toContain("useState<'order' | 'poster'>")
+    expect((renderSource.match(/<AfternoonTeaMobileWorkflow\b/g) ?? [])).toHaveLength(1)
+    expect(renderSource).not.toContain('isMobileToolsWorkflow ?')
+    expect(renderSource).not.toContain('<ToolsWorkflowSteps')
+    expect(renderSource).not.toContain('<DishAnalysisFormView')
+    expect(renderSource).not.toContain('<AfternoonTeaPosterStep')
+    expect(confirmSource.indexOf('prepareAfternoonTeaPosterItems()')).toBeLessThan(confirmSource.indexOf('void startBatch()'))
+    expect(renderSource).toContain('onConfirmAndGenerate={confirmAndGenerate}')
+  })
+
+  it('applies mobile poster titles atomically before starting the batch', () => {
+    const handlerStart = workspaceSource.indexOf('const updatePosterTitles = (conversationId: string, titles: string[]) => {')
+    const handlerSource = workspaceSource.slice(handlerStart, workspaceSource.indexOf('const updateItemTags', handlerStart))
+    const mobileStart = workspaceSource.indexOf('<AfternoonTeaMobileWorkflow')
+    const mobileSource = workspaceSource.slice(mobileStart, workspaceSource.indexOf('/>', mobileStart) + 2)
+
+    expect(workspaceSource).toContain('createAfternoonTeaOrderTitlesPatch,')
+    expect(handlerStart).toBeGreaterThan(-1)
+    expect(handlerSource).toContain('const state = useStore.getState()')
+    expect(handlerSource).toContain('createAfternoonTeaOrderTitlesPatch(conversation, titles)')
+    expect(handlerSource).toContain('state.updateAfternoonTeaConversation(conversation.id, patch)')
+    expect(mobileSource).toContain('onPosterTitlesChange={(titles) => {')
+    expect(mobileSource).toContain('updatePosterTitles(activeConversation.id, titles)')
+  })
+
+  it('starts a batch from the latest Zustand conversation after mobile drafts flush', () => {
+    const startSource = workspaceSource.slice(
+      workspaceSource.indexOf('const startBatch = async () => {'),
+      workspaceSource.indexOf('const retryItem = async (itemId: string) => {'),
+    )
+    const stateReadIndex = startSource.indexOf('const state = useStore.getState()')
+    const conversationReadIndex = startSource.indexOf('state.afternoonTeaConversations.find')
+    const operationIndex = startSource.indexOf('tryBeginAfternoonTeaBatchOperation(operationId)')
+
+    expect(stateReadIndex).toBeGreaterThan(-1)
+    expect(conversationReadIndex).toBeGreaterThan(stateReadIndex)
+    expect(operationIndex).toBeGreaterThan(conversationReadIndex)
+    expect(startSource).toContain('state.activeAfternoonTeaConversationId')
   })
 
   it('uses the active conversation poster items and renders existing tasks through TaskCard wiring', () => {
@@ -471,15 +743,14 @@ describe('dish analysis coordination', () => {
     expect(workspaceSource).toContain('coordinatorRef.current.consumeRestoreSkip(activeAfternoonTeaConversationId)')
   })
 
-  it('returns a cloned completed conversation to the order step before skipping restore', () => {
+  it('skips the cloned conversation restore without resetting a second workflow step', () => {
     const cloneSource = workspaceSource.slice(
       workspaceSource.indexOf('const createEditableConversationFrom ='),
       workspaceSource.indexOf('const initializeNewConversationPrompt ='),
     )
 
-    expect(cloneSource).toContain("setStep('order')")
-    expect(cloneSource.indexOf("setStep('order')"))
-      .toBeLessThan(cloneSource.indexOf('coordinatorRef.current.skipNextRestore(conversationId)'))
+    expect(cloneSource).not.toContain('setStep')
+    expect(cloneSource).toContain('coordinatorRef.current.skipNextRestore(conversationId)')
   })
 
   it('clears a cloned conversation restore skip when a different conversation becomes active', () => {
@@ -566,20 +837,29 @@ describe('dish analysis coordination', () => {
     expect(events).toEqual(['started:500', 'run'])
   })
 
-  it('creates reload retry runtime from conversation source and current settings without mutating the conversation', () => {
+  it('creates reload retry runtime with the source image size without mutating the conversation', async () => {
     const source = afternoonTeaConversation({ batchStartedAt: 10, batchFinishedAt: 20, posterItems: [{ id: 'poster-a', title: '海报', prompt: 'prompt', taskId: 'missing-task' }] })
     const createRuntime = helper('createReloadAfternoonTeaBatchRuntime')
     const settings = afternoonTeaSettings()
     const original = JSON.parse(JSON.stringify(source))
-    const runtime = createRuntime?.(source, 'data:image/png;base64,AQID', settings, { ...DEFAULT_PARAMS, n: 1 }) as {
+    const runtime = await createRuntime?.(
+      source,
+      'data:image/png;base64,AQID',
+      settings,
+      { ...DEFAULT_PARAMS, size: '1920x1080', n: 1 },
+      [],
+      { width: 3024, height: 4032 },
+    ) as {
       inputImage: { id: string; dataUrl: string }
       settingsSnapshot: AppSettings
-      paramsSnapshot: { n: number }
+      paramsSnapshot: { n: number; size: string }
       batchId: string
     } | null | undefined
     expect(runtime).toMatchObject({ batchId: source.id, inputImage: { id: 'source-a', dataUrl: 'data:image/png;base64,AQID' } })
     expect(runtime?.settingsSnapshot.profiles[0]?.apiKey).toBe('secret')
     expect(runtime?.paramsSnapshot.n).toBe(1)
+    expect(runtime?.paramsSnapshot.size).not.toBe('1920x1080')
+    expect(Number(runtime?.paramsSnapshot.size.split('x')[0]) / Number(runtime?.paramsSnapshot.size.split('x')[1])).toBeCloseTo(3 / 4, 2)
     expect(source).toEqual(original)
     expect(source).not.toHaveProperty('apiKey')
   })
@@ -641,7 +921,6 @@ describe('dish analysis coordination', () => {
       orderResult: AfternoonTeaConversation['orderResult']
       analysisSystemPromptSnapshot: string | null
       analysisUserPromptSnapshot: string | null
-      step: 'order' | 'poster'
     } | undefined
 
     expect(restore).toMatchObject({
@@ -652,14 +931,8 @@ describe('dish analysis coordination', () => {
       orderResult: expect.any(Object),
       analysisSystemPromptSnapshot: '分析系统',
       analysisUserPromptSnapshot: '分析用户',
-      step: 'order',
     })
-  })
-
-  it('enters the poster step only for a conversation with a started batch', () => {
-    const getRestoreState = helper('getAfternoonTeaConversationRestoreState')
-    const restore = getRestoreState?.(afternoonTeaConversation({ batchStartedAt: 10 })) as { step: string } | undefined
-    expect(restore?.step).toBe('poster')
+    expect(restore).not.toHaveProperty('step')
   })
 
   it('builds the afternoon tea deletion preview from poster links and batch metadata', () => {

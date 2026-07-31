@@ -3,6 +3,7 @@ import { strToU8, zipSync } from 'fflate'
 
 import type { AfternoonTeaConversation, AppSettings, StoredImage, StoredImageThumbnail, TaskParams, TaskRecord } from '../types'
 import { buildExportZip, getExportImageEstimatedBytes, getExportZipPlan, readExportZip, readExportZipFileAsDataUrl, readExportZipManifest } from './exportZip'
+import { DEFAULT_AFTERNOON_TEA_TITLE_REGION } from './afternoonTeaTitlePlacement'
 
 describe('exportZip', () => {
   const afternoonTeaConversation = (overrides: Partial<AfternoonTeaConversation> = {}): AfternoonTeaConversation => ({
@@ -14,6 +15,7 @@ describe('exportZip', () => {
     sourceImageName: 'tea.png',
     orderText: '两杯茶',
     titleCount: 5,
+    itemTitleRegions: [{ ...DEFAULT_AFTERNOON_TEA_TITLE_REGION }],
     systemPrompt: '系统提示词',
     analysisSystemPromptSnapshot: null,
     analysisUserPromptSnapshot: null,
@@ -26,6 +28,7 @@ describe('exportZip', () => {
   })
 
   it('builds and reads v4 backup zip entries with afternoon tea conversations', async () => {
+    const itemTitleRegions = [{ x: 0.11, y: 0.63, width: 0.37, height: 0.21 }]
     const task: TaskRecord = {
       id: 'task-1',
       prompt: '提示词',
@@ -70,13 +73,13 @@ describe('exportZip', () => {
       favoriteCollections: [],
       defaultFavoriteCollectionId: null,
       agentConversations: [],
-      afternoonTeaConversations: [afternoonTeaConversation()],
+      afternoonTeaConversations: [afternoonTeaConversation({ itemTitleRegions })],
     })
     const parsed = await readExportZip(bytes)
 
     expect(parsed.manifest).toEqual(manifest)
     expect(parsed.manifest.version).toBe(4)
-    expect(parsed.manifest.afternoonTeaConversations).toEqual([afternoonTeaConversation()])
+    expect(parsed.manifest.afternoonTeaConversations).toEqual([afternoonTeaConversation({ itemTitleRegions })])
     expect(parsed.manifest.exportedAt).toBe(new Date(1700000001000).toISOString())
     expect(parsed.manifest.imageFiles?.['img-1']).toEqual({
       path: 'images/task-task-1-input.png',

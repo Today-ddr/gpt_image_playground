@@ -47,6 +47,7 @@ import {
   storeImageWithSize,
 } from './lib/db'
 import { callImageApi } from './lib/api'
+import { getImageJob, getImageJobExecutionPreference, submitImageJob, type ImageJobRecord, type ImageJobSubmission } from './lib/imageJobApi'
 import { callAgentConversationTitleApi, callAgentResponsesApi, callBatchImageSingle, parseBatchImageCallArguments, type AgentApiResultImage } from './lib/agentApi'
 import { collectAgentRoundOutputImageSlots, extractAgentReferenceIds, getAgentCurrentReferenceId, getAgentGeneratedImageReferenceId, replaceAgentPromptImageReferencesForApi } from './lib/agentImageReferences'
 import { showBrowserNotification } from './lib/browserNotification'
@@ -82,12 +83,16 @@ const MAX_THUMBNAIL_CACHE_ENTRIES = 80
 const MAX_THUMBNAIL_BACKFILL_CONCURRENT = 4
 const FAL_RECOVERY_POLL_MS = 10_000
 const CUSTOM_RECOVERY_POLL_MS = 10_000
+const SERVER_RECOVERY_POLL_MS = 2_000
 const SUPPORT_PROMPT_IMAGE_THRESHOLD = 50
 const AGENT_INPUT_DRAFT_RETENTION_MS = 3 * 24 * 60 * 60 * 1000
 const AFTERNOON_TEA_CONVERSATION_PERSIST_RETRY_MS = 1_000
 const AGENT_ROUND_IMAGE_MENTION_RE = /@(?:第)?(\d+)轮图(\d+)/g
 const falRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const customRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const serverRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const pendingServerSubmissions = new Map<string, ImageJobSubmission>()
+const cancelledServerTaskIds = new Set<string>()
 const openAIWatchdogTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const agentRoundControllers = new Map<string, AbortController>()
 const agentRecoveryContinuations = new Set<string>()
@@ -100,6 +105,7 @@ const AGENT_RECOVERY_PAUSE_ERROR = 'AgentRecoveryPauseError'
 const AGENT_CONVERSATION_TITLE_MAX_LENGTH = 28
 const ERROR_TOAST_MAX_LENGTH = 80
 type ToastType = 'info' | 'success' | 'error'
+type TaskExecutionMode = NonNullable<TaskRecord['executionMode']>
 type AgentInputDraft = {
   prompt: string
   inputImages: InputImage[]
@@ -686,6 +692,7 @@ function createAfternoonTeaConversation(titleCount: number, now = Date.now()): A
     sourceImageName: '',
     orderText: '',
     titleCount: normalizeAfternoonTeaTitleCount(titleCount),
+    itemTitleRegions: [],
     systemPrompt: DEFAULT_DISH_SYSTEM_PROMPT,
     analysisSystemPromptSnapshot: null,
     analysisUserPromptSnapshot: null,
@@ -1345,7 +1352,7 @@ export const useStore = create<AppState>()(
           set((state) => ({
             afternoonTeaConversations: state.afternoonTeaConversations.map((conversation) =>
               conversation.id === latestConversation.id
-                ? { ...conversation, titleCount, createdAt: now, updatedAt: now }
+                ? { ...conversation, titleCount, itemTitleRegions: [], createdAt: now, updatedAt: now }
                 : conversation,
             ),
             activeAfternoonTeaConversationId: latestConversation.id,
@@ -2000,7 +2007,7 @@ function isAsyncCustomProviderTask(settings: AppSettings, provider: string, hasI
 export function markInterruptedOpenAIRunningTasks(tasks: TaskRecord[], now = Date.now()) {
   const interruptedTasks: TaskRecord[] = []
   const updatedTasks = tasks.map((task) => {
-    if (!isRunningOpenAITask(task) || task.customTaskId) return task
+    if (!isRunningOpenAITask(task) || task.customTaskId || task.executionMode === 'server') return task
 
     const updated: TaskRecord = {
       ...task,
@@ -2259,6 +2266,21 @@ function scheduleCustomRecovery(taskId: string, delayMs = CUSTOM_RECOVERY_POLL_M
   customRecoveryTimers.set(taskId, timer)
 }
 
+function clearServerRecoveryTimer(taskId: string) {
+  const timer = serverRecoveryTimers.get(taskId)
+  if (timer) clearTimeout(timer)
+  serverRecoveryTimers.delete(taskId)
+}
+
+function scheduleServerRecovery(taskId: string, delayMs = SERVER_RECOVERY_POLL_MS) {
+  if (cancelledServerTaskIds.has(taskId) || serverRecoveryTimers.has(taskId)) return
+  const timer = setTimeout(() => {
+    serverRecoveryTimers.delete(taskId)
+    void recoverServerTask(taskId)
+  }, delayMs)
+  serverRecoveryTimers.set(taskId, timer)
+}
+
 function hasActualParams(params: Partial<TaskParams> | undefined): params is Partial<TaskParams> {
   return Boolean(params && Object.keys(params).length > 0)
 }
@@ -2492,6 +2514,9 @@ export async function initStore() {
   useStore.setState({ afternoonTeaConversationsLoaded: true })
   showSupportPromptForExistingLocalData(tasks)
   for (const task of tasks) {
+    if (task.executionMode === 'server' && task.status === 'running') {
+      scheduleServerRecovery(task.id, 0)
+    }
     if (
       task.apiProvider === 'fal' &&
       task.falRequestId &&
@@ -2628,7 +2653,11 @@ export async function initStore() {
 }
 
 /** 提交新任务 */
-export async function submitTask(options: { allowFullMask?: boolean; useCurrentApiProfileWhenReusedMissing?: boolean } = {}) {
+export async function submitTask(options: {
+  allowFullMask?: boolean
+  useCurrentApiProfileWhenReusedMissing?: boolean
+  executionMode?: TaskExecutionMode
+} = {}) {
   const { settings, prompt, inputImages, maskDraft, params, reusedTaskApiProfileId, reusedTaskApiProfileName, reusedTaskApiProfileMissing, showToast, setConfirmDialog } =
     useStore.getState()
 
@@ -2668,6 +2697,26 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
     showToast('请输入提示词', 'error')
     return
   }
+
+  const preference = activeProfile.provider === 'openai' && !options.executionMode
+    ? await getImageJobExecutionPreference()
+    : null
+  if (preference?.requiresConfirmation) {
+    setConfirmDialog({
+      title: '后台任务服务不可用',
+      message: '继续后任务会在当前浏览器页面中直连执行。刷新或关闭页面会中断生成，并且无法自动恢复。',
+      confirmText: '仍在浏览器中生成',
+      cancelText: '取消',
+      tone: 'warning',
+      action: () => {
+        void submitTask({ ...options, executionMode: 'browser' })
+      },
+    })
+    return
+  }
+  const executionMode: TaskExecutionMode = options.executionMode
+    ?? preference?.executionMode
+    ?? 'browser'
 
   let orderedInputImages = inputImages
   let maskImageId: string | null = null
@@ -2719,11 +2768,11 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
     useStore.getState().setParams(normalizedParamPatch)
   }
 
-  const taskId = genId()
-  const task: TaskRecord = {
-    id: taskId,
+  const tasks = Array.from({ length: taskParams.n }, (): TaskRecord => ({
+    id: genId(),
     prompt: prompt.trim(),
-    params: taskParams,
+    executionMode,
+    params: { ...taskParams, n: 1 },
     apiProvider: activeProfile.provider,
     apiProfileId: activeProfile.id,
     apiProfileName: activeProfile.name,
@@ -2740,11 +2789,11 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
     createdAt: Date.now(),
     finishedAt: null,
     elapsed: null,
-  }
+  }))
 
   const latestTasks = useStore.getState().tasks
-  useStore.getState().setTasks([task, ...latestTasks])
-  await putTask(task)
+  useStore.getState().setTasks([...tasks, ...latestTasks])
+  await Promise.all(tasks.map((task) => putTask(task)))
   useStore.getState().showToast('任务已提交', 'success')
 
   if (settings.clearInputAfterSubmit) {
@@ -2753,8 +2802,27 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
   }
   useStore.getState().setReusedTaskApiProfile(null)
 
-  // 异步调用 API
-  executeTask(taskId)
+  // 每张图作为独立任务并发执行，单张失败不会阻塞其他结果展示。
+  for (const task of tasks) executeTask(task.id)
+}
+
+function waitForTaskTerminal(taskId: string) {
+  const current = useStore.getState().tasks.find((task) => task.id === taskId)
+  if (!current || current.status !== 'running') return Promise.resolve()
+
+  return new Promise<void>((resolve) => {
+    const unsubscribe = useStore.subscribe((state) => {
+      const task = state.tasks.find((item) => item.id === taskId)
+      if (task?.status === 'running') return
+      unsubscribe()
+      resolve()
+    })
+    const latest = useStore.getState().tasks.find((task) => task.id === taskId)
+    if (!latest || latest.status !== 'running') {
+      unsubscribe()
+      resolve()
+    }
+  })
 }
 
 export async function submitAfternoonTeaPosterTask({
@@ -2764,6 +2832,7 @@ export async function submitAfternoonTeaPosterTask({
   batchId,
   title,
   prompt,
+  executionMode,
   onTaskCreated,
 }: {
   settingsSnapshot: AppSettings
@@ -2772,6 +2841,7 @@ export async function submitAfternoonTeaPosterTask({
   batchId: string
   title: string
   prompt: string
+  executionMode?: TaskExecutionMode
   onTaskCreated: (taskId: string) => void
 }): Promise<{ taskId: string; task: TaskRecord }> {
   const snapshotProfile = settingsSnapshot.profiles.find((profile) => profile.id === settingsSnapshot.activeProfileId)
@@ -2787,11 +2857,13 @@ export async function submitAfternoonTeaPosterTask({
   const normalizedSettings = normalizeSettings(settingsSnapshot)
   const activeProfile = getActiveApiProfile(normalizedSettings)
   const requestSettings = createSettingsForApiProfile(normalizedSettings, activeProfile)
+  const selectedExecutionMode = executionMode ?? 'browser'
   const normalizedParams = normalizeParamsForSettings(paramsSnapshot, requestSettings, { hasInputImages: true })
   const taskId = genId()
   const task: TaskRecord = {
     id: taskId,
     prompt: prompt.trim(),
+    executionMode: selectedExecutionMode,
     afternoonTeaBatchId: batchId,
     afternoonTeaTitle: title,
     params: {
@@ -2844,6 +2916,7 @@ export async function submitAfternoonTeaPosterTask({
     throw err
   }
   await executeTask(taskId, normalizedSettings)
+  if (selectedExecutionMode === 'server') await waitForTaskTerminal(taskId)
 
   const latestTask = useStore.getState().tasks.find((item) => item.id === taskId)
   if (!latestTask) throw new Error('找不到刚创建的下午茶海报任务。')
@@ -3286,6 +3359,155 @@ async function storeTaskOutputImages(task: TaskRecord, images: string[]) {
   } catch (err) {
     await deleteUnreferencedImageIds(storedImageIds)
     throw err
+  }
+}
+
+async function readServerJobOutput(url: string) {
+  const response = await fetch(url, { cache: 'no-store' })
+  if (!response.ok) throw new Error(`后台结果文件下载失败：HTTP ${response.status}`)
+  return blobToDataUrl(await response.blob(), 'image/png')
+}
+
+async function completeRecoveredServerTask(task: TaskRecord, job: ImageJobRecord) {
+  const latest = useStore.getState().tasks.find((item) => item.id === task.id)
+  if (!latest || latest.status !== 'running' || latest.executionMode !== 'server') return
+
+  const images = await Promise.all(job.resultUrls.map((url) => readServerJobOutput(url)))
+  if (!images.length) throw new Error('后台任务完成但没有返回结果图片')
+  const { outputIds, outputDataUrls, outputImageSizes, transparentOriginalImageIds } = await storeTaskOutputImages(task, images)
+  const actualParamsList = await resolveImageSizeParamsList(outputDataUrls, job.actualParamsList, outputImageSizes)
+  const firstParams = firstActualParams(actualParamsList)
+  const actualParams = {
+    ...job.actualParams,
+    size: job.actualParams?.size ?? firstParams?.size,
+    n: outputIds.length,
+  }
+  const revisedPromptByImage = job.revisedPrompts?.reduce<Record<string, string>>((acc, prompt, index) => {
+    const imageId = outputIds[index]
+    if (imageId && prompt?.trim()) acc[imageId] = prompt
+    return acc
+  }, {})
+  const latestBeforeUpdate = useStore.getState().tasks.find((item) => item.id === task.id)
+  if (!latestBeforeUpdate || latestBeforeUpdate.status !== 'running' || latestBeforeUpdate.executionMode !== 'server') {
+    await deleteUnreferencedImageIds([...outputIds, ...(transparentOriginalImageIds ?? [])])
+    return
+  }
+
+  clearServerRecoveryTimer(task.id)
+  pendingServerSubmissions.delete(task.id)
+  updateTaskInStore(task.id, {
+    outputImages: outputIds,
+    transparentOriginalImages: transparentOriginalImageIds,
+    outputErrors: job.failedRequests?.length ? job.failedRequests : undefined,
+    rawImageUrls: job.rawImageUrls?.length ? job.rawImageUrls : undefined,
+    actualParams,
+    actualParamsByImage: mapActualParamsByImage(outputIds, actualParamsList),
+    revisedPromptByImage: revisedPromptByImage && Object.keys(revisedPromptByImage).length ? revisedPromptByImage : undefined,
+    status: 'done',
+    error: null,
+    finishedAt: Date.now(),
+    elapsed: Date.now() - task.createdAt,
+  })
+
+  if (!task.afternoonTeaBatchId) {
+    const failedCount = job.failedRequests?.length ?? 0
+    const message = failedCount
+      ? `生成完成：成功 ${outputIds.length} 张，失败 ${failedCount} 张`
+      : `生成完成，共 ${outputIds.length} 张图片`
+    useStore.getState().showToast(message, failedCount ? 'error' : 'success')
+    showTaskCompletionNotification('图像生成完成', `${message}。`)
+  }
+}
+
+function failServerTask(task: TaskRecord, error: string, finishedAt = Date.now()) {
+  clearServerRecoveryTimer(task.id)
+  pendingServerSubmissions.delete(task.id)
+  updateTaskInStore(task.id, {
+    status: 'error',
+    error,
+    finishedAt,
+    elapsed: Math.max(0, finishedAt - task.createdAt),
+  })
+  if (!task.afternoonTeaBatchId) useStore.getState().setDetailTaskId(task.id)
+}
+
+async function applyServerJob(task: TaskRecord, job: ImageJobRecord) {
+  if (cancelledServerTaskIds.has(task.id)) return
+  if (job.status === 'running') {
+    scheduleServerRecovery(task.id)
+    return
+  }
+  if (job.status === 'done') {
+    try {
+      await completeRecoveredServerTask(task, job)
+    } catch (err) {
+      if (isNetworkRecoverableError(err)) {
+        scheduleServerRecovery(task.id)
+        return
+      }
+      failServerTask(task, err instanceof Error ? err.message : String(err))
+    }
+    return
+  }
+  failServerTask(task, job.error || (job.status === 'interrupted'
+    ? '后台任务服务已重启，任务已中断且不会自动重试。'
+    : '后台任务执行失败'), job.finishedAt ?? Date.now())
+}
+
+async function submitServerTask(taskId: string) {
+  const submission = pendingServerSubmissions.get(taskId)
+  const task = useStore.getState().tasks.find((item) => item.id === taskId)
+  if (cancelledServerTaskIds.has(taskId) || !submission || !task || task.status !== 'running' || task.executionMode !== 'server') return
+
+  try {
+    const job = await submitImageJob(taskId, submission)
+    if (cancelledServerTaskIds.has(taskId)) return
+    pendingServerSubmissions.delete(taskId)
+    if (job.status === 'running') {
+      scheduleServerRecovery(task.id, 0)
+      return
+    }
+    await applyServerJob(task, job)
+  } catch {
+    if (cancelledServerTaskIds.has(taskId)) return
+    try {
+      const job = await getImageJob(taskId)
+      if (cancelledServerTaskIds.has(taskId)) return
+      if (job) {
+        pendingServerSubmissions.delete(taskId)
+        await applyServerJob(task, job)
+        return
+      }
+    } catch {
+      // 提交是否成功仍不明确，继续用同一任务 ID 查询或重试。
+    }
+    scheduleServerRecovery(taskId)
+  }
+}
+
+async function recoverServerTask(taskId: string) {
+  const task = useStore.getState().tasks.find((item) => item.id === taskId)
+  if (cancelledServerTaskIds.has(taskId) || !task || task.status !== 'running' || task.executionMode !== 'server') {
+    clearServerRecoveryTimer(taskId)
+    pendingServerSubmissions.delete(taskId)
+    return
+  }
+
+  try {
+    const job = await getImageJob(taskId)
+    if (cancelledServerTaskIds.has(taskId)) return
+    if (!job) {
+      if (pendingServerSubmissions.has(taskId)) {
+        await submitServerTask(taskId)
+      } else {
+        failServerTask(task, '后台任务不存在，可能已超过结果保留时间。')
+      }
+      return
+    }
+    pendingServerSubmissions.delete(taskId)
+    await applyServerJob(task, job)
+  } catch {
+    scheduleServerRecovery(taskId)
   }
 }
 
@@ -5067,6 +5289,7 @@ async function executeTask(taskId: string, settingsOverride?: AppSettings) {
     : null
 
   if (
+    task.executionMode !== 'server' &&
     taskProvider !== 'fal' &&
     !isAsyncCustomProviderTask(requestSettings, taskProvider, task.inputImageIds.length > 0) &&
     !usesConcurrentOpenAIImageRequests(activeProfile, task.params)
@@ -5091,6 +5314,21 @@ async function executeTask(taskId: string, settingsOverride?: AppSettings) {
     const requestPrompt = task.transparentOutput && task.transparentPrompt
       ? task.transparentPrompt
       : task.prompt
+
+    if (task.executionMode === 'server' && taskProvider === 'openai') {
+      if (cancelledServerTaskIds.has(taskId) || !useStore.getState().tasks.some((item) => item.id === taskId)) return
+      pendingServerSubmissions.set(taskId, {
+        profile: activeProfile,
+        prompt: replaceImageMentionsForApi(requestPrompt, inputDataUrls.length),
+        sendPromptAsIs: Boolean(task.afternoonTeaBatchId),
+        allowPromptRewrite: requestSettings.allowPromptRewrite,
+        params: task.params,
+        inputImageDataUrls: inputDataUrls,
+        maskDataUrl,
+      })
+      await submitServerTask(taskId)
+      return
+    }
 
     const result = await callImageApi({
       settings: requestSettings,
@@ -5456,9 +5694,25 @@ export async function deleteFavoriteCollection(collectionId: string, deleteTasks
 }
 
 /** 重试失败的任务：创建新任务并执行 */
-export async function retryTask(task: TaskRecord) {
-  const { settings } = useStore.getState()
+export async function retryTask(task: TaskRecord, executionMode?: TaskExecutionMode) {
+  const { settings, setConfirmDialog } = useStore.getState()
   const activeProfile = getActiveApiProfile(settings)
+  const preference = activeProfile.provider === 'openai' && !executionMode
+    ? await getImageJobExecutionPreference()
+    : null
+  if (preference?.requiresConfirmation) {
+    setConfirmDialog({
+      title: '后台任务服务不可用',
+      message: '继续后任务会在当前浏览器页面中直连执行。刷新或关闭页面会中断生成，并且无法自动恢复。',
+      confirmText: '仍在浏览器中生成',
+      cancelText: '取消',
+      tone: 'warning',
+      action: () => {
+        void retryTask(task, 'browser')
+      },
+    })
+    return
+  }
   const normalizedParams = normalizeParamsForSettings(task.params, settings, { hasInputImages: task.inputImageIds.length > 0 })
   const shouldUseTransparentOutput = normalizedParams.output_format === 'png' && normalizedParams.transparent_output
   const taskParams = shouldUseTransparentOutput
@@ -5471,6 +5725,7 @@ export async function retryTask(task: TaskRecord) {
   const newTask: TaskRecord = {
     id: taskId,
     prompt: task.prompt,
+    executionMode: executionMode ?? preference?.executionMode ?? 'browser',
     params: taskParams,
     apiProvider: activeProfile.provider,
     apiProfileId: activeProfile.id,
@@ -5586,6 +5841,11 @@ export async function removeMultipleTasks(taskIds: string[]) {
   if (!taskIds.length) return
 
   const toDelete = new Set(taskIds)
+  for (const taskId of toDelete) {
+    cancelledServerTaskIds.add(taskId)
+    clearServerRecoveryTimer(taskId)
+    pendingServerSubmissions.delete(taskId)
+  }
   const deletedTasks = tasks.filter(t => toDelete.has(t.id))
   const remaining = await scrubAgentOutputPayloadsForDeletedTasks(deletedTasks, tasks.filter(t => !toDelete.has(t.id)))
 
@@ -5647,6 +5907,10 @@ export async function clearFailedTasks(taskIds?: string[]) {
 export async function removeTask(task: TaskRecord) {
   const { tasks, setTasks, showToast } = useStore.getState()
 
+  cancelledServerTaskIds.add(task.id)
+  clearServerRecoveryTimer(task.id)
+  pendingServerSubmissions.delete(task.id)
+
   // 收集此任务关联的图片
   const taskImageIds = new Set<string>()
   addTaskReferencedImageIds(taskImageIds, task)
@@ -5676,6 +5940,10 @@ export async function clearData(options: ClearOptions = { clearConfig: true, cle
   const { setTasks, clearInputImages, clearMaskDraft, setSettings, setParams, showToast } = useStore.getState()
 
   if (options.clearTasks) {
+    for (const task of useStore.getState().tasks) cancelledServerTaskIds.add(task.id)
+    for (const timer of serverRecoveryTimers.values()) clearTimeout(timer)
+    serverRecoveryTimers.clear()
+    pendingServerSubmissions.clear()
     await dbClearTasks()
     await dbClearAgentConversations()
     await dbClearAfternoonTeaConversations()

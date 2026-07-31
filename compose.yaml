@@ -1,0 +1,36 @@
+services:
+  job-api:
+    build:
+      context: .
+      dockerfile: deploy/job-api.Dockerfile
+    environment:
+      JOB_API_HOST: 0.0.0.0
+      JOB_API_PORT: 8787
+      JOB_DATA_DIR: /data/jobs
+      JOB_RETENTION_HOURS: ${JOB_RETENTION_HOURS:-168}
+    volumes:
+      - ./data/jobs:/data/jobs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/api/jobs/health').then((r) => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 3s
+
+  web:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    environment:
+      HOST: 0.0.0.0
+      PORT: 80
+      ENABLE_API_PROXY: "false"
+      API_PROXY_URL: ""
+      DEFAULT_API_URL: ""
+    ports:
+      - "127.0.0.1:${APP_PORT:-5175}:80"
+    depends_on:
+      job-api:
+        condition: service_healthy
+    restart: unless-stopped

@@ -269,6 +269,38 @@ services:
 
 使用 `latest` 标签时，重新拉取镜像并重启即可更新（如 `docker compose pull && docker compose up -d`）。若需固定版本可使用官方提供的版本号标签（如 `0.2.x`）。
 
+**3. 本项目一键启动（包含后台生图任务）**
+
+在本仓库根目录执行以下命令即可构建并启动前端和后台任务服务；本机不需要执行 `npm install` 或单独启动前端：
+
+```bash
+./start.sh
+```
+
+脚本会检查 Docker Compose、创建 `data/jobs/` 持久化目录，并构建 `web` 与 `job-api` 两个容器。浏览器只需访问：
+
+```text
+http://localhost:5175
+```
+
+默认端口和结果保留时间可以写入仓库根目录的 `.env`：
+
+```dotenv
+APP_PORT=5175
+JOB_RETENTION_HOURS=168
+```
+
+后台任务服务只通过前端容器的同源 `/api/jobs/` 和 `/api/job-files/` 路径访问，不单独暴露宿主机端口。查看日志或停止服务：
+
+```bash
+docker compose logs -f
+docker compose down
+```
+
+使用内置 OpenAI 兼容 Images API 或 Responses API 生图时，任务先写入后台再执行；刷新或关闭浏览器不会中断已接受的任务，重新打开页面会恢复运行状态和结果。后台容器重启时，尚未完成的同步任务会标记为中断，不会自动重投。结果文件默认保留 168 小时，API Key 不写入任务元数据或日志。
+
+后台任务只覆盖内置 OpenAI 兼容生图。fal.ai、自定义异步服务商继续使用原有远端任务 ID 恢复逻辑，Agent 对话流暂不后台化。后台不可用时，普通生图和下午茶批量任务会先要求确认，确认后才在浏览器直连；取消确认不会提交任务。
+
 </details>
 
 <details>

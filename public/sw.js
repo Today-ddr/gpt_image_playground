@@ -25,6 +25,9 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url)
   if (url.origin !== self.location.origin) return
 
+  // 任务状态和结果文件必须取实时数据，不能被离线缓存覆盖。
+  if (url.pathname.startsWith('/api/jobs/') || url.pathname.startsWith('/api/job-files/')) return
+
   if (request.mode === 'navigate') {
     event.respondWith(
       fetch(request)

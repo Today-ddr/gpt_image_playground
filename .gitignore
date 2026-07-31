@@ -5,6 +5,7 @@ dev-proxy.config.json
 
 # AI 生成的文档不上传
 ai-docs/
+data/jobs/
 
 # IDE 配置文件
 .idea/

@@ -69,16 +69,16 @@ describe('AfternoonTeaPosterStep', () => {
     expect(html).not.toContain('<textarea')
   })
 
-  it('does not expose the source filename through poster view props', () => {
+  it('does not expose the source filename or mount the legacy step from ToolsWorkspace', () => {
     const propsSource = posterStepSource.slice(
       posterStepSource.indexOf('type AfternoonTeaPosterStepProps = {'),
       posterStepSource.indexOf('export function getAfternoonTeaPosterErrorMessage'),
     )
-    const callStart = workspaceSource.indexOf('<AfternoonTeaPosterStep')
-    const callSource = workspaceSource.slice(callStart, workspaceSource.indexOf('/>', callStart) + 2)
+    const renderStart = workspaceSource.indexOf('<div className="min-w-0">')
+    const renderSource = workspaceSource.slice(renderStart, workspaceSource.indexOf('</main>', renderStart))
 
     expect(propsSource).not.toContain('sourceImageName')
-    expect(callSource).not.toContain('sourceImageName')
+    expect(renderSource).not.toContain('<AfternoonTeaPosterStep')
   })
 
   it('renders one stable result slot per title and all summary counters', () => {
@@ -89,7 +89,13 @@ describe('AfternoonTeaPosterStep', () => {
     expect(html).toContain('生成中 1')
     expect(html).toContain('成功 1')
     expect(html).toContain('失败 1')
-    expect(html).toContain('aspect-[')
+    expect(html).toContain('aria-label="下午茶海报原图"')
+  })
+
+  it('keeps product title placement out of the batch page', () => {
+    expect(posterStepSource).not.toContain('AfternoonTeaTitlePlacement')
+    expect(posterStepSource).not.toContain('onTitleRegionChange')
+    expect(renderStep()).not.toContain('data-item-title-box=')
   })
 
   it('keeps poster controls and counters stable on narrow screens', () => {
@@ -101,6 +107,19 @@ describe('AfternoonTeaPosterStep', () => {
     expect(html).toContain('sm:col-auto')
     expect(html).toContain('grid grid-cols-3')
     expect(html).toMatch(/<button[^>]*class="[^"]*hidden[^"]*sm:inline-flex[^"]*"[^>]*>返回订单解析<\/button>/)
+  })
+
+  it('keeps the mobile preview bounded and puts touch-sized actions before prompt details', () => {
+    const html = renderStep({ batchStartedAt: null, batchFinishedAt: null })
+    const startButton = html.match(/<button[^>]*>开始批量生成<\/button>/)?.[0] ?? ''
+    const retryButton = html.match(/<button[^>]*>重试此项<\/button>/)?.[0] ?? ''
+
+    expect(posterStepSource).toContain('max-h-[45svh]')
+    expect(posterStepSource).toContain('max-h-[calc(45svh_-_1rem)]')
+    expect(posterStepSource).not.toContain('lg:order-')
+    expect(startButton).toContain('min-h-11')
+    expect(retryButton).toContain('min-h-11')
+    expect(html.indexOf('开始批量生成')).toBeLessThan(html.indexOf('Prompt 预览'))
   })
 
   it('renders completed output with its title and a safe retryable error slot', () => {

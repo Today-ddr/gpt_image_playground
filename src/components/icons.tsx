@@ -18,8 +18,29 @@ export function TrashIcon(props: SVGProps<SVGSVGElement>) {
 
 export function PlusIcon(props: SVGProps<SVGSVGElement>) {
   return (
-    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" {...props}>
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M5 12h14" />
+      <path d="M12 5v14" />
+    </svg>
+  )
+}
+
+export function MinusIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M5 12h14" />
+    </svg>
+  )
+}
+
+export function PasteIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M15 2H9a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V3a1 1 0 0 0-1-1Z" />
+      <path d="M8 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h6" />
+      <path d="M16 4h2a2 2 0 0 1 2 2v8" />
+      <path d="m19 17-3 3-3-3" />
+      <path d="M16 14v6" />
     </svg>
   )
 }

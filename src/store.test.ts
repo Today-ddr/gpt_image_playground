@@ -100,6 +100,11 @@ vi.mock('./lib/api', () => ({
     revisedPrompts: [],
   })),
 }))
+vi.mock('./lib/imageJobApi', () => ({
+  getImageJobExecutionPreference: vi.fn(async () => ({ executionMode: 'browser', requiresConfirmation: false })),
+  getImageJob: vi.fn(),
+  submitImageJob: vi.fn(),
+}))
 vi.mock('./lib/browserNotification', () => ({
   showBrowserNotification: vi.fn(() => true),
 }))
@@ -149,11 +154,12 @@ vi.mock('./lib/agentApi', () => ({
 }))
 import { clearAfternoonTeaConversations, clearAgentConversations, clearImages, clearTasks, deleteImage, getAllAfternoonTeaConversations, getAllAgentConversations, getAllTasks, getImage, putAfternoonTeaConversation, putAgentConversation, putImage, putTask as putDbTask, replaceAfternoonTeaConversations, storeImage } from './lib/db'
 import { callImageApi } from './lib/api'
+import { getImageJob, getImageJobExecutionPreference, submitImageJob } from './lib/imageJobApi'
 import { showBrowserNotification } from './lib/browserNotification'
 import { callAgentResponsesApi, callBatchImageSingle } from './lib/agentApi'
 import { getFalQueuedImageResult } from './lib/falAiImageApi'
 import { removeKeyedBackgroundFromDataUrl } from './lib/transparentImage'
-import { cleanStaleAgentInputDrafts, clearData, clearFailedTasks, deleteAgentRoundFromConversation, deleteFavoriteCollection, deleteImageIfUnreferenced, editOutputs, exportData, getActiveAgentRounds, getAgentConversationTaskIds, getAgentRoundTaskIds, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, markInterruptedOpenAIRunningTasks, mergePersistedState, migratePersistedState, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeMultipleTasks, removeTask, reuseConfig, stopAgentResponse, submitAfternoonTeaPosterTask, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, updateTaskInStore, useStore } from './store'
+import { cleanStaleAgentInputDrafts, clearData, clearFailedTasks, deleteAgentRoundFromConversation, deleteFavoriteCollection, deleteImageIfUnreferenced, editOutputs, exportData, getActiveAgentRounds, getAgentConversationTaskIds, getAgentRoundTaskIds, getErrorToastMessage, getPersistedState, getTaskApiProfile, importData, initStore, markInterruptedOpenAIRunningTasks, mergePersistedState, migratePersistedState, regenerateAgentAssistantMessage, remapAgentRoundMentionsForPathChange, removeMultipleTasks, removeTask, retryTask, reuseConfig, stopAgentResponse, submitAfternoonTeaPosterTask, submitAgentMessage, submitTask, taskMatchesFilterStatus, taskMatchesSearchQuery, updateTaskInStore, useStore } from './store'
 import { readExportZip } from './lib/exportZip'
 
 const imageA = { id: 'image-a', dataUrl: 'data:image/png;base64,a' }
@@ -192,6 +198,7 @@ function afternoonTeaConversation(overrides: Partial<AfternoonTeaConversation> =
     sourceImageName: '',
     orderText: '',
     titleCount: DEFAULT_DISH_TITLE_COUNT,
+    itemTitleRegions: [],
     systemPrompt: '系统提示词',
     analysisSystemPromptSnapshot: null,
     analysisUserPromptSnapshot: null,
@@ -324,6 +331,7 @@ describe('afternoonTea conversation store', () => {
       sourceImageName: '',
       orderText: '',
       titleCount: DEFAULT_DISH_TITLE_COUNT,
+      itemTitleRegions: [],
       systemPrompt: DEFAULT_DISH_SYSTEM_PROMPT,
       analysisSystemPromptSnapshot: null,
       analysisUserPromptSnapshot: null,
@@ -363,6 +371,19 @@ describe('afternoonTea conversation store', () => {
     expect(reused).toBe(first)
     expect(useStore.getState().afternoonTeaConversations).toHaveLength(1)
     expect(useStore.getState().afternoonTeaConversations[0].titleCount).toBe(7)
+  })
+
+  it('resets an imported empty conversation item regions when reusing it as new', () => {
+    const first = useStore.getState().createAfternoonTeaConversation()
+    useStore.getState().updateAfternoonTeaConversation(first, {
+      itemTitleRegions: [{ x: 0.1, y: 0.6, width: 0.3, height: 0.2 }],
+    })
+
+    const reused = useStore.getState().createAfternoonTeaConversation()
+
+    expect(reused).toBe(first)
+    expect(useStore.getState().afternoonTeaConversations[0].itemTitleRegions)
+      .toEqual([])
   })
 
   it.each([
@@ -542,6 +563,19 @@ describe('afternoonTea conversation store', () => {
     await initStore()
 
     expect(useStore.getState().activeAfternoonTeaConversationId).toBe(newer.id)
+  })
+
+  it('fills and persists default item regions for a legacy IndexedDB record', async () => {
+    const legacy = { ...afternoonTeaConversation({ id: 'legacy-region' }) } as Partial<AfternoonTeaConversation>
+    delete legacy.itemTitleRegions
+    await putAfternoonTeaConversation(legacy as AfternoonTeaConversation)
+
+    await initStore()
+
+    expect(useStore.getState().afternoonTeaConversations[0]?.itemTitleRegions)
+      .toEqual([])
+    await vi.waitFor(async () => expect((await getAllAfternoonTeaConversations())[0]?.itemTitleRegions)
+      .toEqual([]))
   })
 
   it('reconciles and persists terminal afternoon tea batches after startup task recovery', async () => {
@@ -1254,7 +1288,7 @@ describe('persisted afternoon tea poster tasks', () => {
     const submission = submitAfternoonTeaPosterTask(afternoonTeaOptions(settingsSnapshot, {
       paramsSnapshot: {
         ...DEFAULT_PARAMS,
-        size: '1000x1000',
+        size: '768x1024',
         quality: 'high',
         output_format: 'jpeg',
         output_compression: 72,
@@ -1276,7 +1310,7 @@ describe('persisted afternoon tea poster tasks', () => {
     expect(persisted[0]).toMatchObject({
       prompt: '生成夏日下午茶海报',
       params: {
-        size: '1008x1008',
+        size: '768x1024',
         quality: 'high',
         output_format: 'jpeg',
         output_compression: 72,
@@ -1306,7 +1340,7 @@ describe('persisted afternoon tea poster tasks', () => {
       }),
       prompt: '生成夏日下午茶海报',
       sendPromptAsIs: true,
-      params: expect.objectContaining({ n: 1, transparent_output: false }),
+      params: expect.objectContaining({ size: '768x1024', n: 1, transparent_output: false }),
       inputImageDataUrls: [imageA.dataUrl],
     }))
     expect(settled).toBe(false)
@@ -1772,6 +1806,123 @@ describe('mask draft lifecycle in store actions', () => {
   })
 })
 
+describe('gallery multi-image submission', () => {
+  beforeEach(async () => {
+    await clearTasks()
+    await clearImages()
+    await putImage({ ...imageA, source: 'upload', createdAt: 1 })
+    const profile = createDefaultOpenAIProfile({ id: 'gallery-multi-profile', apiKey: 'test-key' })
+    vi.mocked(callImageApi).mockReset()
+    vi.mocked(callImageApi).mockResolvedValue({
+      images: [],
+      actualParams: {},
+      actualParamsList: [],
+      revisedPrompts: [],
+    })
+    useStore.setState({
+      settings: normalizeSettings({
+        ...DEFAULT_SETTINGS,
+        baseUrl: profile.baseUrl,
+        apiKey: profile.apiKey,
+        model: profile.model,
+        profiles: [profile],
+        activeProfileId: profile.id,
+        clearInputAfterSubmit: true,
+      }),
+      prompt: '生成两张图片',
+      inputImages: [imageA],
+      maskDraft: null,
+      params: { ...DEFAULT_PARAMS, n: 2 },
+      tasks: [],
+      showToast: vi.fn(),
+      confirmDialog: null,
+    })
+  })
+
+  it('creates one concurrent gallery task per requested image without changing the selected count', async () => {
+    let resolveFirst!: (value: Awaited<ReturnType<typeof callImageApi>>) => void
+    let resolveSecond!: (value: Awaited<ReturnType<typeof callImageApi>>) => void
+    const firstResult = new Promise<Awaited<ReturnType<typeof callImageApi>>>((resolve) => {
+      resolveFirst = resolve
+    })
+    const secondResult = new Promise<Awaited<ReturnType<typeof callImageApi>>>((resolve) => {
+      resolveSecond = resolve
+    })
+    vi.mocked(callImageApi)
+      .mockImplementationOnce(() => firstResult)
+      .mockImplementationOnce(() => secondResult)
+
+    await submitTask()
+    await vi.waitFor(() => expect(callImageApi).toHaveBeenCalledTimes(2))
+
+    const state = useStore.getState()
+    expect(state.tasks).toHaveLength(2)
+    expect(state.tasks.map((item) => item.params.n)).toEqual([1, 1])
+    expect(state.tasks.every((item) => item.inputImageIds[0] === imageA.id)).toBe(true)
+    expect(state.tasks.every((item) => item.apiProfileId === state.settings.activeProfileId)).toBe(true)
+    expect(state.params.n).toBe(2)
+    expect(state.inputImages).toEqual([])
+    expect(state.showToast).toHaveBeenCalledTimes(1)
+    expect(state.showToast).toHaveBeenCalledWith('任务已提交', 'success')
+    expect(callImageApi).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      params: expect.objectContaining({ n: 1 }),
+    }))
+    expect(callImageApi).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      params: expect.objectContaining({ n: 1 }),
+    }))
+
+    const emptyResult = {
+      images: [],
+      actualParams: {},
+      actualParamsList: [],
+      revisedPrompts: [],
+    }
+    resolveFirst(emptyResult)
+    resolveSecond(emptyResult)
+    await vi.waitFor(() => expect(useStore.getState().tasks.every((item) => item.status === 'done')).toBe(true))
+  })
+
+  it('shows a later task as soon as it succeeds and keeps it when another task fails', async () => {
+    let rejectFirst!: (reason?: unknown) => void
+    let resolveSecond!: (value: Awaited<ReturnType<typeof callImageApi>>) => void
+    const firstResult = new Promise<Awaited<ReturnType<typeof callImageApi>>>((_, reject) => {
+      rejectFirst = reject
+    })
+    const secondResult = new Promise<Awaited<ReturnType<typeof callImageApi>>>((resolve) => {
+      resolveSecond = resolve
+    })
+    vi.mocked(callImageApi)
+      .mockImplementationOnce(() => firstResult)
+      .mockImplementationOnce(() => secondResult)
+
+    await submitTask()
+    await vi.waitFor(() => expect(callImageApi).toHaveBeenCalledTimes(2))
+    const [firstTask, secondTask] = useStore.getState().tasks
+
+    resolveSecond({
+      images: ['data:image/png;base64,second-512x512'],
+      actualParams: {},
+      actualParamsList: [{}],
+      revisedPrompts: [],
+    })
+    await vi.waitFor(() => {
+      expect(useStore.getState().tasks.find((item) => item.id === secondTask.id)?.status).toBe('done')
+    })
+    expect(useStore.getState().tasks.find((item) => item.id === firstTask.id)?.status).toBe('running')
+    expect(useStore.getState().tasks.find((item) => item.id === secondTask.id)?.outputImages).toHaveLength(1)
+
+    rejectFirst(new Error('first request failed'))
+    await vi.waitFor(() => {
+      expect(useStore.getState().tasks.find((item) => item.id === firstTask.id)?.status).toBe('error')
+    })
+    expect(useStore.getState().tasks.find((item) => item.id === secondTask.id)).toMatchObject({
+      status: 'done',
+      error: null,
+    })
+    expect(useStore.getState().tasks.find((item) => item.id === secondTask.id)?.outputImages).toHaveLength(1)
+  })
+})
+
 describe('interrupted OpenAI running tasks', () => {
   it('marks legacy and OpenAI running tasks as interrupted', () => {
     const now = 10_000
@@ -1799,6 +1950,374 @@ describe('interrupted OpenAI running tasks', () => {
     expect(result.tasks.find((item) => item.id === 'fal-running')).toEqual(falRunning)
     expect(result.tasks.find((item) => item.id === 'custom-running')).toEqual(customAsyncRunning)
     expect(result.tasks.find((item) => item.id === 'done-task')).toEqual(doneTask)
+  })
+
+  it('keeps server-managed OpenAI tasks running for startup recovery', () => {
+    const serverRunning = task({
+      id: 'server-running',
+      apiProvider: 'openai',
+      executionMode: 'server',
+      status: 'running',
+      finishedAt: null,
+      elapsed: null,
+    })
+
+    const result = markInterruptedOpenAIRunningTasks([serverRunning], 10_000)
+
+    expect(result.interruptedTasks).toEqual([])
+    expect(result.tasks).toEqual([serverRunning])
+  })
+})
+
+describe('server-managed image jobs', () => {
+  beforeEach(async () => {
+    await clearTasks()
+    await clearImages()
+    vi.mocked(getImageJobExecutionPreference).mockReset()
+    vi.mocked(getImageJobExecutionPreference).mockResolvedValue({ executionMode: 'server', requiresConfirmation: false })
+    vi.mocked(getImageJob).mockReset()
+    vi.mocked(submitImageJob).mockReset()
+    vi.mocked(callImageApi).mockClear()
+    const profile = createDefaultOpenAIProfile({ id: 'server-profile', apiKey: 'test-key' })
+    useStore.setState({
+      settings: normalizeSettings({ ...DEFAULT_SETTINGS, profiles: [profile], activeProfileId: profile.id }),
+      prompt: '后台生成',
+      inputImages: [],
+      maskDraft: null,
+      params: { ...DEFAULT_PARAMS },
+      tasks: [],
+      galleryInputDraft: null,
+      agentConversations: [],
+      confirmDialog: null,
+      showToast: vi.fn(),
+      setConfirmDialog: useStore.getInitialState().setConfirmDialog,
+    })
+  })
+
+  it('submits an OpenAI task to the server and imports the completed output', async () => {
+    vi.mocked(submitImageJob).mockResolvedValue({
+      id: 'ignored-by-store',
+      status: 'running',
+      createdAt: 1,
+      startedAt: 1,
+      finishedAt: null,
+      error: null,
+      resultUrls: [],
+    })
+    vi.mocked(getImageJob).mockResolvedValue({
+      id: 'ignored-by-store',
+      status: 'done',
+      createdAt: 1,
+      startedAt: 1,
+      finishedAt: 2,
+      error: null,
+      resultUrls: ['/api/job-files/task/output-1.png'],
+      actualParams: { size: '1024x1024' },
+      actualParamsList: [{ size: '1024x1024' }],
+      revisedPrompts: ['后台改写'],
+    })
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(new Blob(['server-image'], { type: 'image/png' }))))
+
+    await submitTask()
+    await vi.waitFor(() => expect(useStore.getState().tasks[0]?.status).toBe('done'))
+
+    const completed = useStore.getState().tasks[0]
+    expect(completed.executionMode).toBe('server')
+    expect(submitImageJob).toHaveBeenCalledWith(completed.id, expect.objectContaining({
+      prompt: '后台生成',
+      profile: expect.objectContaining({ apiKey: 'test-key' }),
+    }))
+    expect(callImageApi).not.toHaveBeenCalled()
+    expect((await getImage(completed.outputImages[0]))?.dataUrl).toMatch(/^data:image\/png;base64,/)
+  })
+
+  it('recovers a persisted server task during init without a provider resubmission', async () => {
+    const running = task({
+      id: 'server-recovery',
+      apiProvider: 'openai',
+      executionMode: 'server',
+      status: 'running',
+      finishedAt: null,
+      elapsed: null,
+    })
+    await putDbTask(running)
+    vi.mocked(getImageJob).mockResolvedValue({
+      id: running.id,
+      status: 'done',
+      createdAt: 1,
+      startedAt: 1,
+      finishedAt: 2,
+      error: null,
+      resultUrls: ['/api/job-files/server-recovery/output-1.png'],
+    })
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(new Blob(['recovered'], { type: 'image/png' }))))
+
+    await initStore()
+    await vi.waitFor(() => expect(useStore.getState().tasks.find((item) => item.id === running.id)?.status).toBe('done'))
+
+    expect(submitImageJob).not.toHaveBeenCalled()
+    expect(useStore.getState().tasks.find((item) => item.id === running.id)?.outputImages).toHaveLength(1)
+  })
+
+  it('requires confirmation before direct browser fallback', async () => {
+    vi.mocked(getImageJobExecutionPreference).mockResolvedValue({ executionMode: 'browser', requiresConfirmation: true })
+
+    await submitTask()
+
+    expect(useStore.getState().tasks).toEqual([])
+    expect(useStore.getState().confirmDialog).toMatchObject({
+      title: '后台任务服务不可用',
+      confirmText: '仍在浏览器中生成',
+    })
+
+    useStore.getState().confirmDialog?.action?.()
+    await vi.waitFor(() => expect(useStore.getState().tasks).toHaveLength(1))
+    expect(useStore.getState().tasks[0].executionMode).toBe('browser')
+  })
+
+  it('retries an OpenAI task through the server when the job API is available', async () => {
+    vi.mocked(submitImageJob).mockResolvedValue({
+      id: 'retry-server',
+      status: 'error',
+      createdAt: 1,
+      startedAt: 1,
+      finishedAt: 2,
+      error: 'stopped for test',
+      resultUrls: [],
+    })
+
+    await retryTask(task({ id: 'failed-openai', apiProvider: 'openai', status: 'error', error: 'failed' }))
+
+    const retried = useStore.getState().tasks[0]
+    expect(getImageJobExecutionPreference).toHaveBeenCalledTimes(1)
+    expect(retried.executionMode).toBe('server')
+    await vi.waitFor(() => expect(submitImageJob).toHaveBeenCalledWith(retried.id, expect.any(Object)))
+    expect(callImageApi).not.toHaveBeenCalled()
+  })
+
+  it('requires confirmation before retrying an OpenAI task in the browser', async () => {
+    vi.mocked(getImageJobExecutionPreference).mockResolvedValue({ executionMode: 'browser', requiresConfirmation: true })
+
+    await retryTask(task({ id: 'failed-openai', apiProvider: 'openai', status: 'error', error: 'failed' }))
+
+    expect(useStore.getState().tasks).toEqual([])
+    expect(useStore.getState().confirmDialog).toMatchObject({
+      title: '后台任务服务不可用',
+      confirmText: '仍在浏览器中生成',
+    })
+
+    useStore.getState().confirmDialog?.action?.()
+    await vi.waitFor(() => expect(useStore.getState().tasks).toHaveLength(1))
+    expect(getImageJobExecutionPreference).toHaveBeenCalledTimes(1)
+    expect(useStore.getState().tasks[0].executionMode).toBe('browser')
+  })
+
+  it('keeps fal retries in the browser without checking the job API', async () => {
+    const profile = createDefaultFalProfile({ id: 'retry-fal', apiKey: 'fal-key' })
+    useStore.setState({
+      settings: normalizeSettings({ ...DEFAULT_SETTINGS, profiles: [profile], activeProfileId: profile.id }),
+    })
+
+    await retryTask(task({ id: 'failed-fal', apiProvider: 'fal', status: 'error', error: 'failed' }))
+
+    expect(getImageJobExecutionPreference).not.toHaveBeenCalled()
+    expect(useStore.getState().tasks[0].executionMode).toBe('browser')
+  })
+
+  it('keeps custom-provider retries in the browser without checking the job API', async () => {
+    const provider = {
+      id: 'retry-custom',
+      name: 'Retry Custom',
+      submit: { path: 'images/generations' },
+    }
+    const profile = createDefaultOpenAIProfile({
+      id: 'retry-custom-profile',
+      provider: provider.id,
+      apiKey: 'custom-key',
+    })
+    useStore.setState({
+      settings: normalizeSettings({
+        ...DEFAULT_SETTINGS,
+        customProviders: [provider],
+        profiles: [profile],
+        activeProfileId: profile.id,
+      }),
+    })
+
+    await retryTask(task({ id: 'failed-custom', apiProvider: provider.id, status: 'error', error: 'failed' }))
+
+    expect(getImageJobExecutionPreference).not.toHaveBeenCalled()
+    expect(useStore.getState().tasks[0].executionMode).toBe('browser')
+  })
+
+  it.each([
+    ['single deletion', async (running: TaskRecord) => removeTask(running)],
+    ['multiple deletion', async (running: TaskRecord) => removeMultipleTasks([running.id])],
+  ])('cancels scheduled server recovery after %s', async (_label, remove) => {
+    vi.useFakeTimers()
+    try {
+      const running = task({
+        id: `server-${_label}`,
+        apiProvider: 'openai',
+        executionMode: 'server',
+        status: 'running',
+        finishedAt: null,
+        elapsed: null,
+      })
+      await putDbTask(running)
+
+      await initStore()
+      expect(vi.getTimerCount()).toBe(1)
+      await remove(running)
+
+      expect(vi.getTimerCount()).toBe(0)
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(getImageJob).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('cancels every scheduled server recovery when clearing tasks', async () => {
+    vi.useFakeTimers()
+    try {
+      const runningTasks = ['server-clear-a', 'server-clear-b'].map((id) => task({
+        id,
+        apiProvider: 'openai',
+        executionMode: 'server',
+        status: 'running',
+        finishedAt: null,
+        elapsed: null,
+      }))
+      for (const running of runningTasks) await putDbTask(running)
+
+      await initStore()
+      expect(vi.getTimerCount()).toBe(2)
+      await clearData({ clearConfig: false, clearTasks: true })
+
+      expect(vi.getTimerCount()).toBe(0)
+      await vi.advanceTimersByTimeAsync(2_000)
+      expect(getImageJob).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not query or reschedule after deleting a task with an in-flight server submission', async () => {
+    let rejectSubmission!: (reason?: unknown) => void
+    vi.mocked(submitImageJob).mockReturnValue(new Promise((_, reject) => {
+      rejectSubmission = reject
+    }))
+
+    await submitTask()
+    await vi.waitFor(() => expect(submitImageJob).toHaveBeenCalledTimes(1))
+    const running = useStore.getState().tasks[0]
+    await removeTask(running)
+
+    rejectSubmission(new TypeError('Failed to fetch'))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(getImageJob).not.toHaveBeenCalled()
+  })
+
+  it('does not reschedule after deleting a task with an in-flight server recovery', async () => {
+    vi.useFakeTimers()
+    try {
+      let resolveJob!: (job: Awaited<ReturnType<typeof getImageJob>>) => void
+      vi.mocked(getImageJob).mockReturnValue(new Promise((resolve) => {
+        resolveJob = resolve
+      }))
+      const running = task({
+        id: 'server-in-flight-recovery',
+        apiProvider: 'openai',
+        executionMode: 'server',
+        status: 'running',
+        finishedAt: null,
+        elapsed: null,
+      })
+      await putDbTask(running)
+
+      await initStore()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(getImageJob).toHaveBeenCalledTimes(1)
+      await removeTask(running)
+
+      resolveJob({
+        id: running.id,
+        status: 'running',
+        createdAt: 1,
+        startedAt: 1,
+        finishedAt: null,
+        error: null,
+        resultUrls: [],
+      })
+      await vi.advanceTimersByTimeAsync(2_000)
+
+      expect(getImageJob).toHaveBeenCalledTimes(1)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('queries the same server task after an ambiguous submission failure', async () => {
+    vi.mocked(submitImageJob).mockRejectedValue(new TypeError('Failed to fetch'))
+    vi.mocked(getImageJob).mockResolvedValue({
+      id: 'task',
+      status: 'running',
+      createdAt: 1,
+      startedAt: 1,
+      finishedAt: null,
+      error: null,
+      resultUrls: [],
+    })
+
+    await submitTask()
+    await vi.waitFor(() => expect(getImageJob).toHaveBeenCalled())
+
+    expect(useStore.getState().tasks[0]).toMatchObject({ status: 'running', executionMode: 'server' })
+    expect(callImageApi).not.toHaveBeenCalled()
+  })
+
+  it('keeps an afternoon-tea submit pending until its server task is terminal', async () => {
+    let resolveJob!: (job: Awaited<ReturnType<typeof getImageJob>>) => void
+    const jobResult = new Promise<Awaited<ReturnType<typeof getImageJob>>>((resolve) => {
+      resolveJob = resolve
+    })
+    vi.mocked(submitImageJob).mockResolvedValue({
+      id: 'afternoon-server-task',
+      status: 'running',
+      createdAt: 1,
+      startedAt: 1,
+      finishedAt: null,
+      error: null,
+      resultUrls: [],
+    })
+    vi.mocked(getImageJob).mockReturnValue(jobResult)
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(new Blob(['poster'], { type: 'image/png' }))))
+    await putImage({ id: imageA.id, dataUrl: imageA.dataUrl })
+    let settled = false
+
+    const submission = submitAfternoonTeaPosterTask(afternoonTeaOptions(useStore.getState().settings, {
+      executionMode: 'server',
+    })).finally(() => {
+      settled = true
+    })
+    await vi.waitFor(() => expect(getImageJob).toHaveBeenCalled())
+
+    expect(settled).toBe(false)
+    resolveJob({
+      id: 'afternoon-server-task',
+      status: 'done',
+      createdAt: 1,
+      startedAt: 1,
+      finishedAt: 2,
+      error: null,
+      resultUrls: ['/api/job-files/afternoon/output-1.png'],
+    })
+    const result = await submission
+
+    expect(result.task.status).toBe('done')
   })
 })
 

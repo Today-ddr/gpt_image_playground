@@ -5,12 +5,18 @@ import * as conversationHelpers from './afternoonTeaConversations'
 import {
   canReuseRecentEmptyAfternoonTeaConversation,
   collectAfternoonTeaConversationSourceImageIds,
+  createAfternoonTeaItemTitleRegionsPatch,
+  createAfternoonTeaOrderItemNamePatch,
+  createAfternoonTeaOrderItemTagsPatch,
+  createAfternoonTeaOrderTitlePatch,
   getAfternoonTeaConversationBatchElapsed,
   getAfternoonTeaConversationSearchText,
+  isAfternoonTeaConversationFrozen,
   isEmptyAfternoonTeaConversation,
   normalizeAfternoonTeaTitleCount,
   normalizeAfternoonTeaConversations,
 } from './afternoonTeaConversations'
+import { DEFAULT_AFTERNOON_TEA_TITLE_REGION, createDefaultAfternoonTeaItemTitleRegions } from './afternoonTeaTitlePlacement'
 
 const reconcileAfternoonTeaConversationBatch = (
   value: AfternoonTeaConversation,
@@ -26,6 +32,16 @@ const reconcileAfternoonTeaConversationBatch = (
   ) => AfternoonTeaConversation
 }).reconcileAfternoonTeaConversationBatch?.(value, tasks, now, options) ?? value
 
+const createAfternoonTeaOrderTitlesPatch = (
+  value: AfternoonTeaConversation,
+  titles: string[],
+) => (conversationHelpers as typeof conversationHelpers & {
+  createAfternoonTeaOrderTitlesPatch?: (
+    conversation: AfternoonTeaConversation,
+    titles: string[],
+  ) => Pick<AfternoonTeaConversation, 'orderResult' | 'posterItems'> | null
+}).createAfternoonTeaOrderTitlesPatch?.(value, titles)
+
 function conversation(patch: Partial<AfternoonTeaConversation> = {}): AfternoonTeaConversation {
   return {
     id: patch.id ?? 'conversation-a',
@@ -36,6 +52,7 @@ function conversation(patch: Partial<AfternoonTeaConversation> = {}): AfternoonT
     sourceImageName: patch.sourceImageName ?? '下午茶.png',
     orderText: patch.orderText ?? '草莓蛋糕和红茶',
     titleCount: patch.titleCount ?? 3,
+    itemTitleRegions: patch.itemTitleRegions ?? (patch.orderResult === null ? [] : [{ ...DEFAULT_AFTERNOON_TEA_TITLE_REGION }]),
     systemPrompt: patch.systemPrompt ?? '系统提示词',
     analysisSystemPromptSnapshot: patch.analysisSystemPromptSnapshot ?? '分析系统提示词',
     analysisUserPromptSnapshot: patch.analysisUserPromptSnapshot ?? '分析用户提示词',
@@ -116,6 +133,7 @@ describe('afternoon tea conversations', () => {
       sourceImageName: '',
       orderText: '订单内容',
       titleCount: 10,
+      itemTitleRegions: [{ ...DEFAULT_AFTERNOON_TEA_TITLE_REGION }],
       systemPrompt: '系统提示词',
       analysisSystemPromptSnapshot: null,
       analysisUserPromptSnapshot: null,
@@ -140,6 +158,10 @@ describe('afternoon tea conversations', () => {
       sourceImageName: 'afternoon-tea.png',
       orderText: '草莓蛋糕和柠檬红茶',
       titleCount: 2,
+      itemTitleRegions: [
+        { x: 0.1, y: 0.2, width: 0.3, height: 0.2 },
+        { x: 0.55, y: 0.6, width: 0.3, height: 0.2 },
+      ],
       systemPrompt: '当前系统提示词',
       analysisSystemPromptSnapshot: '分析系统提示词快照',
       analysisUserPromptSnapshot: '分析用户提示词快照',
@@ -175,6 +197,210 @@ describe('afternoon tea conversations', () => {
 
     expect(normalized.titleCount).toBe(4)
     expect(normalizeAfternoonTeaTitleCount(titleCount)).toBe(4)
+  })
+
+  it('fills one default title region per item when an imported conversation has no regions', () => {
+    const [normalized] = normalizeAfternoonTeaConversations([{
+      id: 'conversation-default-title-region',
+      orderResult: {
+        titles: ['午后茶歇'],
+        items: [
+          { displayName: '草莓蛋糕', tags: [] },
+          { displayName: '柠檬红茶', tags: [] },
+        ],
+      },
+    }], 999)
+
+    expect(normalized.itemTitleRegions).toEqual(createDefaultAfternoonTeaItemTitleRegions(2))
+  })
+
+  it('rebuilds prompts for an old unstarted conversation with the default placement', () => {
+    const [normalized] = normalizeAfternoonTeaConversations([{
+      id: 'conversation-old-prompt',
+      orderResult: {
+        titles: ['午后茶歇'],
+        items: [{ displayName: '草莓蛋糕', tags: ['草莓'] }],
+      },
+      posterItems: [{ id: 'poster-a', title: '午后茶歇', prompt: '旧版没有位置数据' }],
+      batchStartedAt: null,
+      batchFinishedAt: null,
+    }], 999)
+
+    expect(normalized.posterItems[0]?.prompt).toContain('"left": 29')
+    expect(normalized.posterItems[0]?.prompt).toContain('"bottom": 22')
+  })
+
+  it('clears stale poster claims when restoring an explicitly editable conversation', () => {
+    const [normalized] = normalizeAfternoonTeaConversations([{
+      id: 'conversation-editable-stale-claims',
+      orderResult: {
+        titles: ['午后茶歇', '暖心时光'],
+        items: [{ displayName: '草莓蛋糕', tags: ['草莓'] }],
+      },
+      posterItems: [
+        { id: 'poster-a', title: '旧标题 A', prompt: '旧 prompt A', taskId: 'stale-task' },
+        { id: 'poster-b', title: '旧标题 B', prompt: '旧 prompt B', setupError: '旧创建失败' },
+      ],
+      batchStartedAt: null,
+      batchFinishedAt: null,
+    }], 999)
+
+    expect(normalized.posterItems.map((item) => item.id)).toEqual(['poster-a', 'poster-b'])
+    expect(normalized.posterItems.map((item) => item.title)).toEqual(['午后茶歇', '暖心时光'])
+    expect(normalized.posterItems.every((item) => !item.taskId && !item.setupError)).toBe(true)
+    expect(normalized.posterItems[0].prompt).toContain('"title": "午后茶歇"')
+    expect(normalized.posterItems[1].prompt).toContain('"title": "暖心时光"')
+  })
+
+  it.each([
+    [{ x: -0.1, y: 0.1, width: 0.4, height: 0.2 }, 'negative'],
+    [{ x: 0.1, y: 0.1, width: 0.91, height: 0.2 }, 'horizontal overflow'],
+    [{ x: Number.NaN, y: 0.1, width: 0.4, height: 0.2 }, 'NaN'],
+    [{ x: 0.1, y: Number.POSITIVE_INFINITY, width: 0.4, height: 0.2 }, 'Infinity'],
+  ])('normalizes invalid imported item title regions to the indexed default for %s', (titleRegion, _label) => {
+    const [normalized] = normalizeAfternoonTeaConversations([{
+      id: 'conversation-invalid-title-region',
+      orderResult: {
+        titles: ['午后茶歇'],
+        items: [{ displayName: '草莓蛋糕', tags: [] }],
+      },
+      itemTitleRegions: [titleRegion],
+    }], 999)
+
+    expect(normalized.itemTitleRegions).toEqual([{ ...DEFAULT_AFTERNOON_TEA_TITLE_REGION }])
+  })
+
+  it('atomically rebuilds prompts before a batch starts and refuses updates after it starts', () => {
+    const editable = conversation({
+      batchStartedAt: null,
+      posterItems: [
+        { id: 'poster-a', title: '午后茶歇', prompt: '旧位置 A' },
+      ],
+    })
+    const nextRegions = [{ x: 0.1, y: 0.2, width: 0.3, height: 0.2 }]
+    const patch = createAfternoonTeaItemTitleRegionsPatch(editable, nextRegions)
+
+    expect(patch?.itemTitleRegions).toEqual(nextRegions)
+    expect(patch?.posterItems).toHaveLength(1)
+    expect(patch?.posterItems[0]).toMatchObject({ id: 'poster-a', title: '午后茶歇' })
+    expect(patch?.posterItems[0].prompt).toContain('"left": 10')
+    expect(createAfternoonTeaItemTitleRegionsPatch({ ...editable, batchStartedAt: 100 }, nextRegions)).toBeNull()
+  })
+
+  it('edits one item display name without changing tags or frozen batches', () => {
+    const editable = conversation({ batchStartedAt: null, posterItems: [{ id: 'poster-a', title: '午后茶歇', prompt: '旧名称' }] })
+    const patch = createAfternoonTeaOrderItemNamePatch(editable, 0, ' 草莓奶油蛋糕 ')
+
+    expect(patch?.orderResult?.items[0]).toEqual({ displayName: '草莓奶油蛋糕', tags: ['草莓'] })
+    expect(patch?.posterItems[0].prompt).toContain('草莓奶油蛋糕')
+    expect(createAfternoonTeaOrderItemNamePatch(editable, 0, '  ')).toBeNull()
+    expect(createAfternoonTeaOrderItemNamePatch({ ...editable, batchStartedAt: 100 }, 0, '新名称')).toBeNull()
+  })
+
+  it('updates order item tags, rebuilds unfrozen prompts, and rejects frozen batches', () => {
+    const editable = conversation({
+      posterItems: [{ id: 'poster-a', title: '午后茶歇', prompt: '旧 tags prompt' }],
+    })
+    const patch = createAfternoonTeaOrderItemTagsPatch(editable, 0, [' 奶油 ', '', '草莓', '奶油'])
+
+    expect(patch?.orderResult?.items[0]).toEqual({ displayName: '草莓蛋糕', tags: ['奶油', '草莓'] })
+    expect(patch?.posterItems[0].prompt).toContain('奶油')
+    expect(patch?.posterItems[0].prompt).toContain('草莓')
+    expect(createAfternoonTeaOrderItemTagsPatch(editable, 0, ['草莓'])).toBeNull()
+    expect(createAfternoonTeaOrderItemTagsPatch(editable, 1, ['奶油'])).toBeNull()
+    expect(createAfternoonTeaOrderItemTagsPatch({ ...editable, batchStartedAt: 100 }, 0, ['奶油'])).toBeNull()
+  })
+
+  it('updates one trimmed poster title and rebuilds the matching prompt without changing title count', () => {
+    const editable = conversation({
+      orderResult: {
+        titles: ['午后茶歇', '暖心时光'],
+        items: [{ displayName: '草莓蛋糕', tags: ['草莓'] }],
+      },
+      itemTitleRegions: [{ x: 0.1, y: 0.2, width: 0.3, height: 0.2 }],
+      posterItems: [
+        { id: 'poster-a', title: '午后茶歇', prompt: '旧标题 A', taskId: 'stale-task' },
+        { id: 'poster-b', title: '暖心时光', prompt: '旧标题 B', setupError: '旧创建失败' },
+      ],
+    })
+    const patch = createAfternoonTeaOrderTitlePatch(editable, 1, ' 周末欢聚 ')
+
+    expect(patch?.orderResult?.titles).toEqual(['午后茶歇', '周末欢聚'])
+    expect(patch?.orderResult?.titles).toHaveLength(2)
+    expect(patch?.posterItems[1]).toMatchObject({ id: 'poster-b', title: '周末欢聚' })
+    expect(patch?.posterItems[1].prompt).toContain('"title": "周末欢聚"')
+    expect(patch?.posterItems[1].prompt).toContain('"left": 10')
+    expect(patch?.posterItems[1].prompt).not.toContain('暖心时光')
+  })
+
+  it('atomically swaps all poster titles and rebuilds every prompt from the final order', () => {
+    const editable = conversation({
+      orderResult: {
+        titles: ['午后茶歇', '暖心时光'],
+        items: [{ displayName: '草莓蛋糕', tags: ['草莓'] }],
+      },
+      posterItems: [
+        { id: 'poster-a', title: '午后茶歇', prompt: '旧标题 A', taskId: 'stale-task' },
+        { id: 'poster-b', title: '暖心时光', prompt: '旧标题 B', setupError: '旧创建失败' },
+      ],
+    })
+    const patch = createAfternoonTeaOrderTitlesPatch(editable, [' 暖心时光 ', ' 午后茶歇 '])
+
+    expect(patch?.orderResult?.titles).toEqual(['暖心时光', '午后茶歇'])
+    expect(patch?.posterItems.map((item) => ({ id: item.id, title: item.title }))).toEqual([
+      { id: 'poster-a', title: '暖心时光' },
+      { id: 'poster-b', title: '午后茶歇' },
+    ])
+    expect(patch?.posterItems[0].prompt).toContain('"title": "暖心时光"')
+    expect(patch?.posterItems[0].prompt).not.toContain('"title": "午后茶歇"')
+    expect(patch?.posterItems[1].prompt).toContain('"title": "午后茶歇"')
+    expect(patch?.posterItems[1].prompt).not.toContain('"title": "暖心时光"')
+    expect(patch?.posterItems.every((item) => !item.taskId && !item.setupError)).toBe(true)
+  })
+
+  it.each([
+    ['empty title', ['午后茶歇', '  '], {}],
+    ['duplicate title', ['午后茶歇', ' 午后茶歇 '], {}],
+    ['shorter title list', ['午后茶歇'], {}],
+    ['longer title list', ['午后茶歇', '暖心时光', '周末欢聚'], {}],
+    ['started batch', ['周末欢聚', '暖心时光'], { batchStartedAt: 300 }],
+    ['finished batch', ['周末欢聚', '暖心时光'], { batchFinishedAt: 400 }],
+  ])('rejects an atomic poster title update for %s', (_label, titles, state) => {
+    const editable = conversation({
+      orderResult: {
+        titles: ['午后茶歇', '暖心时光'],
+        items: [{ displayName: '草莓蛋糕', tags: ['草莓'] }],
+      },
+      ...state,
+    })
+
+    expect(createAfternoonTeaOrderTitlesPatch(editable, titles)).toBeNull()
+  })
+
+  it.each([
+    ['empty title', 0, '  ', {}],
+    ['duplicate title', 0, ' 暖心时光 ', {}],
+    ['negative index', -1, '周末欢聚', {}],
+    ['upper-bound index', 2, '周末欢聚', {}],
+    ['non-integer index', 0.5, '周末欢聚', {}],
+    ['started batch', 0, '周末欢聚', { batchStartedAt: 300 }],
+    ['finished batch', 0, '周末欢聚', { batchFinishedAt: 400 }],
+  ])('rejects a poster title update for %s', (_label, index, title, state) => {
+    const editable = conversation({
+      orderResult: {
+        titles: ['午后茶歇', '暖心时光'],
+        items: [{ displayName: '草莓蛋糕', tags: ['草莓'] }],
+      },
+      ...state,
+    })
+
+    expect(createAfternoonTeaOrderTitlePatch(editable, index, title)).toBeNull()
+  })
+
+  it('treats both started and finished poster batches as frozen', () => {
+    expect(isAfternoonTeaConversationFrozen(conversation({ batchStartedAt: null, batchFinishedAt: null }))).toBe(false)
+    expect(isAfternoonTeaConversationFrozen(conversation({ batchStartedAt: 100, batchFinishedAt: null }))).toBe(true)
+    expect(isAfternoonTeaConversationFrozen(conversation({ batchStartedAt: null, batchFinishedAt: 200 }))).toBe(true)
   })
 
   it('clamps and floors valid numeric title counts', () => {

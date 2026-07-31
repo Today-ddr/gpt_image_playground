@@ -1,5 +1,7 @@
-import type { AfternoonTeaConversation, AfternoonTeaOrderResult, AfternoonTeaPosterBatchItem, TaskRecord } from '../types'
+import type { AfternoonTeaConversation, AfternoonTeaOrderResult, AfternoonTeaPosterBatchItem, TaskRecord, AfternoonTeaTitleRegion } from '../types'
 import { DEFAULT_DISH_TITLE_COUNT } from './dishAnalysisPrompts'
+import { normalizeAfternoonTeaItemTitleRegions } from './afternoonTeaTitlePlacement'
+import { rebuildAfternoonTeaPosterItemPrompts } from './afternoonTeaPosterPromptBuilder'
 
 const DEFAULT_CONVERSATION_TITLE = '新下午茶会话'
 const MAX_TITLE_COUNT = 10
@@ -78,6 +80,12 @@ export function normalizeAfternoonTeaConversations(value: unknown, now = Date.no
     const createdAt = normalizeTimestamp(record.createdAt, now)
     const sourceImageId = normalizeString(record.sourceImageId)
     const orderResult = normalizeOrderResult(record.orderResult)
+    const batchStartedAt = typeof record.batchStartedAt === 'number' && Number.isFinite(record.batchStartedAt) ? record.batchStartedAt : null
+    const batchFinishedAt = typeof record.batchFinishedAt === 'number' && Number.isFinite(record.batchFinishedAt) ? record.batchFinishedAt : null
+    const posterItems = normalizePosterItems(record.posterItems)
+    const itemTitleRegionCount = orderResult?.items.length
+      ?? (Array.isArray(record.itemTitleRegions) ? record.itemTitleRegions.length : 0)
+    const itemTitleRegions = normalizeAfternoonTeaItemTitleRegions(record.itemTitleRegions, itemTitleRegionCount)
     return [{
       id,
       title: normalizeString(record.title) || DEFAULT_CONVERSATION_TITLE,
@@ -87,6 +95,7 @@ export function normalizeAfternoonTeaConversations(value: unknown, now = Date.no
       sourceImageName: normalizeString(record.sourceImageName),
       orderText: typeof record.orderText === 'string' ? record.orderText : '',
       titleCount: normalizeAfternoonTeaTitleCount(record.titleCount),
+      itemTitleRegions,
       systemPrompt: typeof record.systemPrompt === 'string' ? record.systemPrompt : '',
       analysisSystemPromptSnapshot: typeof record.analysisSystemPromptSnapshot === 'string' ? record.analysisSystemPromptSnapshot : null,
       analysisUserPromptSnapshot: typeof record.analysisUserPromptSnapshot === 'string' ? record.analysisUserPromptSnapshot : null,
@@ -94,11 +103,105 @@ export function normalizeAfternoonTeaConversations(value: unknown, now = Date.no
         ? record.analysisElapsed
         : null,
       orderResult,
-      posterItems: normalizePosterItems(record.posterItems),
-      batchStartedAt: typeof record.batchStartedAt === 'number' && Number.isFinite(record.batchStartedAt) ? record.batchStartedAt : null,
-      batchFinishedAt: typeof record.batchFinishedAt === 'number' && Number.isFinite(record.batchFinishedAt) ? record.batchFinishedAt : null,
+      posterItems: orderResult && batchStartedAt == null && batchFinishedAt == null
+        ? rebuildAfternoonTeaPosterItemPrompts(orderResult, posterItems, itemTitleRegions, { resetClaims: true })
+        : posterItems,
+      batchStartedAt,
+      batchFinishedAt,
     }]
   })
+}
+
+export function createAfternoonTeaItemTitleRegionsPatch(
+  conversation: AfternoonTeaConversation,
+  itemTitleRegions: AfternoonTeaTitleRegion[],
+): Pick<AfternoonTeaConversation, 'itemTitleRegions' | 'posterItems'> | null {
+  if (isAfternoonTeaConversationFrozen(conversation) || !conversation.orderResult) return null
+  const normalizedRegions = normalizeAfternoonTeaItemTitleRegions(itemTitleRegions, conversation.orderResult.items.length)
+  return {
+    itemTitleRegions: normalizedRegions,
+    posterItems: rebuildAfternoonTeaPosterItemPrompts(conversation.orderResult, conversation.posterItems, normalizedRegions, { resetClaims: true }),
+  }
+}
+
+export function createAfternoonTeaOrderItemNamePatch(
+  conversation: AfternoonTeaConversation,
+  index: number,
+  displayName: string,
+): Pick<AfternoonTeaConversation, 'orderResult' | 'posterItems'> | null {
+  if (isAfternoonTeaConversationFrozen(conversation) || !conversation.orderResult) return null
+  if (!Number.isInteger(index) || index < 0 || index >= conversation.orderResult.items.length) return null
+  const normalizedName = displayName.trim()
+  if (!normalizedName) return null
+  const orderResult = {
+    ...conversation.orderResult,
+    items: conversation.orderResult.items.map((item, itemIndex) => itemIndex === index
+      ? { ...item, displayName: normalizedName }
+      : item),
+  }
+  return {
+    orderResult,
+    posterItems: rebuildAfternoonTeaPosterItemPrompts(orderResult, conversation.posterItems, conversation.itemTitleRegions, { resetClaims: true }),
+  }
+}
+
+export function createAfternoonTeaOrderItemTagsPatch(
+  conversation: AfternoonTeaConversation,
+  index: number,
+  tags: string[],
+): Pick<AfternoonTeaConversation, 'orderResult' | 'posterItems'> | null {
+  if (isAfternoonTeaConversationFrozen(conversation) || !conversation.orderResult) return null
+  if (!Number.isInteger(index) || index < 0 || index >= conversation.orderResult.items.length) return null
+  const normalizedTags = [...new Set(tags.map((tag) => tag.trim()).filter(Boolean))]
+  const currentTags = conversation.orderResult.items[index].tags
+  if (normalizedTags.length === currentTags.length && normalizedTags.every((tag, tagIndex) => tag === currentTags[tagIndex])) return null
+  const orderResult = {
+    ...conversation.orderResult,
+    items: conversation.orderResult.items.map((item, itemIndex) => itemIndex === index
+      ? { ...item, tags: normalizedTags }
+      : item),
+  }
+  return {
+    orderResult,
+    posterItems: rebuildAfternoonTeaPosterItemPrompts(orderResult, conversation.posterItems, conversation.itemTitleRegions, { resetClaims: true }),
+  }
+}
+
+export function createAfternoonTeaOrderTitlePatch(
+  conversation: AfternoonTeaConversation,
+  index: number,
+  title: string,
+): Pick<AfternoonTeaConversation, 'orderResult' | 'posterItems'> | null {
+  if (isAfternoonTeaConversationFrozen(conversation) || !conversation.orderResult) return null
+  if (!Number.isInteger(index) || index < 0 || index >= conversation.orderResult.titles.length) return null
+  return createAfternoonTeaOrderTitlesPatch(
+    conversation,
+    conversation.orderResult.titles.map((currentTitle, titleIndex) => titleIndex === index ? title : currentTitle),
+  )
+}
+
+export function createAfternoonTeaOrderTitlesPatch(
+  conversation: AfternoonTeaConversation,
+  titles: string[],
+): Pick<AfternoonTeaConversation, 'orderResult' | 'posterItems'> | null {
+  if (isAfternoonTeaConversationFrozen(conversation) || !conversation.orderResult) return null
+  if (titles.length !== conversation.orderResult.titles.length) return null
+  const normalizedTitles = titles.map((title) => title.trim())
+  if (normalizedTitles.some((title) => !title) || new Set(normalizedTitles).size !== normalizedTitles.length) return null
+  const orderResult = {
+    ...conversation.orderResult,
+    titles: normalizedTitles,
+  }
+  return {
+    orderResult,
+    posterItems: rebuildAfternoonTeaPosterItemPrompts(orderResult, conversation.posterItems, conversation.itemTitleRegions, { resetClaims: true }),
+  }
+}
+
+export function isAfternoonTeaConversationFrozen(
+  conversation: Pick<AfternoonTeaConversation, 'batchStartedAt' | 'batchFinishedAt'> | null | undefined,
+): boolean {
+  return conversation?.batchStartedAt != null || conversation?.batchFinishedAt != null
 }
 
 export function isEmptyAfternoonTeaConversation(conversation: AfternoonTeaConversation) {

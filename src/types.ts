@@ -150,6 +150,13 @@ export interface AfternoonTeaOrderResult {
   items: AfternoonTeaItem[]
 }
 
+export interface AfternoonTeaTitleRegion {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
 export interface AfternoonTeaPosterPrompt {
   title: string
   prompt: string
@@ -170,6 +177,7 @@ export interface AfternoonTeaConversation {
   sourceImageName: string
   orderText: string
   titleCount: number
+  itemTitleRegions: AfternoonTeaTitleRegion[]
   systemPrompt: string
   analysisSystemPromptSnapshot: string | null
   analysisUserPromptSnapshot: string | null
@@ -202,6 +210,8 @@ export type TaskStatus = 'running' | 'done' | 'error'
 export interface TaskRecord {
   id: string
   prompt: string
+  /** 任务由浏览器直连执行，还是由本地后台任务服务执行 */
+  executionMode?: 'browser' | 'server'
   /** 下午茶海报批次 ID */
   afternoonTeaBatchId?: string
   /** 下午茶海报标题 */

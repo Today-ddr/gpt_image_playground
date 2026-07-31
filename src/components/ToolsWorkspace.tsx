@@ -3,6 +3,7 @@ import type {
   AfternoonTeaOrderResult,
   AfternoonTeaConversation,
   AfternoonTeaPosterBatchItem,
+  AfternoonTeaTitleRegion,
   ApiProfile,
   AppSettings,
   InputImage,
@@ -11,13 +12,21 @@ import type {
 } from '../types'
 import { createInputImageFromFile, deleteImageIfUnreferenced, editOutputs, ensureImageCached, removeTask, reuseConfig, submitAfternoonTeaPosterTask, useStore } from '../store'
 import { getActiveApiProfile, normalizeSettings, validateApiProfile } from '../lib/apiProfiles'
+import { getImageJobExecutionPreference } from '../lib/imageJobApi'
 import {
   AfternoonTeaBatchCoordinator,
+  createAfternoonTeaPosterParamsSnapshot,
+  readAfternoonTeaPosterSourceSize,
   retryAfternoonTeaPosterItem,
   runAfternoonTeaPosterBatch,
+  type AfternoonTeaPosterSourceSize,
 } from '../lib/afternoonTeaBatch'
 import { parseAfternoonTeaOrderResult } from '../lib/afternoonTeaOrder'
 import { buildAfternoonTeaPosterPrompts } from '../lib/afternoonTeaPosterPromptBuilder'
+import {
+  normalizeAfternoonTeaItemTitleRegions,
+  resolveAfternoonTeaItemTitleRegionsForImage,
+} from '../lib/afternoonTeaTitlePlacement'
 import { analyzeDish } from '../lib/dishAnalysisApi'
 import { storeImage } from '../lib/db'
 import {
@@ -28,22 +37,40 @@ import {
   DEFAULT_DISH_USER_PROMPT,
   DISH_SYSTEM_PROMPT_STORAGE_KEY,
 } from '../lib/dishAnalysisPrompts'
-import { normalizeParamsForSettings } from '../lib/paramCompatibility'
-import { getAfternoonTeaConversationSearchText, reconcileAfternoonTeaConversationBatch } from '../lib/afternoonTeaConversations'
+import {
+  createAfternoonTeaItemTitleRegionsPatch,
+  createAfternoonTeaOrderItemNamePatch,
+  createAfternoonTeaOrderItemTagsPatch,
+  createAfternoonTeaOrderTitlePatch,
+  createAfternoonTeaOrderTitlesPatch,
+  getAfternoonTeaConversationSearchText,
+  isAfternoonTeaConversationFrozen,
+  reconcileAfternoonTeaConversationBatch,
+} from '../lib/afternoonTeaConversations'
 import { useDocumentImagePaste } from '../lib/useDocumentImagePaste'
-import { CameraIcon, ChevronDownIcon, CloseIcon, EditIcon, ImportIcon, MessageCircleIcon } from './icons'
+import { CameraIcon, ChevronDownIcon, CloseIcon, EditIcon, ImportIcon, MessageCircleIcon, PlusIcon } from './icons'
 import { ConversationHistoryPopover, type ConversationHistoryItem } from './ConversationHistoryPopover'
 import {
-  AfternoonTeaPosterStep,
+  AfternoonTeaMobileWorkflow,
+} from './tools/AfternoonTeaMobileWorkflow'
+import {
   getAfternoonTeaPosterErrorMessage,
   type AfternoonTeaPosterViewItem,
 } from './tools/AfternoonTeaPosterStep'
+import { AfternoonTeaItemPlacement } from './tools/AfternoonTeaTitlePlacement'
 
 export const MAX_DISH_IMAGE_BYTES = 20 * 1024 * 1024
+type ToolTaskExecutionMode = 'browser' | 'server'
 
 export function normalizeDishTitleCount(value: number) {
   if (!Number.isFinite(value)) return DEFAULT_DISH_TITLE_COUNT
   return Math.max(1, Math.min(10, Math.floor(value)))
+}
+
+export function commitDishTitleCountDraft(draft: string, currentValue: number) {
+  if (!draft.trim()) return currentValue
+  const value = Number(draft)
+  return Number.isFinite(value) ? normalizeDishTitleCount(value) : currentValue
 }
 
 export function validateDishImageFile(file: Pick<File, 'type' | 'size'>) {
@@ -100,9 +127,9 @@ export function deriveAfternoonTeaPosterViewItems(
   tasks: TaskRecord[],
 ): AfternoonTeaPosterViewItem[] {
   return items.map((item) => {
-    if (item.setupError) return { ...item, status: 'error', error: item.setupError }
+    const task = item.taskId ? tasks.find((candidate) => candidate.id === item.taskId) : undefined
+    if (item.setupError) return { ...item, status: 'error', ...(task ? { task } : {}), error: item.setupError }
     if (!item.taskId) return { ...item, status: 'queued' }
-    const task = tasks.find((candidate) => candidate.id === item.taskId)
     if (!task) return { ...item, status: 'error', error: '任务记录不存在，请重试此项' }
     return {
       ...item,
@@ -121,11 +148,11 @@ export function getAfternoonTeaConversationRestoreState(
     userPrompt: conversation.orderText,
     systemPrompt: conversation.systemPrompt || fallbackSystemPrompt,
     titleCount: normalizeDishTitleCount(conversation.titleCount),
+    itemTitleRegions: conversation.itemTitleRegions,
     imageName: conversation.sourceImageName,
     orderResult: conversation.orderResult,
     analysisSystemPromptSnapshot: conversation.analysisSystemPromptSnapshot,
     analysisUserPromptSnapshot: conversation.analysisUserPromptSnapshot,
-    step: conversation.batchStartedAt != null ? 'poster' as const : 'order' as const,
   }
 }
 
@@ -200,7 +227,7 @@ export async function startAfternoonTeaConversationBatch(
   runBatch: () => Promise<void>,
   now = Date.now,
 ) {
-  if (conversation.batchStartedAt != null) return false
+  if (isAfternoonTeaConversationFrozen(conversation)) return false
   updateConversation(conversation.id, { batchStartedAt: now() })
   await runBatch()
   return true
@@ -213,6 +240,7 @@ export type AfternoonTeaBatchRuntime = {
   paramsSnapshot: TaskParams
   inputImage: InputImage
   coordinator: AfternoonTeaBatchCoordinator
+  executionMode: ToolTaskExecutionMode
 }
 
 export function disposeAfternoonTeaBatchRuntime(
@@ -239,7 +267,8 @@ export function createReloadAfternoonTeaBatchRuntime(
   sourceDataUrl: string,
   settings: AppSettings,
   params: TaskParams,
-  tasks: TaskRecord[] = [],
+  tasks: TaskRecord[],
+  sourceSize: AfternoonTeaPosterSourceSize,
 ): AfternoonTeaBatchRuntime | null {
   if (!conversation.sourceImageId || !sourceDataUrl || conversation.batchStartedAt == null || conversation.batchFinishedAt == null) return null
   const taskById = new Map(tasks.map((task) => [task.id, task]))
@@ -249,13 +278,17 @@ export function createReloadAfternoonTeaBatchRuntime(
   if (activeProfile.provider !== 'openai' || validateApiProfile(activeProfile)) return null
   const coordinator = new AfternoonTeaBatchCoordinator()
   coordinator.finish(conversation.id, coordinator.start(conversation.id))
+  const executionMode = conversation.posterItems
+    .map((item) => item.taskId ? taskById.get(item.taskId)?.executionMode : undefined)
+    .find((mode): mode is ToolTaskExecutionMode => mode === 'browser' || mode === 'server') ?? 'browser'
   return {
     batchId: conversation.id,
     items: conversation.posterItems,
     settingsSnapshot,
-    paramsSnapshot: normalizeParamsForSettings({ ...params }, settingsSnapshot, { hasInputImages: true }),
+    paramsSnapshot: createAfternoonTeaPosterParamsSnapshot(params, settingsSnapshot, sourceSize),
     inputImage: { id: conversation.sourceImageId, dataUrl: sourceDataUrl },
     coordinator,
+    executionMode,
   }
 }
 
@@ -364,6 +397,7 @@ type DishAnalysisFormViewProps = {
   systemPrompt: string
   titleCount: number
   orderResult: AfternoonTeaOrderResult | null
+  itemTitleRegions: AfternoonTeaTitleRegion[]
   error: string
   loading: boolean
   analysisStatus: DishAnalysisStatus
@@ -379,6 +413,10 @@ type DishAnalysisFormViewProps = {
   onCancel: () => void
   onClear: () => void
   onGoPoster: () => void
+  onPosterTitleChange: (index: number, title: string) => void
+  onItemTitleRegionsChange: (regions: AfternoonTeaTitleRegion[]) => void
+  onItemNameChange: (index: number, displayName: string) => void
+  onItemTagsChange: (index: number, tags: string[]) => void
 }
 
 type ToolsWorkflowStepsProps = {
@@ -405,9 +443,74 @@ export function ToolsWorkflowSteps(props: ToolsWorkflowStepsProps) {
 
 export function DishAnalysisFormView(props: DishAnalysisFormViewProps) {
   const disabled = Boolean(props.loading || props.locked || props.imageLoading)
+  const [titleCountDraft, setTitleCountDraft] = useState(String(props.titleCount))
+  const [posterTitleDrafts, setPosterTitleDrafts] = useState<Record<number, string>>({})
+  const [editingPosterTitle, setEditingPosterTitle] = useState<number | null>(null)
+  const [itemNameDrafts, setItemNameDrafts] = useState<Record<number, string>>({})
+  const [itemTagDrafts, setItemTagDrafts] = useState<Record<number, string[]>>({})
+  const [newItemTagDrafts, setNewItemTagDrafts] = useState<Record<number, string>>({})
+  const [addingTagIndexes, setAddingTagIndexes] = useState<Record<number, boolean>>({})
+  const itemNamesKey = props.orderResult?.items.map((item) => item.displayName).join('\u0001') ?? ''
+  const posterTitlesKey = props.orderResult?.titles.join('\u0001') ?? ''
+  const itemTagsKey = props.orderResult?.items.map((item) => item.tags.join('\u0001')).join('\u0002') ?? ''
+  useEffect(() => {
+    setTitleCountDraft(String(props.titleCount))
+  }, [props.titleCount])
+  useEffect(() => {
+    setPosterTitleDrafts(Object.fromEntries(props.orderResult?.titles.map((title, index) => [index, title]) ?? []))
+    setEditingPosterTitle(null)
+  }, [posterTitlesKey])
+  useEffect(() => {
+    setItemNameDrafts(Object.fromEntries(props.orderResult?.items.map((item, index) => [index, item.displayName]) ?? []))
+  }, [itemNamesKey])
+  useEffect(() => {
+    setItemTagDrafts(Object.fromEntries(props.orderResult?.items.map((item, index) => [index, [...item.tags]]) ?? []))
+    setNewItemTagDrafts({})
+    setAddingTagIndexes({})
+  }, [itemTagsKey])
   const handleImageInputChange = (event: ChangeEvent<HTMLInputElement>) => {
     props.onImageChange(event.target.files?.[0] ?? null)
     event.target.value = ''
+  }
+  const commitItemName = (index: number) => {
+    const draft = itemNameDrafts[index] ?? props.orderResult?.items[index]?.displayName ?? ''
+    const normalized = draft.trim()
+    if (!normalized) {
+      setItemNameDrafts((current) => ({ ...current, [index]: props.orderResult?.items[index]?.displayName ?? '' }))
+      return
+    }
+    props.onItemNameChange(index, normalized)
+  }
+  const commitPosterTitle = (index: number) => {
+    const currentTitle = props.orderResult?.titles[index] ?? ''
+    const normalized = (posterTitleDrafts[index] ?? currentTitle).trim()
+    const duplicate = props.orderResult?.titles.some((title, titleIndex) => titleIndex !== index && title === normalized)
+    if (!normalized || duplicate) {
+      setPosterTitleDrafts((current) => ({ ...current, [index]: currentTitle }))
+      setEditingPosterTitle(null)
+      return
+    }
+    setPosterTitleDrafts((current) => ({ ...current, [index]: normalized }))
+    setEditingPosterTitle(null)
+    if (normalized !== currentTitle) props.onPosterTitleChange(index, normalized)
+  }
+  const commitTitleCount = () => {
+    const normalized = commitDishTitleCountDraft(titleCountDraft, props.titleCount)
+    setTitleCountDraft(String(normalized))
+    if (normalized !== props.titleCount) props.onTitleCountChange(normalized)
+  }
+  const commitItemTags = (index: number, tags: string[]) => {
+    const normalizedTags = [...new Set(tags.map((tag) => tag.trim()).filter(Boolean))]
+    setItemTagDrafts((current) => ({ ...current, [index]: normalizedTags }))
+    props.onItemTagsChange(index, normalizedTags)
+  }
+  const commitNewItemTag = (index: number) => {
+    const draft = newItemTagDrafts[index] ?? ''
+    const normalized = draft.trim()
+    setNewItemTagDrafts((current) => ({ ...current, [index]: '' }))
+    setAddingTagIndexes((current) => ({ ...current, [index]: false }))
+    if (!normalized) return
+    commitItemTags(index, [...(itemTagDrafts[index] ?? []), normalized])
   }
   const analysisStatusLabel = props.analysisStatus === 'running'
     ? '解析中'
@@ -453,31 +556,51 @@ export function DishAnalysisFormView(props: DishAnalysisFormViewProps) {
         )}
       </div>
 
-      <div className="grid gap-4 sm:gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(320px,0.9fr)]">
-        <section className="min-w-0 space-y-5" aria-label="餐品解析输入">
-          <div className="grid items-start gap-4 md:grid-cols-[192px_minmax(0,1fr)]">
-            <label className="order-1 block min-w-0 md:col-start-2 md:row-start-1">
-              <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">下午茶订单</span>
-              <textarea
-                value={props.userPrompt}
-                onChange={(event) => props.onUserPromptChange(event.target.value)}
-                disabled={disabled}
-                rows={5}
-                className="min-h-36 w-full resize-y rounded-md border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-800 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-100 dark:focus:border-blue-500/50"
-              />
-            </label>
-
-            <div className="order-2 min-w-0 md:col-start-1 md:row-start-1">
-              <div className="mb-1.5 text-sm text-gray-600 dark:text-gray-300">餐品图片</div>
-              {props.imageDataUrl ? (
-                <div className="relative w-full max-w-48 overflow-hidden rounded-md border border-gray-200 bg-gray-50 dark:border-white/[0.08] dark:bg-white/[0.03]">
-                  <img src={props.imageDataUrl} alt="待解析餐品" className="aspect-[4/3] w-full object-contain" />
-                  <button type="button" onClick={props.onRemoveImage} disabled={disabled} className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-md bg-black/55 text-white shadow-sm transition hover:bg-black/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50" aria-label="移除餐品图片">
-                    <CloseIcon className="h-4 w-4" />
-                  </button>
-                </div>
+      <div className="grid gap-4 sm:gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
+        <section className="min-w-0 space-y-4 sm:space-y-5" aria-label="餐品解析输入">
+          {/* 移动端纵向全宽；桌面端恢复图文并排（改动克制） */}
+          <div className={`grid items-start gap-3 sm:gap-4 ${props.orderResult ? 'lg:grid-cols-[minmax(280px,1.2fr)_minmax(220px,0.8fr)]' : 'md:grid-cols-[192px_minmax(0,1fr)]'}`}>
+            <div className={`order-1 min-w-0 ${props.orderResult ? 'lg:col-start-1 lg:row-start-1' : 'md:col-start-1 md:row-start-1'}`}>
+              {props.orderResult ? (
+                <>
+                  <div className="mb-1.5 flex min-w-0 items-center justify-between gap-2">
+                    <span className="min-w-0 text-sm text-gray-600 dark:text-gray-300">餐品图片</span>
+                    {props.imageDataUrl && (
+                      <button
+                        type="button"
+                        onClick={props.onRemoveImage}
+                        disabled={disabled}
+                        className="flex h-11 w-11 shrink-0 touch-manipulation items-center justify-center rounded-md text-gray-500 transition hover:bg-gray-100 hover:text-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 disabled:cursor-not-allowed disabled:opacity-50 sm:h-7 sm:w-7 dark:text-gray-400 dark:hover:bg-white/[0.06] dark:hover:text-gray-200"
+                        aria-label="移除餐品图片"
+                        title="移除餐品图片"
+                      >
+                        <CloseIcon className="h-4 w-4" />
+                      </button>
+                    )}
+                  </div>
+                  <AfternoonTeaItemPlacement
+                    imageSrc={props.imageDataUrl}
+                    items={props.orderResult.items}
+                    regions={props.itemTitleRegions}
+                    locked={disabled}
+                    onChange={props.onItemTitleRegionsChange}
+                  />
+                </>
               ) : (
-                <label className="hidden aspect-[4/3] w-full max-w-48 cursor-pointer flex-col items-center justify-center rounded-md border border-dashed border-gray-300 bg-gray-50/60 text-center transition hover:border-blue-300 hover:bg-blue-50/40 md:flex dark:border-white/[0.12] dark:bg-white/[0.02] dark:hover:border-blue-500/40 dark:hover:bg-blue-500/[0.04]">
+                <>
+                  <div className="mb-1.5 text-sm text-gray-600 dark:text-gray-300">餐品图片</div>
+                  {props.imageDataUrl ? (
+                    <div className="relative w-full max-w-none overflow-hidden rounded-md border border-gray-200 bg-gray-50 md:max-w-48 dark:border-white/[0.08] dark:bg-white/[0.03]">
+                      <img src={props.imageDataUrl} alt="待解析餐品" className="aspect-[4/3] w-full object-contain" />
+                      <button type="button" onClick={props.onRemoveImage} disabled={disabled} className="absolute right-2 top-2 flex h-11 w-11 items-center justify-center rounded-md bg-black/55 text-white shadow-sm transition hover:bg-black/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50 sm:h-7 sm:w-7" aria-label="移除餐品图片">
+                        <CloseIcon className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ) : null}
+                </>
+              )}
+              {!props.imageDataUrl && (
+                <label className={`hidden aspect-[4/3] w-full cursor-pointer flex-col items-center justify-center rounded-md border border-dashed border-gray-300 bg-gray-50/60 text-center transition hover:border-blue-300 hover:bg-blue-50/40 md:flex dark:border-white/[0.12] dark:bg-white/[0.02] dark:hover:border-blue-500/40 dark:hover:bg-blue-500/[0.04] ${props.orderResult ? 'mt-3' : 'md:max-w-48'}`}>
                   <ImportIcon className="mb-3 h-7 w-7 text-gray-400" />
                   <span className="text-sm font-medium text-gray-700 dark:text-gray-200">{props.imageLoading ? '正在读取图片...' : props.imageMissing ? '原图不可用，重新上传' : '上传餐品图片'}</span>
                   <span className="mt-1 text-xs text-gray-400">或按 Ctrl/⌘ + V 粘贴</span>
@@ -492,7 +615,8 @@ export function DishAnalysisFormView(props: DishAnalysisFormViewProps) {
                   />
                 </label>
               )}
-              <div className="grid grid-cols-2 gap-2 md:hidden">
+              {/* 移动端：拍照 / 上传 */}
+              <div className={`grid grid-cols-2 gap-2 md:hidden ${props.imageDataUrl || props.orderResult ? 'mt-2' : ''}`}>
                 <label className={`flex min-h-11 cursor-pointer touch-manipulation items-center justify-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 text-sm font-medium text-blue-700 transition hover:bg-blue-100 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-300 dark:hover:bg-blue-500/20 ${disabled ? 'pointer-events-none opacity-60' : ''}`}>
                   <CameraIcon className="h-5 w-5" />
                   <span>拍照</span>
@@ -521,10 +645,21 @@ export function DishAnalysisFormView(props: DishAnalysisFormViewProps) {
               </div>
               {!props.imageDataUrl && <div className="mt-2 text-center text-xs text-gray-400 md:hidden">也可以 Ctrl/⌘ + V 粘贴，单张最大 20 MiB</div>}
             </div>
+
+            <label className={`order-2 block min-w-0 ${props.orderResult ? 'lg:col-start-2 lg:row-start-1' : 'md:col-start-2 md:row-start-1'}`}>
+              <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">下午茶订单</span>
+              <textarea
+                value={props.userPrompt}
+                onChange={(event) => props.onUserPromptChange(event.target.value)}
+                disabled={disabled}
+                rows={5}
+                className="min-h-28 w-full resize-y rounded-md border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-800 outline-none transition focus:border-blue-300 sm:min-h-36 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-100 dark:focus:border-blue-500/50"
+              />
+            </label>
           </div>
 
-          <details className="group border-y border-gray-200 py-3 dark:border-white/[0.08]">
-            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-sm text-gray-600 marker:hidden dark:text-gray-300">
+          <details className="group border-y border-gray-200 py-2.5 dark:border-white/[0.08] sm:py-3">
+            <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 text-sm text-gray-600 marker:hidden dark:text-gray-300 sm:min-h-0">
               <span>系统提示词 <span className="text-xs text-gray-400 dark:text-gray-500">高级设置</span></span>
               <ChevronDownIcon className="h-4 w-4 shrink-0 text-gray-400 transition-transform group-open:rotate-180" />
             </summary>
@@ -538,7 +673,7 @@ export function DishAnalysisFormView(props: DishAnalysisFormViewProps) {
                 value={props.systemPrompt}
                 onChange={(event) => props.onSystemPromptChange(event.target.value)}
                 disabled={disabled}
-                rows={10}
+                rows={8}
                 className="w-full resize-y rounded-md border border-gray-200 bg-white px-3 py-2.5 text-sm leading-relaxed text-gray-800 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-100 dark:focus:border-blue-500/50"
               />
             </div>
@@ -553,31 +688,38 @@ export function DishAnalysisFormView(props: DishAnalysisFormViewProps) {
             </div>
           )}
 
-          <div className="grid grid-cols-[7rem_minmax(0,1fr)] items-end gap-3 sm:flex sm:flex-wrap sm:justify-between" aria-label="解析操作">
-            <label className="block w-full sm:w-32">
+          {/* 移动端：数量与按钮分两行全宽；桌面：同一行紧凑对齐 */}
+          <div className="grid grid-cols-1 gap-2 sm:flex sm:flex-wrap sm:items-end sm:justify-between sm:gap-3" aria-label="解析操作">
+            <label className="block w-full sm:w-28">
               <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">生成数量</span>
               <input
                 type="number"
                 min="1"
                 max="10"
-                value={props.titleCount}
+                value={titleCountDraft}
                 disabled={disabled}
-                onChange={(event) => props.onTitleCountChange(normalizeDishTitleCount(Number(event.target.value)))}
-                className="w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800 outline-none transition focus:border-blue-300 disabled:cursor-not-allowed disabled:opacity-60 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-100 dark:focus:border-blue-500/50"
+                onChange={(event) => setTitleCountDraft(event.target.value)}
+                onBlur={commitTitleCount}
+                onKeyDown={(event) => {
+                  if (event.key !== 'Enter') return
+                  event.preventDefault()
+                  event.currentTarget.blur()
+                }}
+                className="min-h-11 w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800 outline-none transition focus:border-blue-300 disabled:cursor-not-allowed disabled:opacity-60 sm:min-h-0 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-100 dark:focus:border-blue-500/50"
               />
             </label>
-            <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2">
+            <div className="grid grid-cols-2 gap-2 sm:ml-auto sm:flex sm:min-w-0 sm:flex-wrap sm:items-center sm:justify-end sm:gap-2">
               {props.loading ? (
-                <button type="button" onClick={props.onCancel} className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 dark:border-white/[0.1] dark:bg-white/[0.04] dark:text-gray-200 dark:hover:bg-white/[0.08] sm:px-4">
+                <button type="button" onClick={props.onCancel} className="col-span-2 min-h-11 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 dark:border-white/[0.1] dark:bg-white/[0.04] dark:text-gray-200 dark:hover:bg-white/[0.08] sm:col-auto sm:min-h-0 sm:px-4">
                   取消解析
                 </button>
               ) : (
-                <button type="button" onClick={props.onSubmit} disabled={!props.configured || props.locked || !props.userPrompt.trim()} className="whitespace-nowrap rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50 sm:px-4">
+                <button type="button" onClick={props.onSubmit} disabled={!props.configured || props.locked || !props.userPrompt.trim()} className={`min-h-11 whitespace-nowrap rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-0 sm:px-4 ${(props.orderResult || props.error) && !props.loading ? '' : 'col-span-2 sm:col-auto'}`}>
                   {submitLabel}
                 </button>
               )}
               {(props.orderResult || props.error) && !props.loading && (
-                <button type="button" onClick={props.onClear} disabled={props.locked} className="whitespace-nowrap rounded-md px-3 py-2 text-sm text-gray-500 transition hover:bg-gray-100 hover:text-gray-800 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-white/[0.06] dark:hover:text-gray-200">
+                <button type="button" onClick={props.onClear} disabled={props.locked} className="min-h-11 whitespace-nowrap rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-600 transition hover:bg-gray-50 hover:text-gray-800 disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/[0.1] dark:bg-white/[0.04] dark:text-gray-400 dark:hover:bg-white/[0.06] dark:hover:text-gray-200 sm:min-h-0 sm:border-0 sm:bg-transparent sm:px-3">
                   清空
                 </button>
               )}
@@ -585,7 +727,7 @@ export function DishAnalysisFormView(props: DishAnalysisFormViewProps) {
           </div>
         </section>
 
-        <section className="min-h-0 min-w-0 rounded-md border border-gray-200 bg-gray-50/60 p-3 dark:border-white/[0.08] dark:bg-white/[0.02] sm:p-4 lg:min-h-[360px]" aria-label="解析结果">
+        <section className="min-h-0 min-w-0 rounded-md border border-gray-200 bg-gray-50/60 p-2 dark:border-white/[0.08] dark:bg-white/[0.02] sm:p-4 lg:min-h-[360px]" aria-label="解析结果">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <div className="text-sm font-medium text-gray-700 dark:text-gray-200">解析结果</div>
             <div className="flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400" aria-live="polite">
@@ -599,31 +741,157 @@ export function DishAnalysisFormView(props: DishAnalysisFormViewProps) {
           {props.loading ? (
             <div className="flex h-40 items-center justify-center text-sm text-gray-400 lg:h-48">正在解析...</div>
           ) : props.orderResult ? (
-            <div className="space-y-5">
+            <div className="space-y-4 sm:space-y-5">
               <div>
-                <div className="mb-2 text-xs font-medium text-gray-500 dark:text-gray-400">海报标题</div>
-                <div className="flex flex-wrap gap-2">
-                  {props.orderResult.titles.map((title) => (
-                    <span key={title} className="rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-sm text-blue-700 dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-300">{title}</span>
-                  ))}
+                <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
+                  <span className="text-xs font-medium text-gray-500 dark:text-gray-400">海报标题</span>
+                  <span className="shrink-0 text-xs text-gray-400 dark:text-gray-500">海报标题可修改</span>
                 </div>
-              </div>
-              <div>
-                <div className="mb-2 text-xs font-medium text-gray-500 dark:text-gray-400">订单商品</div>
                 <div className="divide-y divide-gray-200 rounded-md border border-gray-200 bg-white dark:divide-white/[0.08] dark:border-white/[0.08] dark:bg-white/[0.03]">
-                  {props.orderResult.items.map((item, idx) => (
-                    <div key={`${item.displayName}-${idx}`} className="px-3 py-2.5">
-                      <div className="break-words text-sm font-medium text-gray-800 dark:text-gray-100">{item.displayName}</div>
-                      {item.tags.length > 0 && (
-                        <div className="mt-1.5 flex flex-wrap gap-1.5">
-                          {item.tags.map((tag) => <span key={tag} className="rounded bg-gray-100 px-1.5 py-0.5 text-xs text-gray-500 dark:bg-white/[0.06] dark:text-gray-400">{tag}</span>)}
-                        </div>
+                  {props.orderResult.titles.map((title, index) => (
+                    <div key={`${index}-${title}`} className="flex min-h-11 min-w-0 items-center gap-2 px-2.5 py-1 sm:px-3">
+                      {editingPosterTitle === index ? (
+                        <>
+                          <input
+                            autoFocus
+                            type="text"
+                            value={posterTitleDrafts[index] ?? title}
+                            disabled={disabled}
+                            maxLength={60}
+                            enterKeyHint="done"
+                            aria-label={`海报标题 ${index + 1}`}
+                            onChange={(event) => setPosterTitleDrafts((current) => ({ ...current, [index]: event.target.value }))}
+                            onBlur={() => commitPosterTitle(index)}
+                            onKeyDown={(event) => {
+                              if (event.key !== 'Enter' || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return
+                              event.preventDefault()
+                              event.currentTarget.blur()
+                            }}
+                            className="min-h-9 min-w-0 flex-1 rounded-md border border-blue-300 bg-white px-2.5 text-sm font-medium text-gray-900 outline-none ring-2 ring-blue-100 disabled:opacity-60 dark:border-blue-500/50 dark:bg-white/[0.05] dark:text-gray-100 dark:ring-blue-500/10"
+                          />
+                          <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => commitPosterTitle(index)} className="shrink-0 rounded-md px-2 py-1.5 text-xs font-medium text-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-blue-300">完成</button>
+                        </>
+                      ) : (
+                        <>
+                          <span className="min-w-0 flex-1 break-words text-sm font-medium text-gray-800 dark:text-gray-100">{title}</span>
+                          <button type="button" onClick={() => setEditingPosterTitle(index)} disabled={disabled} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-gray-500 transition hover:bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-50 dark:text-gray-400 dark:hover:bg-white/[0.06]" aria-label={`编辑海报标题 ${index + 1}`}>
+                            <EditIcon className="h-4 w-4" />
+                          </button>
+                        </>
                       )}
                     </div>
                   ))}
                 </div>
               </div>
-              <button type="button" onClick={props.onGoPoster} disabled={props.locked} className="w-full whitespace-nowrap rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto">
+              <div className="min-w-0">
+                <div className="min-w-0">
+                  <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
+                    <span className="text-xs font-medium text-gray-500 dark:text-gray-400">订单商品</span>
+                    <span className="shrink-0 text-xs text-gray-400 dark:text-gray-500">名称可修改</span>
+                  </div>
+                  <div className="divide-y divide-gray-200 rounded-md border border-gray-200 bg-white dark:divide-white/[0.08] dark:border-white/[0.08] dark:bg-white/[0.03]">
+                    {props.orderResult.items.map((item, idx) => (
+                      <div key={idx} className="min-w-0 space-y-2 px-2.5 py-3 sm:px-3">
+                        <input
+                          type="text"
+                          value={itemNameDrafts[idx] ?? item.displayName}
+                          disabled={disabled}
+                          maxLength={40}
+                          aria-label={`商品 ${idx + 1} 名称`}
+                          data-order-item-name={idx}
+                          enterKeyHint="done"
+                          onChange={(event) => setItemNameDrafts((current) => ({ ...current, [idx]: event.target.value }))}
+                          onBlur={() => commitItemName(idx)}
+                          onKeyDown={(event) => {
+                            if (event.key !== 'Enter' || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return
+                            event.preventDefault()
+                            event.currentTarget.blur()
+                          }}
+                          className="min-h-10 w-full max-w-full rounded-md border border-transparent bg-gray-50/80 px-2.5 py-2 text-sm font-medium text-gray-800 outline-none transition hover:border-gray-200 focus:border-blue-300 focus:bg-white disabled:cursor-not-allowed disabled:opacity-60 dark:bg-white/[0.04] dark:text-gray-100 dark:hover:border-white/[0.1] dark:focus:border-blue-500/50 dark:focus:bg-white/[0.06]"
+                        />
+                        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                          {(itemTagDrafts[idx] ?? item.tags).map((tag, tagIndex) => (
+                            <span
+                              key={tagIndex}
+                              className="inline-flex w-fit max-w-full shrink-0 items-center gap-0.5 rounded-full border border-gray-200 bg-gray-50 py-0.5 pl-2.5 pr-1 text-xs text-gray-600 dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-gray-300"
+                            >
+                              {/* 隐藏同文字撑宽；size=1 去掉 input 默认约 20 字符最小宽 */}
+                              <span className="inline-grid w-fit max-w-full min-w-[1em] items-center">
+                                <span aria-hidden="true" className="invisible col-start-1 row-start-1 whitespace-pre px-0.5 text-xs font-normal leading-none [font:inherit]">
+                                  {tag || ' '}
+                                </span>
+                                <input
+                                  type="text"
+                                  value={tag}
+                                  disabled={disabled}
+                                  maxLength={24}
+                                  size={1}
+                                  aria-label={`商品 ${idx + 1} 标签 ${tagIndex + 1}`}
+                                  data-order-item-tag={`${idx}-${tagIndex}`}
+                                  enterKeyHint="done"
+                                  onChange={(event) => setItemTagDrafts((current) => ({
+                                    ...current,
+                                    [idx]: (current[idx] ?? item.tags).map((currentTag, currentTagIndex) => currentTagIndex === tagIndex ? event.target.value : currentTag),
+                                  }))}
+                                  onBlur={() => commitItemTags(idx, itemTagDrafts[idx] ?? item.tags)}
+                                  onKeyDown={(event) => {
+                                    if (event.key !== 'Enter' || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return
+                                    event.preventDefault()
+                                    event.currentTarget.blur()
+                                  }}
+                                  className="col-start-1 row-start-1 w-full min-w-0 border-0 bg-transparent p-0 px-0.5 py-1 text-xs leading-none outline-none [font:inherit] [field-sizing:content]"
+                                />
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => commitItemTags(idx, (itemTagDrafts[idx] ?? item.tags).filter((_, currentTagIndex) => currentTagIndex !== tagIndex))}
+                                disabled={disabled}
+                                aria-label={`删除商品 ${idx + 1} 标签 ${tag}`}
+                                className="flex h-5 w-5 shrink-0 touch-manipulation items-center justify-center rounded-full text-gray-400 transition hover:bg-gray-200/80 hover:text-red-500 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-white/[0.08]"
+                              >
+                                <CloseIcon className="h-3 w-3" />
+                              </button>
+                            </span>
+                          ))}
+                          {addingTagIndexes[idx] ? (
+                            <input
+                              type="text"
+                              value={newItemTagDrafts[idx] ?? ''}
+                              disabled={disabled}
+                              maxLength={24}
+                              placeholder="标签"
+                              aria-label={`商品 ${idx + 1} 新标签`}
+                              data-order-item-new-tag={idx}
+                              autoFocus
+                              onChange={(event) => setNewItemTagDrafts((current) => ({ ...current, [idx]: event.target.value }))}
+                              onBlur={() => commitNewItemTag(idx)}
+                              onKeyDown={(event) => {
+                                if (event.key !== 'Enter' || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return
+                                event.preventDefault()
+                                event.currentTarget.blur()
+                              }}
+                              enterKeyHint="done"
+                              className="min-h-7 w-[5.5rem] rounded-full border border-dashed border-blue-300 bg-blue-50/40 px-2.5 py-1 text-xs text-gray-700 outline-none placeholder:text-gray-400 focus:border-blue-400 disabled:cursor-not-allowed disabled:opacity-60 dark:border-blue-500/40 dark:bg-blue-500/10 dark:text-gray-200"
+                            />
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setAddingTagIndexes((current) => ({ ...current, [idx]: true }))}
+                              disabled={disabled}
+                              aria-label={`商品 ${idx + 1} 新增标签`}
+                              title="新增标签"
+                              className="flex h-7 w-7 shrink-0 touch-manipulation items-center justify-center rounded-full border border-dashed border-gray-300 text-gray-400 transition hover:border-blue-300 hover:bg-blue-50 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/[0.14] dark:hover:border-blue-500/40 dark:hover:bg-blue-500/10 dark:hover:text-blue-300"
+                            >
+                              <PlusIcon className="h-3.5 w-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <button type="button" onClick={props.onGoPoster} disabled={props.locked} className="min-h-11 w-full whitespace-nowrap rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-0 sm:w-auto">
                 进入批量海报
               </button>
             </div>
@@ -668,6 +936,7 @@ export default function ToolsWorkspace() {
   const batchRuntimeRef = useRef<AfternoonTeaBatchRuntime | null>(null)
   const batchRuntimesRef = useRef(new Map<string, AfternoonTeaBatchRuntime>())
   const batchStartingConversationIdsRef = useRef(new Set<string>())
+  const browserFallbackBatchIdsRef = useRef(new Set<string>())
   const historyButtonRef = useRef<HTMLButtonElement>(null)
   const initialConversationResolvedRef = useRef(false)
   const analysisPromptSnapshotsRef = useRef<{ system: string | null; user: string | null }>({ system: null, user: null })
@@ -678,7 +947,6 @@ export default function ToolsWorkspace() {
   const [userPrompt, setUserPrompt] = useState(DEFAULT_DISH_USER_PROMPT)
   const [systemPrompt, setSystemPrompt] = useState(DEFAULT_DISH_SYSTEM_PROMPT)
   const [titleCount, setTitleCount] = useState(DEFAULT_DISH_TITLE_COUNT)
-  const [step, setStep] = useState<'order' | 'poster'>('order')
   const [batchRunning, setBatchRunning] = useState(false)
   const [retrying, setRetrying] = useState(false)
   const [batchPageError, setBatchPageError] = useState('')
@@ -720,7 +988,6 @@ export default function ToolsWorkspace() {
     setSystemPrompt(restore.systemPrompt)
     setTitleCount(restore.titleCount)
     setImageName(restore.imageName)
-    setStep(restore.step)
     setError('')
     setBatchPageError('')
     setLoading(false)
@@ -764,6 +1031,7 @@ export default function ToolsWorkspace() {
       sourceImageName: conversation.sourceImageName,
       orderText: conversation.orderText,
       titleCount: conversation.titleCount,
+      itemTitleRegions: conversation.itemTitleRegions,
       systemPrompt: conversation.systemPrompt,
       analysisSystemPromptSnapshot: null,
       analysisUserPromptSnapshot: null,
@@ -773,7 +1041,6 @@ export default function ToolsWorkspace() {
       batchStartedAt: null,
       batchFinishedAt: null,
     })
-    setStep('order')
     coordinatorRef.current.skipNextRestore(conversationId)
     return useStore.getState().afternoonTeaConversations.find((item) => item.id === conversationId) ?? null
   }
@@ -796,13 +1063,13 @@ export default function ToolsWorkspace() {
       void restoreConversation(conversationId)
       return useStore.getState().afternoonTeaConversations.find((item) => item.id === conversationId) ?? null
     }
-    if (conversation.batchStartedAt != null) return createEditableConversationFrom(conversation)
+    if (conversation && isAfternoonTeaConversationFrozen(conversation)) return createEditableConversationFrom(conversation)
     return conversation
   }
 
   const resetParsedResult = (conversationId: string) => {
     const conversation = useStore.getState().afternoonTeaConversations.find((item) => item.id === conversationId)
-    if (!conversation || conversation.batchStartedAt != null) return false
+    if (!conversation || isAfternoonTeaConversationFrozen(conversation)) return false
     if (batchRuntimeRef.current?.batchId === conversationId) batchRuntimeRef.current = null
     batchRuntimesRef.current.delete(conversationId)
     analysisPromptSnapshotsRef.current = { system: null, user: null }
@@ -817,7 +1084,6 @@ export default function ToolsWorkspace() {
     })
     setAnalysisRun((run) => run?.conversationId === conversationId ? null : run)
     setBatchPageError('')
-    setStep('order')
     return true
   }
 
@@ -959,6 +1225,7 @@ export default function ToolsWorkspace() {
       updateAfternoonTeaConversation(conversationId, {
         sourceImageId: image.id,
         sourceImageName: file.name,
+        itemTitleRegions: [],
       })
       if (previousSourceImageId && previousSourceImageId !== image.id) {
         void deleteImageIfUnreferenced(previousSourceImageId)
@@ -989,6 +1256,7 @@ export default function ToolsWorkspace() {
     updateAfternoonTeaConversation(conversation.id, {
       sourceImageId: null,
       sourceImageName: '',
+      itemTitleRegions: [],
     })
     if (previousSourceImageId) void deleteImageIfUnreferenced(previousSourceImageId)
   }
@@ -1014,6 +1282,8 @@ export default function ToolsWorkspace() {
     })
     const requestImageDataUrl = imageDataUrl
     const requestImageName = imageName
+    const requestSourceImageId = conversation.sourceImageId
+    const requestItemTitleRegions = conversation.itemTitleRegions
     const requestUserPrompt = userPrompt
     const requestSystemPrompt = systemPrompt
     const requestTitleCount = titleCount
@@ -1038,14 +1308,21 @@ export default function ToolsWorkspace() {
       })
       const result = parseAfternoonTeaOrderResult(raw, requestTitleCount)
       if (!isCurrentAnalysisRequest()) return
+      const latestConversation = useStore.getState().afternoonTeaConversations.find((item) => item.id === conversationId)
+      if (!latestConversation) return
+      const sourceImageIdBeforePrompt = latestConversation.sourceImageId
+      const itemTitleRegions = resolveAfternoonTeaItemTitleRegionsForImage(
+        requestSourceImageId,
+        sourceImageIdBeforePrompt,
+        requestItemTitleRegions,
+        result.items.length,
+      )
       const itemSeed = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-      const posterItems = buildAfternoonTeaPosterPrompts(result).map((item, idx) => ({
+      const posterItems = buildAfternoonTeaPosterPrompts(result, itemTitleRegions).map((item, idx) => ({
         id: `${itemSeed}-${idx}`,
         title: item.title,
         prompt: item.prompt,
       }))
-      const latestConversation = useStore.getState().afternoonTeaConversations.find((item) => item.id === conversationId)
-      if (!latestConversation) return
       const cachedSource = cachedSourceImageRef.current?.dataUrl === requestImageDataUrl
         ? cachedSourceImageRef.current
         : null
@@ -1076,6 +1353,7 @@ export default function ToolsWorkspace() {
         sourceImageName: requestImageName || latestConversation.sourceImageName,
         orderText: requestUserPrompt,
         titleCount: requestTitleCount,
+        itemTitleRegions,
         systemPrompt: requestSystemPrompt,
         analysisSystemPromptSnapshot,
         analysisUserPromptSnapshot,
@@ -1125,8 +1403,20 @@ export default function ToolsWorkspace() {
   }
 
   const startBatch = async () => {
-    const conversationId = activeConversation?.id
-    if (!conversationId || !activeConversation.sourceImageId || !activeConversation.orderResult || batchItems.length === 0 || batchBusy || activeConversation.batchStartedAt != null) return
+    const state = useStore.getState()
+    const conversationId = state.activeAfternoonTeaConversationId
+    const conversation = state.afternoonTeaConversations.find((item) => item.id === conversationId)
+    if (
+      !conversationId
+      || !conversation?.sourceImageId
+      || !conversation.orderResult
+      || conversation.posterItems.length === 0
+      || state.afternoonTeaBatchOperationId
+      || batchRunning
+      || retrying
+      || batchStartingConversationIdsRef.current.has(conversationId)
+      || isAfternoonTeaConversationFrozen(conversation)
+    ) return
     const operationId = `afternoon-tea-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     if (!tryBeginAfternoonTeaBatchOperation(operationId)) return
     const batchCoordinator = new AfternoonTeaBatchCoordinator()
@@ -1134,32 +1424,56 @@ export default function ToolsWorkspace() {
     setBatchRunning(true)
     setBatchPageError('')
     try {
-      const settingsSnapshot = normalizeSettings(settings)
+      const settingsSnapshot = normalizeSettings(state.settings)
       const activeProfile = getActiveApiProfile(settingsSnapshot)
       if (activeProfile.provider !== 'openai') throw new Error('下午茶海报目前仅支持 OpenAI 图片模型配置')
       const profileError = validateApiProfile(activeProfile)
       if (profileError) throw new Error(`请先完善图片 API 配置：${profileError}`)
-      const paramsSnapshot = normalizeParamsForSettings({ ...params }, settingsSnapshot, { hasInputImages: true })
-      const cachedSource = cachedSourceImageRef.current?.id === activeConversation.sourceImageId
+      let executionMode: ToolTaskExecutionMode | undefined = browserFallbackBatchIdsRef.current.delete(conversationId)
+        ? 'browser'
+        : undefined
+      if (!executionMode) {
+        const preference = await getImageJobExecutionPreference()
+        if (preference.requiresConfirmation) {
+          setConfirmDialog({
+            title: '后台任务服务不可用',
+            message: '继续后下午茶海报会在当前浏览器页面中直连生成。刷新或关闭页面会中断这些图片，且无法自动恢复。',
+            confirmText: '仍在浏览器中生成',
+            cancelText: '取消',
+            tone: 'warning',
+            action: () => {
+              browserFallbackBatchIdsRef.current.add(conversationId)
+              void startBatch()
+            },
+          })
+          return
+        }
+        executionMode = preference.executionMode
+      }
+      const selectedExecutionMode = executionMode
+      const sourceImageId = conversation.sourceImageId
+      const cachedSource = cachedSourceImageRef.current?.id === sourceImageId
         ? cachedSourceImageRef.current
         : null
-      const sourceImage = cachedSource?.dataUrl ?? await ensureImageCached(activeConversation.sourceImageId)
+      const sourceImage = cachedSource?.dataUrl ?? await ensureImageCached(sourceImageId)
       if (!sourceImage) throw new Error('原图已不可用，请重新上传餐品图片')
+      const sourceImageSize = await readAfternoonTeaPosterSourceSize(sourceImage)
       if (!mountedRef.current) return
+      const paramsSnapshot = createAfternoonTeaPosterParamsSnapshot(state.params, settingsSnapshot, sourceImageSize)
       const currentState = useStore.getState()
       const currentConversation = currentState.afternoonTeaConversations.find((item) => item.id === conversationId)
       if (
         currentState.activeAfternoonTeaConversationId !== conversationId
         || !currentConversation
-        || currentConversation.batchStartedAt != null
-        || currentConversation.sourceImageId !== activeConversation.sourceImageId
+        || isAfternoonTeaConversationFrozen(currentConversation)
+        || currentConversation.sourceImageId !== sourceImageId
       ) return
       const imageId = currentConversation.sourceImageId
       if (!imageId) throw new Error('原图已不可用，请重新上传餐品图片')
       cachedSourceImageRef.current = { dataUrl: sourceImage, id: imageId }
       const inputImage: InputImage = { id: imageId, dataUrl: sourceImage }
       const originalItems = currentConversation.posterItems.map((item) => ({ id: item.id, title: item.title, prompt: item.prompt }))
-      const runtime = { batchId: conversationId, items: originalItems, settingsSnapshot, paramsSnapshot, inputImage, coordinator: batchCoordinator }
+      const runtime = { batchId: conversationId, items: originalItems, settingsSnapshot, paramsSnapshot, inputImage, coordinator: batchCoordinator, executionMode: selectedExecutionMode }
       batchRuntimeRef.current = runtime
       batchRuntimesRef.current.set(conversationId, runtime)
 
@@ -1171,6 +1485,7 @@ export default function ToolsWorkspace() {
           settingsSnapshot,
           paramsSnapshot,
           inputImage,
+          executionMode: selectedExecutionMode,
           submit: submitAfternoonTeaPosterTask,
           ...batchCallbacks,
         })
@@ -1216,12 +1531,21 @@ export default function ToolsWorkspace() {
       if (!runtime) {
         if (!activeConversation.sourceImageId) return
         const sourceImage = await ensureImageCached(activeConversation.sourceImageId)
-        if (!sourceImage || !mountedRef.current) return
+        if (!sourceImage) return
+        const sourceImageSize = await readAfternoonTeaPosterSourceSize(sourceImage)
+        if (!mountedRef.current) return
         const latestState = useStore.getState()
         if (latestState.activeAfternoonTeaConversationId !== activeConversation.id) return
         const latestConversation = latestState.afternoonTeaConversations.find((conversation) => conversation.id === activeConversation.id)
         if (!latestConversation) return
-        runtime = createReloadAfternoonTeaBatchRuntime(latestConversation, sourceImage, settings, params, latestState.tasks)
+        runtime = createReloadAfternoonTeaBatchRuntime(
+          latestConversation,
+          sourceImage,
+          latestState.settings,
+          latestState.params,
+          latestState.tasks,
+          sourceImageSize,
+        )
         if (!runtime) return
         batchRuntimeRef.current = runtime
         batchRuntimesRef.current.set(runtime.batchId, runtime)
@@ -1234,6 +1558,7 @@ export default function ToolsWorkspace() {
         settingsSnapshot: runtime.settingsSnapshot,
         paramsSnapshot: runtime.paramsSnapshot,
         inputImage: runtime.inputImage,
+        executionMode: runtime.executionMode,
         submit: submitAfternoonTeaPosterTask,
         onTaskCreated: batchCallbacks.onTaskCreated,
         onItemSetupError: batchCallbacks.onItemSetupError,
@@ -1252,7 +1577,9 @@ export default function ToolsWorkspace() {
     }
   }
 
-  const updateUserPrompt = (value: string) => {
+  const updateUserPrompt = (conversationId: string | null, value: string) => {
+    const state = useStore.getState()
+    if (state.activeAfternoonTeaConversationId !== conversationId) return
     coordinatorRef.current.cancelRequest()
     coordinatorRef.current.invalidateImageSelection()
     const conversation = ensureEditableConversation()
@@ -1276,13 +1603,118 @@ export default function ToolsWorkspace() {
     }
   }
 
+  const updateItemTitleRegions = (conversationId: string, itemTitleRegions: AfternoonTeaTitleRegion[]) => {
+    const state = useStore.getState()
+    if (
+      batchBusy
+      || state.activeAfternoonTeaConversationId !== conversationId
+      || state.afternoonTeaBatchOperationId
+      || batchStartingConversationIdsRef.current.has(conversationId)
+    ) return
+    const conversation = state.afternoonTeaConversations.find((item) => item.id === conversationId)
+    if (!conversation) return
+    const patch = createAfternoonTeaItemTitleRegionsPatch(conversation, itemTitleRegions)
+    if (!patch) return
+    state.updateAfternoonTeaConversation(conversation.id, patch)
+  }
+
+  const updateItemName = (conversationId: string, index: number, displayName: string) => {
+    const state = useStore.getState()
+    if (
+      batchBusy
+      || state.activeAfternoonTeaConversationId !== conversationId
+      || state.afternoonTeaBatchOperationId
+      || batchStartingConversationIdsRef.current.has(conversationId)
+    ) return
+    const conversation = state.afternoonTeaConversations.find((item) => item.id === conversationId)
+    if (!conversation) return
+    const patch = createAfternoonTeaOrderItemNamePatch(conversation, index, displayName)
+    if (!patch) return
+    state.updateAfternoonTeaConversation(conversation.id, patch)
+  }
+
+  const updatePosterTitle = (conversationId: string, index: number, title: string) => {
+    const state = useStore.getState()
+    if (
+      batchBusy
+      || state.activeAfternoonTeaConversationId !== conversationId
+      || state.afternoonTeaBatchOperationId
+      || batchStartingConversationIdsRef.current.has(conversationId)
+    ) return
+    const conversation = state.afternoonTeaConversations.find((item) => item.id === conversationId)
+    if (!conversation) return
+    const patch = createAfternoonTeaOrderTitlePatch(conversation, index, title)
+    if (!patch) return
+    state.updateAfternoonTeaConversation(conversation.id, patch)
+  }
+
+  const updatePosterTitles = (conversationId: string, titles: string[]) => {
+    const state = useStore.getState()
+    if (
+      batchBusy
+      || state.activeAfternoonTeaConversationId !== conversationId
+      || state.afternoonTeaBatchOperationId
+      || batchStartingConversationIdsRef.current.has(conversationId)
+    ) return
+    const conversation = state.afternoonTeaConversations.find((item) => item.id === conversationId)
+    if (!conversation) return
+    const patch = createAfternoonTeaOrderTitlesPatch(conversation, titles)
+    if (!patch) return
+    state.updateAfternoonTeaConversation(conversation.id, patch)
+  }
+
+  const updateItemTags = (conversationId: string, index: number, tags: string[]) => {
+    const state = useStore.getState()
+    if (
+      batchBusy
+      || state.activeAfternoonTeaConversationId !== conversationId
+      || state.afternoonTeaBatchOperationId
+      || batchStartingConversationIdsRef.current.has(conversationId)
+    ) return
+    const conversation = state.afternoonTeaConversations.find((item) => item.id === conversationId)
+    if (!conversation) return
+    const patch = createAfternoonTeaOrderItemTagsPatch(conversation, index, tags)
+    if (!patch) return
+    state.updateAfternoonTeaConversation(conversation.id, patch)
+  }
+
   const reparse = () => {
     coordinatorRef.current.cancelRequest()
     coordinatorRef.current.invalidateImageSelection()
     const conversation = useStore.getState().afternoonTeaConversations.find((item) => item.id === useStore.getState().activeAfternoonTeaConversationId)
-    if (conversation?.batchStartedAt != null) createEditableConversationFrom(conversation)
+    if (conversation && isAfternoonTeaConversationFrozen(conversation)) createEditableConversationFrom(conversation)
     else if (conversation) resetParsedResult(conversation.id)
     setError('')
+  }
+
+  const prepareAfternoonTeaPosterItems = () => {
+    const state = useStore.getState()
+    const conversation = state.afternoonTeaConversations.find((item) => item.id === state.activeAfternoonTeaConversationId)
+    if (!conversation?.orderResult) return
+    if (isAfternoonTeaConversationFrozen(conversation)) return
+    const itemTitleRegions = normalizeAfternoonTeaItemTitleRegions(
+      conversation.itemTitleRegions,
+      conversation.orderResult.items.length,
+    )
+    const prompts = buildAfternoonTeaPosterPrompts(conversation.orderResult, itemTitleRegions)
+    const seed = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const posterItems = prompts.map((item, index) => {
+      const existing = conversation.posterItems[index]
+      if (existing?.taskId || existing?.setupError) return existing
+      return {
+        id: existing?.id ?? `${seed}-${index}`,
+        title: item.title,
+        prompt: item.prompt,
+        ...(existing?.taskId ? { taskId: existing.taskId } : {}),
+        ...(existing?.setupError ? { setupError: existing.setupError } : {}),
+      }
+    })
+    state.updateAfternoonTeaConversation(conversation.id, { itemTitleRegions, posterItems })
+  }
+
+  const confirmAndGenerate = () => {
+    prepareAfternoonTeaPosterItems()
+    void startBatch()
   }
 
   const handleNewConversation = () => {
@@ -1388,58 +1820,61 @@ export default function ToolsWorkspace() {
           </div>
         </nav>
         <div className="min-w-0">
-          <ToolsWorkflowSteps
-            step={step}
-            posterEnabled={Boolean(activeConversation?.orderResult)}
+          <AfternoonTeaMobileWorkflow
+            key={activeConversation?.id ?? 'no-afternoon-tea-conversation'}
+            configured={Boolean(analysisProfile)}
+            imageDataUrl={imageDataUrl}
+            imageLoading={imageLoading}
+            imageMissing={imageMissing}
+            userPrompt={userPrompt}
+            systemPrompt={systemPrompt}
+            titleCount={titleCount}
+            orderResult={activeConversation?.orderResult ?? null}
+            itemTitleRegions={activeConversation?.itemTitleRegions ?? []}
+            items={viewItems}
+            error={error}
+            pageError={batchPageError}
+            analysisStatus={analysisViewState.status}
+            analysisElapsed={analysisViewState.elapsed}
+            batchStartedAt={activeConversation?.batchStartedAt ?? null}
+            batchFinishedAt={activeConversation?.batchFinishedAt ?? null}
             busy={batchBusy || loading}
-            onStepChange={setStep}
+            retryDisabled={retryDisabled}
+            locked={batchBusy || isAfternoonTeaConversationFrozen(activeConversation)}
+            onImageChange={(file) => void handleImageChange(file)}
+            onRemoveImage={removeImage}
+            onUserPromptChange={(value) => updateUserPrompt(activeConversation?.id ?? null, value)}
+            onSystemPromptChange={updateSystemPrompt}
+            onTitleCountChange={updateTitleCount}
+            onResetSystemPrompt={resetSystemPrompt}
+            onSubmit={() => void submit()}
+            onCancel={cancelAnalysis}
+            onClear={clear}
+            onReparse={reparse}
+            onPosterTitleChange={(index, title) => {
+              if (!activeConversation) return
+              updatePosterTitle(activeConversation.id, index, title)
+            }}
+            onPosterTitlesChange={(titles) => {
+              if (!activeConversation) return
+              updatePosterTitles(activeConversation.id, titles)
+            }}
+            onItemTitleRegionsChange={(regions) => {
+              if (!activeConversation) return
+              updateItemTitleRegions(activeConversation.id, regions)
+            }}
+            onItemNameChange={(index, displayName) => {
+              if (!activeConversation) return
+              updateItemName(activeConversation.id, index, displayName)
+            }}
+            onItemTagsChange={(index, tags) => {
+              if (!activeConversation) return
+              updateItemTags(activeConversation.id, index, tags)
+            }}
+            onConfirmAndGenerate={confirmAndGenerate}
+            onRetry={(itemId) => void retryItem(itemId)}
+            onTaskClick={taskActions.onClick}
           />
-          {step === 'order' ? (
-            <DishAnalysisFormView
-              configured={Boolean(analysisProfile)}
-              imageDataUrl={imageDataUrl}
-              imageLoading={imageLoading}
-              imageMissing={imageMissing}
-              userPrompt={userPrompt}
-              systemPrompt={systemPrompt}
-              titleCount={titleCount}
-              orderResult={activeConversation?.orderResult ?? null}
-              error={error}
-              loading={loading}
-              analysisStatus={analysisViewState.status}
-              analysisElapsed={analysisViewState.elapsed}
-              locked={batchBusy}
-              onImageChange={(file) => void handleImageChange(file)}
-              onRemoveImage={removeImage}
-              onUserPromptChange={updateUserPrompt}
-              onSystemPromptChange={updateSystemPrompt}
-              onTitleCountChange={updateTitleCount}
-              onResetSystemPrompt={resetSystemPrompt}
-              onSubmit={() => void submit()}
-              onCancel={cancelAnalysis}
-              onClear={clear}
-              onGoPoster={() => setStep('poster')}
-            />
-          ) : (
-            <AfternoonTeaPosterStep
-              sourceImageSrc={imageDataUrl}
-              items={viewItems}
-              busy={batchBusy}
-              batchStartedAt={activeConversation?.batchStartedAt ?? null}
-              batchFinishedAt={activeConversation?.batchFinishedAt ?? null}
-              retryDisabled={retryDisabled}
-              pageError={batchPageError}
-              onStart={() => void startBatch()}
-              onBack={() => setStep('order')}
-              onClear={clear}
-              onReparse={reparse}
-              onRetry={(itemId) => void retryItem(itemId)}
-              onTaskClick={taskActions.onClick}
-              onTaskDelete={taskActions.onDelete}
-              onTaskReuse={taskActions.onReuse}
-              onTaskEditOutputs={taskActions.onEditOutputs}
-            />
-          )}
         </div>
       </div>
     </main>
