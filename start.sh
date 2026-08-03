@@ -17,6 +17,9 @@ if ! command -v curl >/dev/null 2>&1; then
 fi
 
 mkdir -p data/jobs
+
+# 注意：本脚本会在本机 docker build（需要较大内存）。
+# 512MB 小机器请用：./start.prod.sh（只 pull GitHub 预构建镜像）
 docker compose up -d --build
 
 published_address=$(docker compose port web 80)

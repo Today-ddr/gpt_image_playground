@@ -1,0 +1,47 @@
+# 低内存服务器专用：只拉取 GitHub Actions 构建好的镜像，不在本机编译。
+# 镜像来源：ghcr.io/<owner>/gpt_image_playground 与 -job-api
+#
+# 使用：
+#   export GHCR_OWNER=today-ddr   # GitHub 用户名小写
+#   export IMAGE_TAG=latest
+#   docker login ghcr.io -u <github-user> -p <PAT或token>
+#   docker compose -f compose.prod.yaml pull
+#   docker compose -f compose.prod.yaml up -d
+
+services:
+  job-api:
+    image: ghcr.io/${GHCR_OWNER:-today-ddr}/gpt_image_playground-job-api:${IMAGE_TAG:-latest}
+    environment:
+      JOB_API_HOST: 0.0.0.0
+      JOB_API_PORT: 8787
+      JOB_DATA_DIR: /data/jobs
+      JOB_RETENTION_HOURS: ${JOB_RETENTION_HOURS:-168}
+      # 限制 Node 堆，避免 512MB 机器被单进程吃光
+      NODE_OPTIONS: --max-old-space-size=128
+    volumes:
+      - ./data/jobs:/data/jobs
+    restart: unless-stopped
+    mem_limit: 180m
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/api/jobs/health').then((r) => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+
+  web:
+    image: ghcr.io/${GHCR_OWNER:-today-ddr}/gpt_image_playground:${IMAGE_TAG:-latest}
+    environment:
+      HOST: 0.0.0.0
+      PORT: 80
+      ENABLE_API_PROXY: ${ENABLE_API_PROXY:-false}
+      API_PROXY_URL: ${API_PROXY_URL:-}
+      DEFAULT_API_URL: ${DEFAULT_API_URL:-}
+    ports:
+      # 512MB 小机器通常直接对外；如前面还有反代可改回 127.0.0.1
+      - "${APP_BIND:-0.0.0.0}:${APP_PORT:-5175}:80"
+    depends_on:
+      job-api:
+        condition: service_healthy
+    restart: unless-stopped
+    mem_limit: 64m
