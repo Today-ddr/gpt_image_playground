@@ -1,6 +1,10 @@
 # ---- Build stage ----
 FROM --platform=$BUILDPLATFORM node:22-alpine AS build
 
+# 小内存服务器上 tsc/vite 容易 OOM，提高 Node 堆上限。
+# 若宿主机 RAM 很小，下方仍会跳过 tsc，只跑 vite build。
+ENV NODE_OPTIONS=--max-old-space-size=3072
+
 WORKDIR /app
 
 ENV VITE_DEFAULT_API_URL=__VITE_DEFAULT_API_URL_PLACEHOLDER__
@@ -14,7 +18,8 @@ COPY package.json package-lock.json ./
 RUN npm ci
 
 COPY . .
-RUN npm run build
+# Docker 镜像构建用轻量脚本：跳过 tsc 全量类型检查，避免低配服务器 OOM。
+RUN npm run build:docker
 
 # ---- Production stage ----
 FROM nginx:alpine
