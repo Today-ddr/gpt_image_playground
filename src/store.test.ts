@@ -1605,6 +1605,60 @@ describe('mask draft lifecycle in store actions', () => {
     expect(state.showToast).toHaveBeenCalledWith('任务已提交', 'success')
   })
 
+  it('fans out gallery submit across imageGenerationProfileIds with a shared generationGroupId', async () => {
+    const first = createDefaultOpenAIProfile({ id: 'relay-a', name: '中转 A', apiKey: 'key-a', model: 'model-a' })
+    const second = createDefaultOpenAIProfile({ id: 'relay-b', name: '中转 B', apiKey: 'key-b', model: 'model-b' })
+    const settings = normalizeSettings({
+      profiles: [first, second],
+      activeProfileId: first.id,
+      imageGenerationProfileIds: [first.id, second.id],
+    })
+    useStore.setState({
+      settings,
+      prompt: '并行提示词',
+      params: { ...DEFAULT_PARAMS, n: 1 },
+      tasks: [],
+      showToast: vi.fn(),
+    })
+
+    await submitTask()
+
+    const state = useStore.getState()
+    expect(state.tasks).toHaveLength(2)
+    expect(state.tasks.map((task) => task.apiProfileId).sort()).toEqual(['relay-a', 'relay-b'])
+    expect(state.tasks[0].generationGroupId).toBeTruthy()
+    expect(state.tasks[0].generationGroupId).toBe(state.tasks[1].generationGroupId)
+    expect(state.showToast).toHaveBeenCalledWith('任务已提交（2 个中转站并行）', 'success')
+  })
+
+  it('does not fan out when reusing a temporary task API profile', async () => {
+    const first = createDefaultOpenAIProfile({ id: 'relay-a', name: '中转 A', apiKey: 'key-a', model: 'model-a' })
+    const second = createDefaultOpenAIProfile({ id: 'relay-b', name: '中转 B', apiKey: 'key-b', model: 'model-b' })
+    const settings = normalizeSettings({
+      profiles: [first, second],
+      activeProfileId: first.id,
+      imageGenerationProfileIds: [first.id, second.id],
+      reuseTaskApiProfileTemporarily: true,
+    })
+    useStore.setState({
+      settings,
+      prompt: '复用提示词',
+      params: { ...DEFAULT_PARAMS, n: 1 },
+      tasks: [],
+      reusedTaskApiProfileId: second.id,
+      reusedTaskApiProfileName: second.name,
+      reusedTaskApiProfileMissing: false,
+      showToast: vi.fn(),
+    })
+
+    await submitTask()
+
+    const state = useStore.getState()
+    expect(state.tasks).toHaveLength(1)
+    expect(state.tasks[0].apiProfileId).toBe('relay-b')
+    expect(state.tasks[0].generationGroupId).toBeUndefined()
+  })
+
   it('stores decoded image size as actual size when the API omits size', async () => {
     const { callImageApi } = await import('./lib/api')
     vi.mocked(callImageApi).mockClear()

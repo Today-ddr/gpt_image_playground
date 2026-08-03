@@ -585,6 +585,7 @@ describe('retryAfternoonTeaPosterItem', () => {
       'batch-retry',
       'item-b',
       'task-retry-created',
+      undefined,
     )
     await expect(retryAfternoonTeaPosterItem(retryOptions)).rejects.toThrow('重试正在进行')
     expect(retrySubmit).toHaveBeenCalledTimes(1)
@@ -612,5 +613,34 @@ describe('retryAfternoonTeaPosterItem', () => {
       taskResult('task-retry-after-error', frozenPrompt),
     )
     expect(retrySubmit).toHaveBeenCalledTimes(3)
+  })
+
+  it('passes profileIds and replaceTaskId when retrying a single relay task', async () => {
+    const coordinator = new AfternoonTeaBatchCoordinator()
+    const batchId = 'batch-single-retry'
+    coordinator.finish(batchId, coordinator.start(batchId))
+    const submit = vi.fn(async (opts: any) => {
+      opts.onTaskCreated('task-new')
+      return taskResult('task-new', 'prompt-single')
+    })
+    const onTaskCreated = vi.fn()
+    await retryAfternoonTeaPosterItem({
+      coordinator,
+      batchId,
+      item: { id: 'item-a', title: '标题', prompt: 'prompt-single', taskId: 'task-old', taskIds: ['task-old', 'task-other'] },
+      settingsSnapshot,
+      paramsSnapshot,
+      inputImage,
+      submit,
+      onTaskCreated,
+      retryTaskId: 'task-old',
+      retryProfileId: 'profile-a',
+      retryGenerationGroupId: 'group-1',
+    })
+    expect(submit).toHaveBeenCalledWith(expect.objectContaining({
+      profileIds: ['profile-a'],
+      generationGroupId: 'group-1',
+    }))
+    expect(onTaskCreated).toHaveBeenCalledWith(batchId, 'item-a', 'task-new', 'task-old')
   })
 })

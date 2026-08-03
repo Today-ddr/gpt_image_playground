@@ -20,7 +20,7 @@ import type {
   StoredImageThumbnail,
 } from './types'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_PARAMS } from './types'
-import { DEFAULT_SETTINGS, getActiveApiProfile, getAgentImageApiProfile, getAgentTextApiProfile, getCustomProviderDefinition, mergeImportedSettings, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
+import { DEFAULT_SETTINGS, getActiveApiProfile, getAgentImageApiProfile, getAgentTextApiProfile, getCustomProviderDefinition, getImageGenerationProfiles, getRawImageGenerationProfiles, mergeImportedSettings, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
 import { dismissAllTooltips } from './lib/tooltipDismiss'
 import { remapImageMentionsForOrder, replaceImageMentionsForApi } from './lib/promptImageMentions'
 import {
@@ -2662,8 +2662,9 @@ export async function submitTask(options: {
     useStore.getState()
 
   const normalizedSettings = normalizeSettings(settings)
-  let activeProfile = getActiveApiProfile(settings)
-  let requestSettings = createSettingsForApiProfile(normalizedSettings, activeProfile)
+  const activeProfile = getActiveApiProfile(settings)
+  // 必须用原始 settings，以便 getActiveApiProfile 能叠加上层 legacy apiKey 等字段
+  let targetProfiles = getImageGenerationProfiles(settings)
   if (normalizedSettings.reuseTaskApiProfileTemporarily && (reusedTaskApiProfileId || reusedTaskApiProfileMissing)) {
     const reusedProfile = getReusedTaskApiProfile(normalizedSettings, reusedTaskApiProfileId)
     if (!reusedProfile) {
@@ -2672,25 +2673,41 @@ export async function submitTask(options: {
       } else {
         setConfirmDialog({
           title: '找不到 API 配置',
-      message: `找不到复用任务所使用的 API 配置「${reusedTaskApiProfileName || '未知配置'}」，要使用当前的 API 配置「${activeProfile.name}」提交任务吗？`,
-      confirmText: '使用当前配置提交',
-      cancelText: '放弃提交',
-      action: () => {
-        void submitTask({ ...options, useCurrentApiProfileWhenReusedMissing: true })
-      },
+          message: `找不到复用任务所使用的 API 配置「${reusedTaskApiProfileName || '未知配置'}」，要使用当前的 API 配置「${activeProfile.name}」提交任务吗？`,
+          confirmText: '使用当前配置提交',
+          cancelText: '放弃提交',
+          action: () => {
+            void submitTask({ ...options, useCurrentApiProfileWhenReusedMissing: true })
+          },
         })
         return
       }
     } else {
-      activeProfile = reusedProfile
-      requestSettings = createSettingsForApiProfile(normalizedSettings, reusedProfile)
+      // 复用任务配置时仅打该配置，避免冲掉「复用」语义
+      targetProfiles = [reusedProfile]
     }
   }
 
-  if (validateApiProfile(activeProfile)) {
-    showToast(`请先完善请求 API 配置：${validateApiProfile(activeProfile)}`, 'error')
+  const validProfiles: ApiProfile[] = []
+  const invalidProfileMessages: string[] = []
+  for (const profile of targetProfiles) {
+    const error = validateApiProfile(profile)
+    if (error) {
+      invalidProfileMessages.push(`「${profile.name}」：${error}`)
+      continue
+    }
+    validProfiles.push(profile)
+  }
+
+  if (!validProfiles.length) {
+    const detail = invalidProfileMessages[0] || '请先完善请求 API 配置'
+    showToast(`请先完善请求 API 配置：${detail}`, 'error')
     useStore.getState().setShowSettings(true)
     return
+  }
+
+  if (invalidProfileMessages.length) {
+    showToast(`已跳过未完善的配置：${invalidProfileMessages.join('；')}`, 'info')
   }
 
   if (!prompt.trim()) {
@@ -2698,7 +2715,8 @@ export async function submitTask(options: {
     return
   }
 
-  const preference = activeProfile.provider === 'openai' && !options.executionMode
+  const hasOpenAIProfile = validProfiles.some((profile) => profile.provider === 'openai')
+  const preference = hasOpenAIProfile && !options.executionMode
     ? await getImageJobExecutionPreference()
     : null
   if (preference?.requiresConfirmation) {
@@ -2714,10 +2732,6 @@ export async function submitTask(options: {
     })
     return
   }
-  const executionMode: TaskExecutionMode = options.executionMode
-    ?? preference?.executionMode
-    ?? 'browser'
-
   let orderedInputImages = inputImages
   let maskImageId: string | null = null
   let maskTargetImageId: string | null = null
@@ -2755,46 +2769,73 @@ export async function submitTask(options: {
     await storeImage(img.dataUrl)
   }
 
-  const normalizedParams = normalizeParamsForSettings(params, requestSettings, { hasInputImages: orderedInputImages.length > 0 })
-  const shouldUseTransparentOutput = normalizedParams.output_format === 'png' && normalizedParams.transparent_output
-  const taskParams = shouldUseTransparentOutput
-    ? getTransparentRequestParams(normalizedParams)
-    : { ...normalizedParams, transparent_output: false }
-  const transparentMeta = taskParams.transparent_output
-    ? createTransparentOutputMeta(prompt.trim())
-    : null
-  const normalizedParamPatch = getChangedParams(params, taskParams)
-  if (Object.keys(normalizedParamPatch).length) {
-    useStore.getState().setParams(normalizedParamPatch)
+  // 用第一个有效配置规范化 UI 参数（多配置各自再 normalize 一次）
+  const primaryRequestSettings = createSettingsForApiProfile(normalizedSettings, validProfiles[0])
+  const primaryNormalizedParams = normalizeParamsForSettings(params, primaryRequestSettings, { hasInputImages: orderedInputImages.length > 0 })
+  const primaryParamPatch = getChangedParams(params, {
+    ...primaryNormalizedParams,
+    transparent_output: primaryNormalizedParams.output_format === 'png' && primaryNormalizedParams.transparent_output
+      ? true
+      : false,
+  })
+  if (Object.keys(primaryParamPatch).length) {
+    useStore.getState().setParams(primaryParamPatch)
   }
 
-  const tasks = Array.from({ length: taskParams.n }, (): TaskRecord => ({
-    id: genId(),
-    prompt: prompt.trim(),
-    executionMode,
-    params: { ...taskParams, n: 1 },
-    apiProvider: activeProfile.provider,
-    apiProfileId: activeProfile.id,
-    apiProfileName: activeProfile.name,
-    apiMode: activeProfile.apiMode,
-    apiModel: activeProfile.model,
-    inputImageIds: orderedInputImages.map((i) => i.id),
-    maskTargetImageId,
-    maskImageId,
-    transparentOutput: transparentMeta?.transparentOutput,
-    transparentPrompt: transparentMeta?.effectivePrompt,
-    outputImages: [],
-    status: 'running',
-    error: null,
-    createdAt: Date.now(),
-    finishedAt: null,
-    elapsed: null,
-  }))
+  const generationGroupId = validProfiles.length > 1 ? genId() : undefined
+  const createdAt = Date.now()
+  const tasks: TaskRecord[] = []
+
+  for (const profile of validProfiles) {
+    const requestSettings = createSettingsForApiProfile(normalizedSettings, profile)
+    const normalizedParams = normalizeParamsForSettings(params, requestSettings, { hasInputImages: orderedInputImages.length > 0 })
+    const shouldUseTransparentOutput = normalizedParams.output_format === 'png' && normalizedParams.transparent_output
+    const taskParams = shouldUseTransparentOutput
+      ? getTransparentRequestParams(normalizedParams)
+      : { ...normalizedParams, transparent_output: false }
+    const transparentMeta = taskParams.transparent_output
+      ? createTransparentOutputMeta(prompt.trim())
+      : null
+    const executionMode: TaskExecutionMode = profile.provider === 'openai'
+      ? (options.executionMode ?? preference?.executionMode ?? 'browser')
+      : (options.executionMode ?? 'browser')
+
+    for (let index = 0; index < taskParams.n; index += 1) {
+      tasks.push({
+        id: genId(),
+        prompt: prompt.trim(),
+        executionMode,
+        ...(generationGroupId ? { generationGroupId } : {}),
+        params: { ...taskParams, n: 1 },
+        apiProvider: profile.provider,
+        apiProfileId: profile.id,
+        apiProfileName: profile.name,
+        apiMode: profile.apiMode,
+        apiModel: profile.model,
+        inputImageIds: orderedInputImages.map((i) => i.id),
+        maskTargetImageId,
+        maskImageId,
+        transparentOutput: transparentMeta?.transparentOutput,
+        transparentPrompt: transparentMeta?.effectivePrompt,
+        outputImages: [],
+        status: 'running',
+        error: null,
+        createdAt,
+        finishedAt: null,
+        elapsed: null,
+      })
+    }
+  }
 
   const latestTasks = useStore.getState().tasks
   useStore.getState().setTasks([...tasks, ...latestTasks])
   await Promise.all(tasks.map((task) => putTask(task)))
-  useStore.getState().showToast('任务已提交', 'success')
+  useStore.getState().showToast(
+    validProfiles.length > 1
+      ? `任务已提交（${validProfiles.length} 个中转站并行）`
+      : '任务已提交',
+    'success',
+  )
 
   if (settings.clearInputAfterSubmit) {
     useStore.getState().setPrompt('')
@@ -2834,6 +2875,8 @@ export async function submitAfternoonTeaPosterTask({
   prompt,
   executionMode,
   onTaskCreated,
+  profileIds,
+  generationGroupId: existingGenerationGroupId,
 }: {
   settingsSnapshot: AppSettings
   paramsSnapshot: TaskParams
@@ -2843,85 +2886,146 @@ export async function submitAfternoonTeaPosterTask({
   prompt: string
   executionMode?: TaskExecutionMode
   onTaskCreated: (taskId: string) => void
+  /** 仅向这些 profile 提交；用于单任务重试，避免再次 fan-out 全部中转站 */
+  profileIds?: string[]
+  /** 重试单任务时沿用原并行组 id */
+  generationGroupId?: string
 }): Promise<{ taskId: string; task: TaskRecord }> {
-  const snapshotProfile = settingsSnapshot.profiles.find((profile) => profile.id === settingsSnapshot.activeProfileId)
-    ?? getActiveApiProfile(settingsSnapshot)
-  if (snapshotProfile.provider !== 'openai') {
-    throw new Error('下午茶海报目前仅支持 OpenAI 图片模型配置。')
+  const normalizedSettings = normalizeSettings(settingsSnapshot)
+  // 校验用原始 profile，避免 normalize 把空 model 填成默认值后绕过「缺少模型 ID」
+  let rawCandidates = getRawImageGenerationProfiles(settingsSnapshot)
+    .filter((profile) => profile.provider === 'openai')
+  if (profileIds?.length) {
+    const allow = new Set(profileIds)
+    rawCandidates = rawCandidates.filter((profile) => allow.has(profile.id))
+    // 显式指定的 profile 可能不在并行组里，从 settings 全量补齐
+    if (!rawCandidates.length) {
+      rawCandidates = (settingsSnapshot.profiles ?? normalizedSettings.profiles)
+        .filter((profile) => allow.has(profile.id) && profile.provider === 'openai')
+    }
   }
-  const profileError = validateApiProfile(snapshotProfile)
-  if (profileError) {
-    throw new Error(`请先完善请求 API 配置：${profileError}`)
+  const validRawProfiles: ApiProfile[] = []
+  for (const profile of rawCandidates) {
+    if (validateApiProfile(profile)) continue
+    validRawProfiles.push(profile)
   }
 
-  const normalizedSettings = normalizeSettings(settingsSnapshot)
-  const activeProfile = getActiveApiProfile(normalizedSettings)
-  const requestSettings = createSettingsForApiProfile(normalizedSettings, activeProfile)
+  if (!validRawProfiles.length) {
+    if (profileIds?.length) {
+      throw new Error('找不到可重试的 OpenAI 图片模型配置，请检查该任务使用的 API 配置是否仍存在。')
+    }
+    const activeRaw = settingsSnapshot.profiles?.find((profile) => profile.id === settingsSnapshot.activeProfileId)
+      ?? getActiveApiProfile(settingsSnapshot)
+    if (activeRaw.provider !== 'openai') {
+      throw new Error('下午茶海报目前仅支持 OpenAI 图片模型配置。')
+    }
+    const profileError = validateApiProfile(activeRaw)
+    if (profileError) {
+      throw new Error(`请先完善请求 API 配置：${profileError}`)
+    }
+    // 理论上不会走到：active 有效但并行组全无效时，用 active
+    validRawProfiles.push(activeRaw)
+  }
+
+  // 执行用规范化后的 profile（含默认值与 active 顶层字段覆盖）
+  const normalizedById = new Map(getImageGenerationProfiles(settingsSnapshot).map((profile) => [profile.id, profile]))
+  const validProfiles: ApiProfile[] = validRawProfiles.map((profile) =>
+    normalizedById.get(profile.id)
+    ?? normalizedSettings.profiles.find((item) => item.id === profile.id)
+    ?? profile
+  )
+
   const selectedExecutionMode = executionMode ?? 'browser'
-  const normalizedParams = normalizeParamsForSettings(paramsSnapshot, requestSettings, { hasInputImages: true })
-  const taskId = genId()
-  const task: TaskRecord = {
-    id: taskId,
-    prompt: prompt.trim(),
-    executionMode: selectedExecutionMode,
-    afternoonTeaBatchId: batchId,
-    afternoonTeaTitle: title,
-    params: {
-      ...normalizedParams,
-      n: 1,
-      transparent_output: false,
-    },
-    apiProvider: activeProfile.provider,
-    apiProfileId: activeProfile.id,
-    apiProfileName: activeProfile.name,
-    apiMode: activeProfile.apiMode,
-    apiModel: activeProfile.model,
-    inputImageIds: [inputImage.id],
-    maskTargetImageId: null,
-    maskImageId: null,
-    outputImages: [],
-    status: 'running',
-    error: null,
-    createdAt: Date.now(),
-    finishedAt: null,
-    elapsed: null,
+  const generationGroupId = existingGenerationGroupId
+    ?? (validProfiles.length > 1 ? genId() : undefined)
+  const createdAt = Date.now()
+  const createdTasks: TaskRecord[] = []
+
+  for (const profile of validProfiles) {
+    const requestSettings = createSettingsForApiProfile(normalizedSettings, profile)
+    const normalizedParams = normalizeParamsForSettings(paramsSnapshot, requestSettings, { hasInputImages: true })
+    const taskId = genId()
+    const task: TaskRecord = {
+      id: taskId,
+      prompt: prompt.trim(),
+      executionMode: selectedExecutionMode,
+      ...(generationGroupId ? { generationGroupId } : {}),
+      afternoonTeaBatchId: batchId,
+      afternoonTeaTitle: title,
+      params: {
+        ...normalizedParams,
+        n: 1,
+        transparent_output: false,
+      },
+      apiProvider: profile.provider,
+      apiProfileId: profile.id,
+      apiProfileName: profile.name,
+      apiMode: profile.apiMode,
+      apiModel: profile.model,
+      inputImageIds: [inputImage.id],
+      maskTargetImageId: null,
+      maskImageId: null,
+      outputImages: [],
+      status: 'running',
+      error: null,
+      createdAt,
+      finishedAt: null,
+      elapsed: null,
+    }
+    createdTasks.push(task)
   }
 
   const latestTasks = useStore.getState().tasks
-  useStore.getState().setTasks([task, ...latestTasks])
+  useStore.getState().setTasks([...createdTasks, ...latestTasks])
   try {
-    await putTask(task)
+    await Promise.all(createdTasks.map((task) => putTask(task)))
   } catch (err) {
+    const createdIds = new Set(createdTasks.map((task) => task.id))
     useStore.setState((state) => ({
-      tasks: state.tasks.filter((item) => item.id !== taskId),
+      tasks: state.tasks.filter((item) => !createdIds.has(item.id)),
     }))
     throw err
   }
+
   try {
-    onTaskCreated(taskId)
+    for (const task of createdTasks) {
+      onTaskCreated(task.id)
+    }
   } catch (err) {
     const finishedAt = Date.now()
-    const currentTask = useStore.getState().tasks.find((item) => item.id === taskId) ?? task
-    const failedTask: TaskRecord = {
-      ...currentTask,
-      status: 'error',
-      error: '下午茶任务创建失败',
-      finishedAt,
-      elapsed: Math.max(0, finishedAt - task.createdAt),
-    }
+    const failedIds = new Set(createdTasks.map((task) => task.id))
     useStore.setState((state) => ({
-      tasks: state.tasks.map((item) => item.id === taskId ? failedTask : item),
+      tasks: state.tasks.map((item) => {
+        if (!failedIds.has(item.id)) return item
+        return {
+          ...item,
+          status: 'error' as const,
+          error: '下午茶任务创建失败',
+          finishedAt,
+          elapsed: Math.max(0, finishedAt - item.createdAt),
+        }
+      }),
     }))
-    await putTask(failedTask)
+    for (const task of createdTasks) {
+      const failed = useStore.getState().tasks.find((item) => item.id === task.id)
+      if (failed) await putTask(failed)
+    }
     throw err
   }
-  await executeTask(taskId, normalizedSettings)
-  if (selectedExecutionMode === 'server') await waitForTaskTerminal(taskId)
 
-  const latestTask = useStore.getState().tasks.find((item) => item.id === taskId)
+  await Promise.all(createdTasks.map((task) => executeTask(task.id, normalizedSettings)))
+  if (selectedExecutionMode === 'server') {
+    await Promise.all(createdTasks.map((task) => waitForTaskTerminal(task.id)))
+  }
+
+  const firstTaskId = createdTasks[0].id
+  const latestTask = useStore.getState().tasks.find((item) => item.id === firstTaskId)
   if (!latestTask) throw new Error('找不到刚创建的下午茶海报任务。')
-  await putTask(latestTask)
-  return { taskId, task: latestTask }
+  for (const task of createdTasks) {
+    const latest = useStore.getState().tasks.find((item) => item.id === task.id)
+    if (latest) await putTask(latest)
+  }
+  return { taskId: firstTaskId, task: latestTask }
 }
 
 function getActiveAgentConversation(): AgentConversation {

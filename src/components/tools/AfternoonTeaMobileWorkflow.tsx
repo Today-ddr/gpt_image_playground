@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type TouchEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent, type TouchEvent } from 'react'
 import type { AfternoonTeaOrderResult, AfternoonTeaTitleRegion, TaskRecord } from '../../types'
 import { prepareImageFile, savePreparedImageFile } from '../../lib/downloadImages'
 import { ensureImageCached, ensureImageThumbnailCached, subscribeImageThumbnail } from '../../store'
@@ -15,6 +15,7 @@ import {
   PasteIcon,
   PlusIcon,
 } from '../icons'
+import TaskCard from '../TaskCard'
 import { WandAnimation } from '../wand-animation-react'
 import type { AfternoonTeaPosterViewItem } from './AfternoonTeaPosterStep'
 import { AfternoonTeaItemPlacement } from './AfternoonTeaTitlePlacement'
@@ -29,10 +30,39 @@ type MobileAfternoonTeaPhaseState = {
 }
 
 export type MobileAfternoonTeaCandidate = {
+  /** 选择/列表唯一 id；多中转站时为 task.id，单任务时为 poster item id */
   itemId: string
+  /** 原始海报条目 id，用于重试 */
+  sourceItemId: string
   title: string
   imageId: string
   task: TaskRecord
+}
+
+/** 将海报条目展开为每个中转站/任务一个结果槽（与画廊小卡片一一对应） */
+export function expandAfternoonTeaMobileResultSlots(items: AfternoonTeaPosterViewItem[]) {
+  return items.flatMap((item) => {
+    if (item.slots && item.slots.length) {
+      return item.slots.map((slot, slotIndex) => ({
+        key: slot.taskId || `${item.id}-slot-${slotIndex}`,
+        itemId: item.id,
+        title: item.title,
+        status: slot.status,
+        task: slot.task,
+        error: slot.error || item.error,
+        profileName: slot.profileName || slot.task?.apiProfileName,
+      }))
+    }
+    return [{
+      key: item.id,
+      itemId: item.id,
+      title: item.title,
+      status: item.status,
+      task: item.task,
+      error: item.error,
+      profileName: item.task?.apiProfileName,
+    }]
+  })
 }
 
 type AfternoonTeaMobileWorkflowProps = {
@@ -71,8 +101,11 @@ type AfternoonTeaMobileWorkflowProps = {
   onItemNameChange: (index: number, displayName: string) => void
   onItemTagsChange: (index: number, tags: string[]) => void
   onConfirmAndGenerate: () => void
-  onRetry: (itemId: string) => void
+  onRetry: (itemId: string, taskId?: string) => void
   onTaskClick: (task: TaskRecord) => void
+  onTaskDelete?: (task: TaskRecord) => void
+  onTaskReuse?: (task: TaskRecord) => void
+  onTaskEditOutputs?: (task: TaskRecord) => void
 }
 
 export function deriveMobileAfternoonTeaPhase(state: MobileAfternoonTeaPhaseState): MobileAfternoonTeaPhase {
@@ -84,10 +117,20 @@ export function deriveMobileAfternoonTeaPhase(state: MobileAfternoonTeaPhaseStat
 }
 
 export function getMobileAfternoonTeaCandidates(items: AfternoonTeaPosterViewItem[]): MobileAfternoonTeaCandidate[] {
-  return items.flatMap((item) => {
-    const imageId = item.status === 'done' ? item.task?.outputImages[0] : null
-    if (!imageId || !item.task) return []
-    return [{ itemId: item.id, title: item.title, imageId, task: item.task }]
+  const multiItemIds = new Set(
+    items.filter((item) => (item.slots?.length ?? 0) > 1).map((item) => item.id),
+  )
+  return expandAfternoonTeaMobileResultSlots(items).flatMap((slot) => {
+    if (slot.status !== 'done' || !slot.task?.outputImages[0]) return []
+    const multiRelay = multiItemIds.has(slot.itemId)
+    const profileLabel = slot.profileName?.trim()
+    return [{
+      itemId: multiRelay ? slot.task.id : slot.itemId,
+      sourceItemId: slot.itemId,
+      title: multiRelay && profileLabel ? `${slot.title} · ${profileLabel}` : slot.title,
+      imageId: slot.task.outputImages[0],
+      task: slot.task,
+    }]
   })
 }
 
@@ -138,6 +181,41 @@ function normalizeTags(value: string) {
   return [...new Set(value.split(/[,，\n]/).map((tag) => tag.trim()).filter(Boolean))]
 }
 
+
+const GENERATE_SPLIT_STORAGE_KEY = 'gpt-image-playground.tools-generate-split-left-percent'
+const GENERATE_SPLIT_DEFAULT_LEFT_PERCENT = 52
+const GENERATE_SPLIT_MIN_LEFT_PERCENT = 30
+const GENERATE_SPLIT_MAX_LEFT_PERCENT = 70
+const GENERATE_SPLIT_MIN_RIGHT_PX = 300
+
+export function clampGenerateSplitLeftPercent(value: number) {
+  if (!Number.isFinite(value)) return GENERATE_SPLIT_DEFAULT_LEFT_PERCENT
+  return Math.min(GENERATE_SPLIT_MAX_LEFT_PERCENT, Math.max(GENERATE_SPLIT_MIN_LEFT_PERCENT, value))
+}
+
+export function readGenerateSplitLeftPercent(storage: Pick<Storage, 'getItem'> | null = typeof window === 'undefined' ? null : window.localStorage) {
+  if (!storage) return GENERATE_SPLIT_DEFAULT_LEFT_PERCENT
+  try {
+    const raw = storage.getItem(GENERATE_SPLIT_STORAGE_KEY)
+    if (raw == null || raw === '') return GENERATE_SPLIT_DEFAULT_LEFT_PERCENT
+    return clampGenerateSplitLeftPercent(Number(raw))
+  } catch {
+    return GENERATE_SPLIT_DEFAULT_LEFT_PERCENT
+  }
+}
+
+export function writeGenerateSplitLeftPercent(
+  value: number,
+  storage: Pick<Storage, 'setItem'> | null = typeof window === 'undefined' ? null : window.localStorage,
+) {
+  if (!storage) return
+  try {
+    storage.setItem(GENERATE_SPLIT_STORAGE_KEY, String(clampGenerateSplitLeftPercent(value)))
+  } catch {
+    // ignore quota / private mode failures
+  }
+}
+
 export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProps) {
   const phase = deriveMobileAfternoonTeaPhase({
     orderResult: props.orderResult,
@@ -159,6 +237,11 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
   const itemTagInputRef = useRef<HTMLInputElement>(null)
   const previousPhaseRef = useRef(phase)
   const touchStartXRef = useRef<number | null>(null)
+  const generateSplitContainerRef = useRef<HTMLDivElement>(null)
+  const generateSplitDraggingRef = useRef(false)
+  const [generateSplitLeftPercent, setGenerateSplitLeftPercent] = useState(GENERATE_SPLIT_DEFAULT_LEFT_PERCENT)
+  const [generateSplitDragging, setGenerateSplitDragging] = useState(false)
+  const [isDesktopGenerateSplit, setIsDesktopGenerateSplit] = useState(false)
   const titleKey = props.orderResult?.titles.join('\u0001') ?? ''
   const itemNameKey = props.orderResult?.items.map((item) => item.displayName).join('\u0001') ?? ''
   const itemTagKey = props.orderResult?.items.map((item) => item.tags.join('\u0001')).join('\u0002') ?? ''
@@ -250,9 +333,86 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
     return () => { active = false }
   }, [selectedItemId, candidateKey])
 
-  const counters = props.items.reduce((result, item) => ({
+  const resultSlots = useMemo(() => expandAfternoonTeaMobileResultSlots(props.items), [props.items])
+
+  useEffect(() => {
+    setGenerateSplitLeftPercent(readGenerateSplitLeftPercent())
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return
+    const mediaQuery = window.matchMedia('(min-width: 1024px)')
+    const sync = () => setIsDesktopGenerateSplit(mediaQuery.matches)
+    sync()
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', sync)
+      return () => mediaQuery.removeEventListener('change', sync)
+    }
+    mediaQuery.addListener(sync)
+    return () => mediaQuery.removeListener(sync)
+  }, [])
+
+  useEffect(() => {
+    if (!generateSplitDragging) return
+    const previousCursor = document.body.style.cursor
+    const previousUserSelect = document.body.style.userSelect
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    return () => {
+      document.body.style.cursor = previousCursor
+      document.body.style.userSelect = previousUserSelect
+    }
+  }, [generateSplitDragging])
+
+  const updateGenerateSplitFromClientX = useCallback((clientX: number) => {
+    const container = generateSplitContainerRef.current
+    if (!container) return
+    const rect = container.getBoundingClientRect()
+    if (rect.width <= 0) return
+    const maxLeftByRightMin = ((rect.width - GENERATE_SPLIT_MIN_RIGHT_PX) / rect.width) * 100
+    const upper = Math.min(GENERATE_SPLIT_MAX_LEFT_PERCENT, Math.max(GENERATE_SPLIT_MIN_LEFT_PERCENT, maxLeftByRightMin))
+    const next = ((clientX - rect.left) / rect.width) * 100
+    setGenerateSplitLeftPercent(Math.min(upper, Math.max(GENERATE_SPLIT_MIN_LEFT_PERCENT, next)))
+  }, [])
+
+  const handleGenerateSplitPointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return
+    event.preventDefault()
+    generateSplitDraggingRef.current = true
+    setGenerateSplitDragging(true)
+    event.currentTarget.setPointerCapture(event.pointerId)
+    updateGenerateSplitFromClientX(event.clientX)
+  }, [updateGenerateSplitFromClientX])
+
+  const handleGenerateSplitPointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!generateSplitDraggingRef.current) return
+    updateGenerateSplitFromClientX(event.clientX)
+  }, [updateGenerateSplitFromClientX])
+
+  const finishGenerateSplitDrag = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!generateSplitDraggingRef.current) return
+    generateSplitDraggingRef.current = false
+    setGenerateSplitDragging(false)
+    try {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    } catch {
+      // already released
+    }
+    setGenerateSplitLeftPercent((current) => {
+      const next = clampGenerateSplitLeftPercent(current)
+      writeGenerateSplitLeftPercent(next)
+      return next
+    })
+  }, [])
+
+  const resetGenerateSplit = useCallback(() => {
+    setGenerateSplitLeftPercent(GENERATE_SPLIT_DEFAULT_LEFT_PERCENT)
+    writeGenerateSplitLeftPercent(GENERATE_SPLIT_DEFAULT_LEFT_PERCENT)
+  }, [])
+
+  const counters = resultSlots.reduce((result, slot) => ({
     ...result,
-    [item.status]: result[item.status] + 1,
+    [slot.status]: result[slot.status] + 1,
   }), { queued: 0, running: 0, done: 0, error: 0 })
   const batchElapsed = props.batchStartedAt == null
     ? null
@@ -381,8 +541,8 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
   const steps = ['素材', '审查', '生成', '保存']
 
   return (
-    <div className="min-w-0 px-4 py-5 sm:px-6 sm:py-7 lg:grid lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end lg:gap-x-6" data-mobile-afternoon-tea-workflow aria-label="餐品海报工作流">
-      <div className="mb-4 lg:col-start-1 lg:row-start-1" aria-label="餐品海报进度">
+    <div className="min-w-0 px-3 py-3 sm:px-6 sm:py-7 lg:grid lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end lg:gap-x-6" data-mobile-afternoon-tea-workflow aria-label="餐品海报工作流">
+      <div className="mb-3 sm:mb-4 lg:col-start-1 lg:row-start-1" aria-label="餐品海报进度">
         <span className="sr-only" aria-live="polite">当前步骤：{steps[stepIndex]}，{stepIndex + 1}/4</span>
         <div className="grid grid-cols-4 gap-1.5" aria-hidden="true">
           {steps.map((label, index) => (
@@ -395,7 +555,7 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
       </div>
 
       {(phase === 'input' || phase === 'analyzing') && (
-        <div className="space-y-4 pb-3 lg:col-span-2 lg:row-start-2 lg:grid lg:grid-cols-[minmax(0,0.9fr)_minmax(360px,1.1fr)] lg:items-start lg:gap-6 lg:space-y-0" aria-label="素材工作区">
+        <div className="space-y-3 pb-3 sm:space-y-4 lg:col-span-2 lg:row-start-2 lg:grid lg:grid-cols-[minmax(0,0.9fr)_minmax(360px,1.1fr)] lg:items-start lg:gap-6 lg:space-y-0" aria-label="素材工作区">
           <section aria-label="餐品图片">
             <div className="mb-2 flex items-center justify-between gap-3">
               <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">餐品图片</h2>
@@ -406,8 +566,8 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
               )}
             </div>
             {props.imageDataUrl ? (
-              <div className="flex max-h-[38svh] min-h-44 items-center justify-center overflow-hidden rounded-md border border-gray-200 bg-gray-50 dark:border-white/[0.08] dark:bg-black/20">
-                <img src={props.imageDataUrl} alt="待解析餐品" className="max-h-[38svh] w-full object-contain" />
+              <div className="flex max-h-[30svh] min-h-36 items-center justify-center overflow-hidden rounded-md border border-gray-200 bg-gray-50 dark:border-white/[0.08] dark:bg-black/20 sm:max-h-[38svh] sm:min-h-44">
+                <img src={props.imageDataUrl} alt="待解析餐品" className="max-h-[30svh] w-full object-contain sm:max-h-[38svh]" />
               </div>
             ) : (
               <div className="flex aspect-[4/3] items-center justify-center rounded-md border border-dashed border-gray-300 bg-gray-50/60 px-4 text-center text-sm text-gray-500 dark:border-white/[0.12] dark:bg-white/[0.02] dark:text-gray-400">
@@ -442,7 +602,7 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
               <textarea value={props.userPrompt} onChange={(event) => {
                 clipboardCoordinator.invalidate()
                 props.onUserPromptChange(event.target.value)
-              }} disabled={locked} rows={7} className="min-h-40 w-full resize-y rounded-md border border-gray-200 bg-white px-3 py-2.5 text-base leading-relaxed text-gray-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:opacity-60 dark:border-white/[0.1] dark:bg-white/[0.03] dark:text-gray-100 dark:focus:ring-blue-500/10" aria-label="菜单输入" />
+              }} disabled={locked} rows={7} className="min-h-28 w-full resize-y rounded-md border border-gray-200 bg-white px-3 py-2.5 text-base leading-relaxed text-gray-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:opacity-60 dark:border-white/[0.1] dark:bg-white/[0.03] dark:text-gray-100 dark:focus:ring-blue-500/10 sm:min-h-40" aria-label="菜单输入" />
               {clipboardError && <div role="alert" className="mt-2 text-sm text-amber-700 dark:text-amber-300">{clipboardError}</div>}
             </section>
 
@@ -483,7 +643,7 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
       )}
 
       {phase === 'review' && props.orderResult && (
-        <div ref={reviewRef} className="space-y-5 pb-3 scroll-mt-20 lg:col-span-2 lg:row-start-2 lg:grid lg:grid-cols-[minmax(0,1.05fr)_minmax(300px,0.95fr)] lg:items-start lg:gap-6 lg:space-y-0" aria-label="审查工作区">
+        <div ref={reviewRef} className="space-y-4 pb-3 scroll-mt-20 sm:space-y-5 lg:col-span-2 lg:row-start-2 lg:grid lg:grid-cols-[minmax(0,1.05fr)_minmax(300px,0.95fr)] lg:items-start lg:gap-6 lg:space-y-0" aria-label="审查工作区">
           <section aria-label="餐品摆放">
             <div className="mb-2 flex items-center justify-between gap-3">
               <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">餐品摆放</h2>
@@ -586,17 +746,26 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
       )}
 
       {(phase === 'generating' || phase === 'results') && (
-        <div className="space-y-4 pb-3 lg:col-span-2 lg:row-start-2 lg:grid lg:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)] lg:items-start lg:gap-6 lg:space-y-0" aria-label="生成与保存工作区">
+        <div
+          ref={generateSplitContainerRef}
+          className={`flex flex-col gap-3 pb-4 sm:gap-4 lg:col-span-2 lg:row-start-2 lg:flex-row lg:items-stretch lg:gap-0 lg:pb-3 ${generateSplitDragging ? 'lg:select-none' : ''}`}
+          aria-label="生成与保存工作区"
+        >
+          {/* 移动端先结果后预览；桌面左右分栏 + 中间可拖拽调整宽度 */}
           {currentCandidate && (
-            <section aria-label="当前海报">
+            <section
+              aria-label="当前海报"
+              className="order-3 min-w-0 lg:order-none lg:min-w-[280px] lg:pr-1"
+              style={isDesktopGenerateSplit ? { flexBasis: `${generateSplitLeftPercent}%`, flexGrow: 0, flexShrink: 0 } : undefined}
+            >
               <div className="mb-2 flex items-center justify-between gap-3">
                 <h2 className="min-w-0 break-words text-sm font-semibold text-gray-900 dark:text-gray-100">{currentCandidate.title}</h2>
                 <span className="shrink-0 text-xs tabular-nums text-gray-500 dark:text-gray-400">{selectedIndex + 1} / {availableCandidates.length}</span>
               </div>
-              <div className="relative flex min-h-72 items-center justify-center overflow-hidden rounded-md bg-gray-100 dark:bg-black/30" onTouchStart={(event) => { touchStartXRef.current = event.touches[0]?.clientX ?? null }} onTouchEnd={handleTouchEnd}>
+              <div className="relative flex min-h-40 items-center justify-center overflow-hidden rounded-md bg-gray-100 dark:bg-black/30 sm:min-h-72" onTouchStart={(event) => { touchStartXRef.current = event.touches[0]?.clientX ?? null }} onTouchEnd={handleTouchEnd}>
                 {selectedImageSrc ? (
-                  <button type="button" onClick={() => props.onTaskClick(currentCandidate.task)} className="flex h-full min-h-72 w-full items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500" aria-label={`查看 ${currentCandidate.title} 详情`}>
-                    <img src={selectedImageSrc} alt={currentCandidate.title} className="max-h-[58svh] w-full object-contain" />
+                  <button type="button" onClick={() => props.onTaskClick(currentCandidate.task)} className="flex h-full min-h-40 w-full items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500 sm:min-h-72" aria-label={`查看 ${currentCandidate.title} 详情`}>
+                    <img src={selectedImageSrc} alt={currentCandidate.title} className="max-h-[28svh] w-full object-contain sm:max-h-[58svh]" />
                   </button>
                 ) : (
                   <div className="text-sm text-gray-500 dark:text-gray-400">正在载入图片...</div>
@@ -612,9 +781,9 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
                   </>
                 )}
               </div>
-              <div className="hide-scrollbar mt-2 flex min-h-16 gap-2 overflow-x-auto pb-1">
+              <div className="hide-scrollbar mt-2 flex min-h-14 gap-2 overflow-x-auto pb-1 sm:min-h-16">
                 {availableCandidates.map((candidate) => (
-                  <button key={candidate.itemId} type="button" onClick={() => setSelectedItemId(candidate.itemId)} className={`h-16 w-16 shrink-0 overflow-hidden rounded-md border-2 bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:bg-black/20 ${candidate.itemId === selectedItemId ? 'border-blue-600' : 'border-transparent'}`} aria-label={`选择海报 ${candidate.title}`} aria-pressed={candidate.itemId === selectedItemId}>
+                  <button key={candidate.itemId} type="button" onClick={() => setSelectedItemId(candidate.itemId)} className={`h-14 w-14 shrink-0 overflow-hidden rounded-md border-2 bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:bg-black/20 sm:h-16 sm:w-16 ${candidate.itemId === selectedItemId ? 'border-blue-600' : 'border-transparent'}`} aria-label={`选择海报 ${candidate.title}`} aria-pressed={candidate.itemId === selectedItemId}>
                     {thumbnails[candidate.imageId] ? <img src={thumbnails[candidate.imageId]} alt="" className="h-full w-full object-cover" /> : <span className="text-xs text-gray-400">{availableCandidates.indexOf(candidate) + 1}</span>}
                   </button>
                 ))}
@@ -622,10 +791,60 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
             </section>
           )}
 
-          <div className={`space-y-4 ${currentCandidate ? 'lg:col-start-2 lg:row-start-1' : 'lg:col-span-2'}`}>
+          {currentCandidate && (
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="调整预览与结果区域宽度"
+              aria-valuemin={GENERATE_SPLIT_MIN_LEFT_PERCENT}
+              aria-valuemax={GENERATE_SPLIT_MAX_LEFT_PERCENT}
+              aria-valuenow={Math.round(generateSplitLeftPercent)}
+              tabIndex={0}
+              className={`group relative z-10 hidden w-3 shrink-0 cursor-col-resize touch-none items-stretch justify-center lg:flex ${generateSplitDragging ? 'bg-blue-50/80 dark:bg-blue-500/10' : 'hover:bg-gray-50 dark:hover:bg-white/[0.04]'}`}
+              onPointerDown={handleGenerateSplitPointerDown}
+              onPointerMove={handleGenerateSplitPointerMove}
+              onPointerUp={finishGenerateSplitDrag}
+              onPointerCancel={finishGenerateSplitDrag}
+              onDoubleClick={resetGenerateSplit}
+              onKeyDown={(event) => {
+                if (event.key === 'ArrowLeft') {
+                  event.preventDefault()
+                  setGenerateSplitLeftPercent((current) => {
+                    const next = clampGenerateSplitLeftPercent(current - 2)
+                    writeGenerateSplitLeftPercent(next)
+                    return next
+                  })
+                } else if (event.key === 'ArrowRight') {
+                  event.preventDefault()
+                  setGenerateSplitLeftPercent((current) => {
+                    const next = clampGenerateSplitLeftPercent(current + 2)
+                    writeGenerateSplitLeftPercent(next)
+                    return next
+                  })
+                } else if (event.key === 'Home' || event.key === 'Enter') {
+                  event.preventDefault()
+                  resetGenerateSplit()
+                }
+              }}
+            >
+              <div className={`my-3 w-px self-stretch transition-colors ${generateSplitDragging ? 'bg-blue-500' : 'bg-gray-300 group-hover:bg-blue-400 dark:bg-white/[0.16] dark:group-hover:bg-blue-400'}`} />
+              <div className={`absolute top-1/2 left-1/2 flex h-10 w-3.5 -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center gap-0.5 rounded-full border border-gray-200 bg-white shadow-sm transition dark:border-white/[0.12] dark:bg-gray-900 ${generateSplitDragging ? 'border-blue-400 ring-2 ring-blue-500/30' : 'group-hover:border-blue-300'}`} aria-hidden="true">
+                <span className="h-0.5 w-1.5 rounded-full bg-gray-400 dark:bg-gray-500" />
+                <span className="h-0.5 w-1.5 rounded-full bg-gray-400 dark:bg-gray-500" />
+                <span className="h-0.5 w-1.5 rounded-full bg-gray-400 dark:bg-gray-500" />
+              </div>
+            </div>
+          )}
+
+          <div
+            className={`order-1 min-w-0 space-y-4 lg:order-none lg:min-w-[300px] lg:pl-1 ${currentCandidate ? '' : 'lg:w-full'}`}
+            style={isDesktopGenerateSplit && currentCandidate
+              ? { flexBasis: `${100 - generateSplitLeftPercent}%`, flexGrow: 1, flexShrink: 1, minWidth: GENERATE_SPLIT_MIN_RIGHT_PX }
+              : undefined}
+          >
             <section aria-label="生成状态">
               <div className="grid grid-cols-3 gap-x-3 gap-y-1 border-y border-gray-200 py-3 text-xs text-gray-600 dark:border-white/[0.08] dark:text-gray-300" aria-live="polite">
-                <span>总数 {props.items.length}</span>
+                <span>总数 {resultSlots.length}</span>
                 <span>完成 {counters.done}</span>
                 <span>失败 {counters.error}</span>
                 <span>等待 {counters.queued}</span>
@@ -634,25 +853,35 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
               </div>
             </section>
 
-            <section aria-label="批次结果槽位">
-              <div className="divide-y divide-gray-200 border-y border-gray-200 dark:divide-white/[0.08] dark:border-white/[0.08]">
-                {props.items.map((item) => (
-                  <div key={item.id} data-mobile-result-slot={item.id} className="flex min-h-14 min-w-0 items-center gap-2 py-2">
-                    <span className={`h-2 w-2 shrink-0 rounded-full ${item.status === 'done' ? 'bg-emerald-500' : item.status === 'error' ? 'bg-red-500' : item.status === 'running' ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`} />
+            <section aria-label="批次结果槽位" className="min-w-0">
+              {/* 按可用宽度自动换列，单卡宽度接近画廊；窄时 1 列，够宽 2/3 列 */}
+              <div
+                data-generate-result-grid
+                className="grid grid-cols-1 gap-3 sm:[grid-template-columns:repeat(auto-fill,minmax(min(100%,19rem),1fr))]"
+              >
+                {resultSlots.map((slot) => slot.task ? (
+                  <div key={slot.key} data-mobile-result-slot={slot.itemId} data-task-card={slot.task.id} className="min-w-0">
+                    <TaskCard
+                      task={slot.task}
+                      disableSwipe
+                      retryDisabled={props.busy || props.retryDisabled}
+                      onClick={() => props.onTaskClick(slot.task!)}
+                      onDelete={() => props.onTaskDelete?.(slot.task!)}
+                      onReuse={() => props.onTaskReuse?.(slot.task!)}
+                      onEditOutputs={() => props.onTaskEditOutputs?.(slot.task!)}
+                      onRetry={() => props.onRetry(slot.itemId, slot.task?.id)}
+                    />
+                  </div>
+                ) : (
+                  <div key={slot.key} data-mobile-result-slot={slot.itemId} className="flex min-h-14 min-w-0 items-center gap-2 rounded-md border border-gray-200 px-3 py-2 dark:border-white/[0.08]">
+                    <span className={`h-2 w-2 shrink-0 rounded-full ${slot.status === 'done' ? 'bg-emerald-500' : slot.status === 'error' ? 'bg-red-500' : slot.status === 'running' ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`} />
                     <div className="min-w-0 flex-1">
-                      <div className="break-words text-sm font-medium text-gray-900 dark:text-gray-100">{item.title}</div>
-                      <div className="mt-0.5 break-words text-xs text-gray-500 dark:text-gray-400">{item.status === 'done' ? '已完成' : item.status === 'running' ? '生成中' : item.status === 'queued' ? '等待生成' : item.error || '生成失败'}</div>
+                      <div className="break-words text-sm font-medium text-gray-900 dark:text-gray-100">{slot.title}</div>
+                      {slot.profileName && <div className="mt-0.5 truncate text-xs text-gray-500 dark:text-gray-400">{slot.profileName}</div>}
+                      <div className="mt-0.5 break-words text-xs text-gray-500 dark:text-gray-400">{slot.status === 'done' ? '已完成' : slot.status === 'running' ? '生成中' : slot.status === 'queued' ? '等待生成' : slot.error || '生成失败'}</div>
                     </div>
-                    {item.status === 'error' && (
-                      <button type="button" onClick={() => props.onRetry(item.id)} disabled={props.busy || props.retryDisabled} className="min-h-11 shrink-0 rounded-md px-2 text-sm font-medium text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 disabled:opacity-50 dark:text-red-300">重试</button>
-                    )}
-                    {item.task && (
-                      <button type="button" onClick={() => {
-                        if (!item.task) return
-                        props.onTaskClick(item.task)
-                      }} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-gray-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-gray-400" aria-label={`查看 ${item.title} 任务详情`}>
-                        <ChevronRightIcon className="h-5 w-5" />
-                      </button>
+                    {slot.status === 'error' && (
+                      <button type="button" onClick={() => props.onRetry(slot.itemId)} disabled={props.busy || props.retryDisabled} className="min-h-11 shrink-0 rounded-md px-2 text-sm font-medium text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 disabled:opacity-50 dark:text-red-300">重试</button>
                     )}
                   </div>
                 ))}
@@ -680,30 +909,30 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
         </div>
       )}
 
-      {(phase !== 'results' || availableCandidates.length > 0) && <div className="sticky bottom-0 z-20 -mx-4 mt-3 border-t border-gray-200 bg-white/95 px-4 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] backdrop-blur dark:border-white/[0.08] dark:bg-gray-950/95 sm:-mx-6 sm:px-6 lg:static lg:col-start-2 lg:row-start-1 lg:mx-0 lg:mb-4 lg:flex lg:justify-end lg:border-t-0 lg:bg-transparent lg:px-0 lg:py-0 lg:backdrop-blur-none dark:lg:bg-transparent" aria-label="工作流主操作">
+      {(phase !== 'results' || availableCandidates.length > 0) && <div className="fixed inset-x-0 bottom-0 z-30 border-t border-gray-200 bg-white/95 px-3 pt-2.5 pb-[calc(0.65rem+env(safe-area-inset-bottom))] shadow-[0_-8px_24px_rgba(0,0,0,0.06)] backdrop-blur dark:border-white/[0.08] dark:bg-gray-950/95 dark:shadow-[0_-8px_24px_rgba(0,0,0,0.35)] sm:px-6 lg:static lg:inset-auto lg:col-start-2 lg:row-start-1 lg:mx-0 lg:mb-4 lg:mt-0 lg:flex lg:justify-end lg:border-t-0 lg:bg-transparent lg:px-0 lg:py-0 lg:shadow-none lg:backdrop-blur-none dark:lg:bg-transparent" aria-label="工作流主操作">
         {phase === 'input' && (
           <button type="button" onClick={() => {
             clipboardCoordinator.invalidate()
             props.onSubmit()
-          }} disabled={!props.configured || locked || !props.userPrompt.trim()} className="min-h-12 w-full rounded-md bg-blue-600 px-4 text-base font-semibold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 lg:w-auto lg:min-w-56">开始解析</button>
+          }} disabled={!props.configured || locked || !props.userPrompt.trim()} className="min-h-12 w-full touch-manipulation rounded-xl bg-blue-600 px-4 text-base font-semibold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 active:scale-[0.99] lg:w-auto lg:min-w-56 lg:rounded-md">开始解析</button>
         )}
         {phase === 'analyzing' && (
-          <button type="button" onClick={props.onCancel} className="min-h-12 w-full rounded-md border border-gray-300 bg-white px-4 text-base font-semibold text-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:border-white/[0.12] dark:bg-white/[0.04] dark:text-gray-100 lg:w-auto lg:min-w-56">取消解析</button>
+          <button type="button" onClick={props.onCancel} className="min-h-12 w-full touch-manipulation rounded-xl border border-gray-300 bg-white px-4 text-base font-semibold text-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 active:scale-[0.99] dark:border-white/[0.12] dark:bg-white/[0.04] dark:text-gray-100 lg:w-auto lg:min-w-56 lg:rounded-md">取消解析</button>
         )}
         {phase === 'review' && (
           <div className="w-full lg:w-auto">
-            <button type="button" onClick={handleConfirmAndGenerate} disabled={locked || !props.imageDataUrl || !props.orderResult} className="min-h-12 w-full rounded-md bg-blue-600 px-4 text-base font-semibold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 lg:w-auto lg:min-w-56">确认并生成 {props.orderResult?.titles.length ?? 0} 张</button>
+            <button type="button" onClick={handleConfirmAndGenerate} disabled={locked || !props.imageDataUrl || !props.orderResult} className="min-h-12 w-full touch-manipulation rounded-xl bg-blue-600 px-4 text-base font-semibold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 active:scale-[0.99] lg:w-auto lg:min-w-56 lg:rounded-md">确认并生成 {props.orderResult?.titles.length ?? 0} 张</button>
             {!props.imageDataUrl && <div className="mt-1.5 text-center text-xs text-amber-700 dark:text-amber-300">生成海报需要一张餐品图片</div>}
           </div>
         )}
         {phase === 'generating' && (
-          <button type="button" disabled className="flex min-h-12 w-full cursor-wait items-center justify-center gap-2 rounded-md border border-gray-200 bg-gray-50 px-4 text-base font-semibold text-gray-700 dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-gray-200 lg:w-auto lg:min-w-56">
-            <span>生成中 {counters.done + counters.error} / {props.items.length}</span>
+          <button type="button" disabled className="flex min-h-12 w-full cursor-wait items-center justify-center gap-2 rounded-xl border border-gray-200 bg-gray-50 px-4 text-base font-semibold text-gray-700 dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-gray-200 lg:w-auto lg:min-w-56 lg:rounded-md">
+            <span>生成中 {counters.done + counters.error} / {resultSlots.length}</span>
             <WandAnimation size={28} className="dark:invert" />
           </button>
         )}
         {phase === 'results' && availableCandidates.length > 0 && (
-          <button type="button" onClick={() => void handleSave()} disabled={!preparedFile || preparingFile || saving} className="flex min-h-12 w-full items-center justify-center gap-2 rounded-md bg-blue-600 px-4 text-base font-semibold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 lg:w-auto lg:min-w-56" aria-label="保存当前海报图片">
+          <button type="button" onClick={() => void handleSave()} disabled={!preparedFile || preparingFile || saving} className="flex min-h-12 w-full touch-manipulation items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 text-base font-semibold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 active:scale-[0.99] lg:w-auto lg:min-w-56 lg:rounded-md" aria-label="保存当前海报图片">
             <DownloadIcon className="h-5 w-5" />
             {preparingFile ? '准备图片...' : saving ? '正在打开...' : '打开系统保存'}
           </button>

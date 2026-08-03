@@ -403,9 +403,9 @@ export default function TaskCard({
           </svg>
         </div>
       )}
-      <div className="flex h-40">
-        {/* 左侧图片区域 */}
-        <div className="w-40 min-w-[10rem] h-full bg-gray-100 dark:bg-black/20 relative flex items-center justify-center overflow-hidden flex-shrink-0">
+      <div className="flex h-32 sm:h-40">
+        {/* 左侧图片区域：移动端略缩小，避免窄屏把文案挤没 */}
+        <div className="h-full w-28 min-w-[7rem] flex-shrink-0 relative flex items-center justify-center overflow-hidden bg-gray-100 dark:bg-black/20 sm:w-40 sm:min-w-[10rem]">
           {task.status === 'running' && streamPreviewSrc && (
             <>
               <img
@@ -531,7 +531,7 @@ export default function TaskCard({
                 <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">输入内容将在响应完成时接收</p>
               </div>
             ) : (
-              <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed line-clamp-3">
+              <p className="line-clamp-2 text-sm leading-relaxed text-gray-700 dark:text-gray-300 sm:line-clamp-3">
                 {(task.afternoonTeaBatchId && task.afternoonTeaTitle?.trim()) || task.prompt || '(无提示词)'}
               </p>
             )}
@@ -550,6 +550,18 @@ export default function TaskCard({
                 <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.04] text-xs flex-shrink-0">
                   <span className="text-gray-400 dark:text-gray-500">耗时</span>
                   <span className="text-gray-600 dark:text-gray-300">{duration}</span>
+                </span>
+              )}
+              {/* API 配置名：并行对比时便于区分中转站 */}
+              {Boolean(task.apiProfileName?.trim()) && (
+                <span
+                  className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-300 text-xs flex-shrink-0"
+                  title={task.apiProfileName}
+                >
+                  <svg className="w-3 h-3 flex-shrink-0 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M12 5l7 7-7 7" />
+                  </svg>
+                  <span className="truncate max-w-[8rem]">{task.apiProfileName}</span>
                 </span>
               )}
               {/* Model */}
@@ -611,7 +623,7 @@ export default function TaskCard({
             {/* 操作按钮 */}
             <div
               data-tag-scroll-area
-              className="flex items-center gap-1 flex-shrink-0 mt-0.5 ml-auto max-w-full overflow-x-auto hide-scrollbar mask-edge-r pr-2"
+              className="ml-auto mt-0.5 flex max-w-full flex-shrink-0 items-center gap-0.5 overflow-x-auto hide-scrollbar mask-edge-r pr-1 sm:gap-1 sm:pr-2"
               onClick={(e) => e.stopPropagation()}
               onTouchStart={(e) => e.stopPropagation()}
               onTouchMove={(e) => e.stopPropagation()}
@@ -622,7 +634,7 @@ export default function TaskCard({
                 <TaskActionButton
                   tooltip="重试任务"
                   onClick={retryDisabled ? undefined : () => onRetry ? onRetry(task) : retryTask(task)}
-                  className="p-1.5 rounded-md hover:bg-blue-50 dark:hover:bg-blue-950/30 text-gray-400 hover:text-blue-500 transition disabled:opacity-30"
+                  className="min-h-9 min-w-9 p-2 rounded-md hover:bg-blue-50 dark:hover:bg-blue-950/30 text-gray-400 hover:text-blue-500 transition disabled:opacity-30 sm:min-h-0 sm:min-w-0 sm:p-1.5"
                   disabled={retryDisabled}
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -695,7 +707,7 @@ export default function TaskCard({
               <TaskActionButton
                 tooltip="删除任务"
                 onClick={onDelete}
-                className="p-1.5 rounded-md hover:bg-red-50 dark:hover:bg-red-950/30 text-gray-400 hover:text-red-500 transition"
+                className="min-h-9 min-w-9 p-2 rounded-md sm:min-h-0 sm:min-w-0 sm:p-1.5 hover:bg-red-50 dark:hover:bg-red-950/30 text-gray-400 hover:text-red-500 transition"
               >
                 <svg
                   className="w-4 h-4"

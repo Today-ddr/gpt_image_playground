@@ -116,6 +116,11 @@ export interface AppSettings {
   agentImageProfileId?: string | null
   profiles: ApiProfile[]
   activeProfileId: string
+  /**
+   * 参与并行生图的 API 配置 id 列表。
+   * 空/缺省时回退为 [activeProfileId]；语义理解仍只用 activeProfileId。
+   */
+  imageGenerationProfileIds: string[]
 }
 
 // ===== 任务参数 =====
@@ -165,6 +170,8 @@ export interface AfternoonTeaPosterPrompt {
 export interface AfternoonTeaPosterBatchItem extends AfternoonTeaPosterPrompt {
   id: string
   taskId?: string
+  /** 多中转站并行时同一标题对应的多个任务 id；taskId 仍保留为首个任务以兼容旧数据 */
+  taskIds?: string[]
   setupError?: string
 }
 
@@ -212,6 +219,8 @@ export interface TaskRecord {
   prompt: string
   /** 任务由浏览器直连执行，还是由本地后台任务服务执行 */
   executionMode?: 'browser' | 'server'
+  /** 同一次多中转站并行提交的分组 id，用于结果分栏 */
+  generationGroupId?: string
   /** 下午茶海报批次 ID */
   afternoonTeaBatchId?: string
   /** 下午茶海报标题 */

@@ -233,7 +233,7 @@ export function rebuildAfternoonTeaPosterItemPrompts(
 ): AfternoonTeaPosterBatchItem[] {
   const prompts = buildAfternoonTeaPosterPrompts(result, itemTitleRegions)
   return items.map((item, index) => {
-    if (!options.resetClaims && (item.taskId || item.setupError)) return item
+    if (!options.resetClaims && (item.taskId || (item.taskIds && item.taskIds.length) || item.setupError)) return item
     const prompt = prompts[index]
     if (!prompt) {
       return options.resetClaims

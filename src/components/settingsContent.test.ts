@@ -14,3 +14,10 @@ describe('settings content', () => {
     expect(settingsModal).toContain("activeProfile.apiMode === 'images'")
   })
 })
+
+  it('exposes multi-profile image generation parallel selection', () => {
+    expect(settingsModal).toContain('生图将同时请求')
+    expect(settingsModal).toContain('toggleImageGenerationProfile')
+    expect(settingsModal).toContain('参与生图并行')
+  })
+

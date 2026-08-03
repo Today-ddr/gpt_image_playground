@@ -2,12 +2,22 @@ import { useEffect, useState } from 'react'
 import type { TaskRecord } from '../../types'
 import TaskCard from '../TaskCard'
 
+export type AfternoonTeaPosterViewSlot = {
+  taskId?: string
+  task?: TaskRecord
+  status: 'queued' | 'running' | 'done' | 'error'
+  profileName?: string
+  error?: string
+}
+
 export type AfternoonTeaPosterViewItem = {
   id: string
   title: string
   prompt: string
   status: 'queued' | 'running' | 'done' | 'error'
   task?: TaskRecord
+  /** 多中转站并行时每个配置一列 */
+  slots?: AfternoonTeaPosterViewSlot[]
   error?: string
 }
 
@@ -23,7 +33,7 @@ type AfternoonTeaPosterStepProps = {
   onBack: () => void
   onClear: () => void
   onReparse: () => void
-  onRetry: (itemId: string) => void
+  onRetry: (itemId: string, taskId?: string) => void
   onTaskClick?: (task: TaskRecord) => void
   onTaskDelete?: (task: TaskRecord) => void
   onTaskReuse?: (task: TaskRecord) => void
@@ -43,9 +53,31 @@ export function AfternoonTeaPosterStep(props: AfternoonTeaPosterStepProps) {
     const timer = window.setInterval(() => setNow(Date.now()), 1_000)
     return () => window.clearInterval(timer)
   }, [props.batchStartedAt, props.batchFinishedAt])
-  const counters = props.items.reduce((result, item) => ({
+  const resultSlots = props.items.flatMap((item) => {
+    if (item.slots && item.slots.length) {
+      return item.slots.map((slot, slotIndex) => ({
+        key: slot.taskId || `${item.id}-slot-${slotIndex}`,
+        itemId: item.id,
+        title: item.title,
+        status: slot.status,
+        task: slot.task,
+        error: slot.error || item.error,
+        profileName: slot.profileName,
+      }))
+    }
+    return [{
+      key: item.id,
+      itemId: item.id,
+      title: item.title,
+      status: item.status,
+      task: item.task,
+      error: item.error,
+      profileName: item.task?.apiProfileName,
+    }]
+  })
+  const counters = resultSlots.reduce((result, slot) => ({
     ...result,
-    [item.status]: result[item.status] + 1,
+    [slot.status]: result[slot.status] + 1,
   }), { queued: 0, running: 0, done: 0, error: 0 })
   const startDisabled = props.busy || props.batchStartedAt != null || !props.sourceImageSrc || props.items.length === 0
   const startText = props.busy ? '批次生成中' : props.batchStartedAt != null ? '已开始生成' : '开始批量生成'
@@ -113,7 +145,7 @@ export function AfternoonTeaPosterStep(props: AfternoonTeaPosterStepProps) {
 
         <section className="min-w-0" aria-label="批量海报结果">
           <div className="mb-3 grid grid-cols-3 gap-x-3 gap-y-1 text-xs text-gray-500 dark:text-gray-400 sm:flex sm:flex-wrap sm:gap-x-4" aria-live="polite">
-            <span>总数 {props.items.length}</span>
+            <span>总数 {resultSlots.length}</span>
             <span>等待 {counters.queued}</span>
             <span>生成中 {counters.running}</span>
             <span>成功 {counters.done}</span>
@@ -121,30 +153,33 @@ export function AfternoonTeaPosterStep(props: AfternoonTeaPosterStepProps) {
             <span>总耗时 {elapsedText}</span>
           </div>
 
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            {props.items.map((item) => item.task ? (
-              <div key={item.id} data-result-slot={item.id} data-task-card={item.task.id} className="min-w-0">
+          <div data-generate-result-grid className="grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(min(100%,19rem),1fr))]">
+            {resultSlots.map((slot) => slot.task ? (
+              <div key={slot.key} data-result-slot={slot.itemId} data-task-card={slot.task.id} className="min-w-0">
                 <TaskCard
-                  task={item.task}
+                  task={slot.task}
                   disableSwipe
                   retryDisabled={props.busy || Boolean(props.retryDisabled)}
-                  onClick={() => props.onTaskClick?.(item.task!)}
-                  onDelete={() => props.onTaskDelete?.(item.task!)}
-                  onReuse={() => props.onTaskReuse?.(item.task!)}
-                  onEditOutputs={() => props.onTaskEditOutputs?.(item.task!)}
-                  onRetry={() => props.onRetry(item.id)}
+                  onClick={() => props.onTaskClick?.(slot.task!)}
+                  onDelete={() => props.onTaskDelete?.(slot.task!)}
+                  onReuse={() => props.onTaskReuse?.(slot.task!)}
+                  onEditOutputs={() => props.onTaskEditOutputs?.(slot.task!)}
+                  onRetry={() => props.onRetry(slot.itemId, slot.task?.id)}
                 />
               </div>
             ) : (
-              <article key={item.id} data-result-slot={item.id} data-result-placeholder className="flex min-h-40 min-w-0 flex-col justify-between rounded-md border border-gray-200 bg-white p-3 dark:border-white/[0.08] dark:bg-white/[0.03]">
+              <article key={slot.key} data-result-slot={slot.itemId} data-result-placeholder className="flex min-h-40 min-w-0 flex-col justify-between rounded-md border border-gray-200 bg-white p-3 dark:border-white/[0.08] dark:bg-white/[0.03]">
                 <div>
-                  <div className="break-words text-sm font-medium text-gray-800 dark:text-gray-100">{item.title}</div>
+                  <div className="break-words text-sm font-medium text-gray-800 dark:text-gray-100">{slot.title}</div>
+                  {slot.profileName && (
+                    <div className="mt-1 truncate text-xs text-gray-500 dark:text-gray-400">{slot.profileName}</div>
+                  )}
                   <div className="mt-3 text-sm text-gray-400">
-                    {item.status === 'queued' ? '等待生成' : item.error || '任务记录不可用'}
+                    {slot.status === 'queued' ? '等待生成' : slot.error || '任务记录不可用'}
                   </div>
                 </div>
-                {item.status === 'error' && (
-                  <button type="button" onClick={() => props.onRetry(item.id)} disabled={props.busy || Boolean(props.retryDisabled)} className="mt-3 min-h-11 w-full self-stretch whitespace-nowrap rounded-md border border-red-200 bg-white px-2.5 py-1.5 text-xs font-medium text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-500/30 dark:bg-white/[0.03] dark:text-red-300 dark:hover:bg-red-500/10 sm:min-h-0 sm:w-auto sm:self-start">
+                {slot.status === 'error' && (
+                  <button type="button" onClick={() => props.onRetry(slot.itemId, slot.task?.id)} disabled={props.busy || Boolean(props.retryDisabled)} className="mt-3 min-h-11 w-full self-stretch whitespace-nowrap rounded-md border border-red-200 bg-white px-2.5 py-1.5 text-xs font-medium text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-500/30 dark:bg-white/[0.03] dark:text-red-300 dark:hover:bg-red-500/10 sm:min-h-0 sm:w-auto sm:self-start">
                     重试此项
                   </button>
                 )}

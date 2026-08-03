@@ -25,6 +25,8 @@ import {
   normalizeSettings,
   normalizeStreamPartialImages,
   switchApiProfileProvider,
+  resolveImageGenerationProfileIds,
+  getImageGenerationProfiles,
 } from '../lib/apiProfiles'
 import { copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 import { requestBrowserNotificationPermission, type BrowserNotificationPermissionResult } from '../lib/browserNotification'
@@ -1108,8 +1110,32 @@ export default function SettingsModal() {
       ...draft,
       profiles: nextProfiles,
       activeProfileId: draft.activeProfileId === id ? nextProfiles[0].id : draft.activeProfileId,
+      imageGenerationProfileIds: (draft.imageGenerationProfileIds || []).filter((profileId) => profileId !== id),
     })
     commitSettings(nextDraft)
+  }
+
+  const imageGenerationProfileIdSet = new Set(resolveImageGenerationProfileIds(draft))
+  const imageGenerationProfiles = getImageGenerationProfiles(draft)
+  const imageGenerationSummary = imageGenerationProfiles.map((profile) => profile.name).join('、')
+
+  const toggleImageGenerationProfile = (profileId: string, enabled: boolean) => {
+    const currentIds = resolveImageGenerationProfileIds(draft)
+    let nextIds: string[]
+    if (enabled) {
+      nextIds = currentIds.includes(profileId) ? currentIds : [...currentIds, profileId]
+    } else {
+      nextIds = currentIds.filter((id) => id !== profileId)
+      if (!nextIds.length) {
+        // 至少保留一个
+        useStore.getState().showToast('生图并行至少需要保留一个配置', 'info')
+        return
+      }
+    }
+    commitSettings(normalizeSettings({
+      ...draft,
+      imageGenerationProfileIds: nextIds,
+    }))
   }
 
   const handleProviderReorder = (sourceValue: string | number, targetValue: string | number, position: 'before' | 'after' | null) => {
@@ -1555,6 +1581,24 @@ export default function SettingsModal() {
                                 </div>
                                 
                                 <div className="flex shrink-0 items-center gap-1">
+                                  <label
+                                    className="flex items-center gap-1 rounded px-1 py-0.5 text-[10px] text-gray-500 dark:text-gray-400"
+                                    title="勾选后参与画廊/Tools 生图并行请求"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={imageGenerationProfileIdSet.has(profile.id)}
+                                      onChange={(e) => {
+                                        e.stopPropagation()
+                                        toggleImageGenerationProfile(profile.id, e.target.checked)
+                                      }}
+                                      onClick={(e) => e.stopPropagation()}
+                                      className="h-3.5 w-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500 dark:border-white/20 dark:bg-white/[0.04]"
+                                      aria-label={`参与生图并行：${profile.name}`}
+                                    />
+                                    <span className="hidden sm:inline">生图</span>
+                                  </label>
                                   <button
                                     type="button"
                                     onClick={(e) => {
@@ -1593,6 +1637,13 @@ export default function SettingsModal() {
                         </div>
                       </>
                     )}
+                  </div>
+                  <div className="mt-1.5 text-xs text-gray-500 dark:text-gray-500">
+                    生图将同时请求：{imageGenerationSummary || activeProfile.name}
+                    {imageGenerationProfiles.length > 1 ? '（多中转站并行）' : ''}
+                  </div>
+                  <div className="mt-1 text-[11px] leading-4 text-gray-400 dark:text-gray-500">
+                    在配置下拉列表中勾选「生图」即可加入并行组。语义理解仍只用上方当前配置。
                   </div>
                 </div>
 
@@ -1799,7 +1850,7 @@ export default function SettingsModal() {
                     className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
                   />
                   <div data-selectable-text className="mt-1.5 text-xs text-gray-500 dark:text-gray-500">
-                    复用当前配置的 API URL、API Key 和代理设置，暂不参与生图或 Agent 请求。
+                    仅当前配置生效：复用本配置的 API URL、API Key 和代理设置。并行生图勾选不影响理解接口；本字段也不参与生图或 Agent 请求。
                   </div>
                 </label>
               )}

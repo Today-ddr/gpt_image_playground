@@ -3,11 +3,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { TaskRecord } from '../../types'
 import {
   AfternoonTeaMobileWorkflow,
+  clampGenerateSplitLeftPercent,
   deriveMobileAfternoonTeaPhase,
   getMobileAfternoonTeaCandidates,
   canReadAfternoonTeaClipboard,
   readAfternoonTeaClipboardText,
+  readGenerateSplitLeftPercent,
   resolveMobileAfternoonTeaSelection,
+  writeGenerateSplitLeftPercent,
 } from './AfternoonTeaMobileWorkflow'
 import * as mobileWorkflowHelpers from './AfternoonTeaMobileWorkflow'
 import mobileWorkflowSource from './AfternoonTeaMobileWorkflow.tsx?raw'
@@ -154,6 +157,7 @@ async function createWorkflowHookDriver(overrides: Partial<WorkflowProps> = {}) 
     const actual = await vi.importActual<typeof import('react')>('react')
     return {
       ...actual,
+      useCallback: <T,>(value: T) => value,
       useEffect: () => undefined,
       useMemo: <T,>(factory: () => T) => factory(),
       useRef: <T,>(initial: T) => {
@@ -329,11 +333,24 @@ describe('AfternoonTeaMobileWorkflow', () => {
 
     expect(classForLabel(inputHtml, '素材工作区')).toMatch(/lg:grid-cols-\[/)
     expect(classForLabel(reviewHtml, '审查工作区')).toMatch(/lg:grid-cols-\[/)
-    expect(classForLabel(resultsHtml, '生成与保存工作区')).toMatch(/lg:grid-cols-\[/)
+    expect(classForLabel(resultsHtml, '生成与保存工作区')).toMatch(/lg:flex-row/)
+    expect(resultsHtml).toContain('role="separator"')
+    expect(resultsHtml).toContain('aria-label="批次结果槽位"')
+    expect(resultsHtml).toContain('data-task-card="task-done"')
     expect(mobileWorkflowSource).toContain('sm:px-6')
     expect(mobileWorkflowSource).toContain('lg:justify-end')
     expect(mobileWorkflowSource).toContain('lg:min-w-56')
     expect(mobileWorkflowSource).not.toMatch(/(?:sm|md):grid-cols-\[minmax\(0,0\.9fr\)/)
+  })
+
+
+  it('shows generation results before the large preview on mobile', () => {
+    const start = mobileWorkflowSource.indexOf("{(phase === 'generating' || phase === 'results') && (")
+    const source = mobileWorkflowSource.slice(start, mobileWorkflowSource.indexOf('aria-label="工作流主操作"', start))
+    expect(source).toContain('order-3 min-w-0 lg:order-none')
+    expect(source).toContain('order-1 min-w-0 space-y-4 lg:order-none')
+    expect(source).toContain('aria-label="批次结果槽位"')
+    expect(mobileWorkflowSource).toContain('fixed inset-x-0 bottom-0')
   })
 
   it('offers task details for every materialized result without fabricating one for queued slots', () => {
@@ -348,14 +365,16 @@ describe('AfternoonTeaMobileWorkflow', () => {
     const resultSlotStart = mobileWorkflowSource.indexOf('aria-label="批次结果槽位"')
     const resultSlotSource = mobileWorkflowSource.slice(resultSlotStart, mobileWorkflowSource.indexOf('(props.pageError || saveStatus)', resultSlotStart))
 
-    expect(html).toContain('aria-label="查看 生成中的海报 任务详情"')
-    expect(html).toContain('aria-label="查看 完成的海报 任务详情"')
-    expect(html).toContain('aria-label="查看 失败的海报 任务详情"')
-    expect(html).toContain('aria-label="查看 图片缺失的海报 任务详情"')
-    expect(html).not.toContain('aria-label="查看 等待的海报 任务详情"')
-    expect(html).toContain('>重试<')
-    expect(resultSlotSource).toContain('props.onTaskClick(item.task)')
-    expect(resultSlotSource).toContain('h-11 w-11')
+    // 有任务的结果用画廊同款 TaskCard 展示；排队中无任务的仍为占位行
+    expect(html).toContain('data-task-card="task-running"')
+    expect(html).toContain('data-task-card="task-done"')
+    expect(html).toContain('data-task-card="task-error"')
+    expect(html).toContain('data-task-card="task-missing"')
+    expect(html).not.toContain('data-task-card="task-queued"')
+    expect(html).toContain('data-mobile-result-slot="queued"')
+    expect(html).toContain('>等待生成<')
+    expect(resultSlotSource).toContain('props.onTaskClick(slot.task!)')
+    expect(resultSlotSource).toContain('<TaskCard')
   })
 
   it('orders the review canvas before numbered poster titles and combined item metadata', () => {
@@ -516,7 +535,7 @@ describe('AfternoonTeaMobileWorkflow', () => {
 
     expect(classForLabel(html, '餐品海报工作流')).toContain('lg:grid-cols-[minmax(0,1fr)_auto]')
     expect(classForLabel(html, '餐品海报进度')).toMatch(/lg:col-start-1.*lg:row-start-1/)
-    expect(classForLabel(html, '工作流主操作')).toMatch(/sticky bottom-0.*lg:static.*lg:col-start-2.*lg:row-start-1/)
+    expect(classForLabel(html, '工作流主操作')).toMatch(/fixed inset-x-0 bottom-0.*lg:static.*lg:col-start-2.*lg:row-start-1/)
     expect(classForLabel(html, '审查工作区')).toMatch(/lg:col-span-2.*lg:row-start-2/)
     expect((mobileWorkflowSource.match(/aria-label="工作流主操作"/g) ?? [])).toHaveLength(1)
     expect(html).toContain('env(safe-area-inset-bottom)')
@@ -590,3 +609,36 @@ describe('AfternoonTeaMobileWorkflow', () => {
     expect(html).toContain('aria-label="保存当前海报图片"')
   })
 })
+
+describe('generate split pane', () => {
+  it('clamps left percent into the allowed range', () => {
+    expect(clampGenerateSplitLeftPercent(10)).toBe(30)
+    expect(clampGenerateSplitLeftPercent(90)).toBe(70)
+    expect(clampGenerateSplitLeftPercent(52)).toBe(52)
+    expect(clampGenerateSplitLeftPercent(Number.NaN)).toBe(52)
+  })
+
+  it('reads and writes the persisted split ratio', () => {
+    const memory = new Map<string, string>()
+    const storage = {
+      getItem: (key: string) => memory.get(key) ?? null,
+      setItem: (key: string, value: string) => { memory.set(key, value) },
+    }
+    expect(readGenerateSplitLeftPercent(storage)).toBe(52)
+    writeGenerateSplitLeftPercent(63, storage)
+    expect(readGenerateSplitLeftPercent(storage)).toBe(63)
+    writeGenerateSplitLeftPercent(5, storage)
+    expect(readGenerateSplitLeftPercent(storage)).toBe(30)
+  })
+
+  it('exposes a desktop-only resizable separator between preview and results', () => {
+    expect(mobileWorkflowSource).toContain('role="separator"')
+    expect(mobileWorkflowSource).toContain('aria-label="调整预览与结果区域宽度"')
+    expect(mobileWorkflowSource).toContain('cursor-col-resize')
+    expect(mobileWorkflowSource).toContain('onDoubleClick={resetGenerateSplit}')
+    expect(mobileWorkflowSource).toContain('isDesktopGenerateSplit')
+    expect(mobileWorkflowSource).toContain('data-generate-result-grid')
+    expect(mobileWorkflowSource).toContain('repeat(auto-fill,minmax(min(100%,19rem),1fr))')
+  })
+})
+

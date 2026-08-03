@@ -11,7 +11,7 @@ import type {
   TaskRecord,
 } from '../types'
 import { createInputImageFromFile, deleteImageIfUnreferenced, editOutputs, ensureImageCached, removeTask, reuseConfig, submitAfternoonTeaPosterTask, useStore } from '../store'
-import { getActiveApiProfile, normalizeSettings, validateApiProfile } from '../lib/apiProfiles'
+import { getActiveApiProfile, getImageGenerationProfiles, normalizeSettings, validateApiProfile } from '../lib/apiProfiles'
 import { getImageJobExecutionPreference } from '../lib/imageJobApi'
 import {
   AfternoonTeaBatchCoordinator,
@@ -46,6 +46,7 @@ import {
   getAfternoonTeaConversationSearchText,
   isAfternoonTeaConversationFrozen,
   reconcileAfternoonTeaConversationBatch,
+  getAfternoonTeaPosterItemTaskIds,
 } from '../lib/afternoonTeaConversations'
 import { useDocumentImagePaste } from '../lib/useDocumentImagePaste'
 import { CameraIcon, ChevronDownIcon, CloseIcon, EditIcon, ImportIcon, MessageCircleIcon, PlusIcon } from './icons'
@@ -127,15 +128,57 @@ export function deriveAfternoonTeaPosterViewItems(
   tasks: TaskRecord[],
 ): AfternoonTeaPosterViewItem[] {
   return items.map((item) => {
-    const task = item.taskId ? tasks.find((candidate) => candidate.id === item.taskId) : undefined
-    if (item.setupError) return { ...item, status: 'error', ...(task ? { task } : {}), error: item.setupError }
-    if (!item.taskId) return { ...item, status: 'queued' }
-    if (!task) return { ...item, status: 'error', error: '任务记录不存在，请重试此项' }
+    const taskIds = getAfternoonTeaPosterItemTaskIds(item)
+    const slots = taskIds.map((taskId) => {
+      const task = tasks.find((candidate) => candidate.id === taskId)
+      if (!task) {
+        return {
+          taskId,
+          status: 'error' as const,
+          error: '任务记录不存在，请重试此项',
+          profileName: undefined as string | undefined,
+        }
+      }
+      return {
+        taskId,
+        task,
+        status: task.status,
+        profileName: task.apiProfileName || task.apiProfileId || '配置',
+        error: task.status === 'error'
+          ? getAfternoonTeaPosterErrorMessage(new Error(task.error || '图片生成失败'))
+          : undefined,
+      }
+    })
+    const primaryTask = slots.find((slot) => slot.task)?.task
+
+    if (item.setupError) {
+      return {
+        ...item,
+        status: 'error',
+        ...(primaryTask ? { task: primaryTask } : {}),
+        slots,
+        error: item.setupError,
+      }
+    }
+    if (!taskIds.length) {
+      return { ...item, status: 'queued', slots: [] }
+    }
+    if (!slots.some((slot) => slot.task)) {
+      return { ...item, status: 'error', slots, error: '任务记录不存在，请重试此项' }
+    }
+
+    const hasRunning = slots.some((slot) => slot.status === 'running')
+    const allDone = slots.every((slot) => slot.status === 'done')
+    const allError = slots.every((slot) => slot.status === 'error')
+    const status = hasRunning ? 'running' : allDone ? 'done' : allError ? 'error' : slots.some((slot) => slot.status === 'done') ? 'done' : 'error'
+    const firstError = slots.find((slot) => slot.error)?.error
+
     return {
       ...item,
-      status: task.status,
-      task,
-      error: task.status === 'error' ? getAfternoonTeaPosterErrorMessage(new Error(task.error || '图片生成失败')) : undefined,
+      status,
+      ...(primaryTask ? { task: primaryTask } : {}),
+      slots,
+      error: status === 'error' ? firstError : undefined,
     }
   })
 }
@@ -157,7 +200,7 @@ export function getAfternoonTeaConversationRestoreState(
 }
 
 export function getAfternoonTeaHistoryDeletePreview(conversation: AfternoonTeaConversation, tasks: TaskRecord[]) {
-  const relatedTaskIds = new Set(conversation.posterItems.flatMap((item) => item.taskId ? [item.taskId] : []))
+  const relatedTaskIds = new Set(conversation.posterItems.flatMap((item) => getAfternoonTeaPosterItemTaskIds(item)))
   for (const task of tasks) {
     if (task.afternoonTeaBatchId === conversation.id) relatedTaskIds.add(task.id)
   }
@@ -191,14 +234,32 @@ export function createAfternoonTeaBatchCallbacks(
   now = Date.now,
 ) {
   return {
-    onTaskCreated: (batchId: string, itemId: string, taskId: string) => {
+    onTaskCreated: (batchId: string, itemId: string, taskId: string, replaceTaskId?: string) => {
       const state = getState()
       const conversation = state.afternoonTeaConversations.find((item) => item.id === batchId)
       if (!conversation) return
       state.updateAfternoonTeaConversation(batchId, {
-        posterItems: conversation.posterItems.map((item) => item.id === itemId
-          ? { id: item.id, title: item.title, prompt: item.prompt, taskId }
-          : item),
+        posterItems: conversation.posterItems.map((item) => {
+          if (item.id !== itemId) return item
+          const existingIds = getAfternoonTeaPosterItemTaskIds(item)
+          let taskIds: string[]
+          if (replaceTaskId) {
+            // 单任务重试：用新 task 替换旧 task，保留其他中转站结果
+            const replaced = existingIds.map((id) => id === replaceTaskId ? taskId : id)
+            taskIds = existingIds.includes(replaceTaskId)
+              ? replaced
+              : (existingIds.includes(taskId) ? existingIds : [...existingIds, taskId])
+          } else {
+            taskIds = existingIds.includes(taskId) ? existingIds : [...existingIds, taskId]
+          }
+          return {
+            id: item.id,
+            title: item.title,
+            prompt: item.prompt,
+            taskId: taskIds[0],
+            taskIds,
+          }
+        }),
       })
     },
     onItemSetupError: (batchId: string, itemId: string, setupError: unknown) => {
@@ -207,9 +268,18 @@ export function createAfternoonTeaBatchCallbacks(
       if (!conversation) return
       const message = getAfternoonTeaPosterErrorMessage(setupError)
       state.updateAfternoonTeaConversation(batchId, {
-        posterItems: conversation.posterItems.map((item) => item.id === itemId
-          ? { id: item.id, title: item.title, prompt: item.prompt, taskId: item.taskId, setupError: message }
-          : item),
+        posterItems: conversation.posterItems.map((item) => {
+          if (item.id !== itemId) return item
+          const taskIds = getAfternoonTeaPosterItemTaskIds(item)
+          return {
+            id: item.id,
+            title: item.title,
+            prompt: item.prompt,
+            ...(taskIds[0] ? { taskId: taskIds[0] } : {}),
+            ...(taskIds.length ? { taskIds } : {}),
+            setupError: message,
+          }
+        }),
       })
     },
     onBatchFinished: (batchId: string) => {
@@ -272,14 +342,18 @@ export function createReloadAfternoonTeaBatchRuntime(
 ): AfternoonTeaBatchRuntime | null {
   if (!conversation.sourceImageId || !sourceDataUrl || conversation.batchStartedAt == null || conversation.batchFinishedAt == null) return null
   const taskById = new Map(tasks.map((task) => [task.id, task]))
-  if (conversation.posterItems.some((item) => item.taskId && taskById.get(item.taskId)?.status === 'running')) return null
+  if (conversation.posterItems.some((item) => getAfternoonTeaPosterItemTaskIds(item).some((taskId) => taskById.get(taskId)?.status === 'running'))) return null
   const settingsSnapshot = normalizeSettings(settings)
-  const activeProfile = getActiveApiProfile(settingsSnapshot)
-  if (activeProfile.provider !== 'openai' || validateApiProfile(activeProfile)) return null
+  const validImageProfiles = getImageGenerationProfiles(settingsSnapshot)
+    .filter((profile) => profile.provider === 'openai' && !validateApiProfile(profile))
+  if (!validImageProfiles.length) {
+    const activeProfile = getActiveApiProfile(settingsSnapshot)
+    if (activeProfile.provider !== 'openai' || validateApiProfile(activeProfile)) return null
+  }
   const coordinator = new AfternoonTeaBatchCoordinator()
   coordinator.finish(conversation.id, coordinator.start(conversation.id))
   const executionMode = conversation.posterItems
-    .map((item) => item.taskId ? taskById.get(item.taskId)?.executionMode : undefined)
+    .map((item) => getAfternoonTeaPosterItemTaskIds(item).map((taskId) => taskById.get(taskId)?.executionMode)).flat()
     .find((mode): mode is ToolTaskExecutionMode => mode === 'browser' || mode === 'server') ?? 'browser'
   return {
     batchId: conversation.id,
@@ -300,8 +374,12 @@ export function isAfternoonTeaRetryDisabled(
 ) {
   if (busy || !conversation?.sourceImageId || conversation.batchStartedAt == null || conversation.batchFinishedAt == null) return true
   const taskById = new Map(tasks.map((task) => [task.id, task]))
-  if (conversation.posterItems.some((item) => item.taskId && taskById.get(item.taskId)?.status === 'running')) return true
-  const profile = getActiveApiProfile(normalizeSettings(settings))
+  if (conversation.posterItems.some((item) => getAfternoonTeaPosterItemTaskIds(item).some((taskId) => taskById.get(taskId)?.status === 'running'))) return true
+  const normalized = normalizeSettings(settings)
+  const validImageProfiles = getImageGenerationProfiles(normalized)
+    .filter((profile) => profile.provider === 'openai' && !validateApiProfile(profile))
+  if (validImageProfiles.length) return false
+  const profile = getActiveApiProfile(normalized)
   return profile.provider !== 'openai' || Boolean(validateApiProfile(profile))
 }
 
@@ -547,7 +625,7 @@ export function DishAnalysisFormView(props: DishAnalysisFormViewProps) {
       <div className={`${props.configured ? 'hidden sm:flex' : 'flex'} mb-4 flex-wrap items-start justify-between gap-3 sm:mb-6`}>
         <div className="hidden sm:block">
           <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">餐品解析</h2>
-          <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">使用当前 API 配置中的语义理解/多模态模型</p>
+          <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">使用当前 API 配置中的语义理解/多模态模型（单接口；生图并行组不影响解析）</p>
         </div>
         {!props.configured && (
           <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-300">
@@ -1425,10 +1503,14 @@ export default function ToolsWorkspace() {
     setBatchPageError('')
     try {
       const settingsSnapshot = normalizeSettings(state.settings)
-      const activeProfile = getActiveApiProfile(settingsSnapshot)
-      if (activeProfile.provider !== 'openai') throw new Error('下午茶海报目前仅支持 OpenAI 图片模型配置')
-      const profileError = validateApiProfile(activeProfile)
-      if (profileError) throw new Error(`请先完善图片 API 配置：${profileError}`)
+      const imageProfiles = getImageGenerationProfiles(settingsSnapshot).filter((profile) => profile.provider === 'openai')
+      const validImageProfiles = imageProfiles.filter((profile) => !validateApiProfile(profile))
+      if (!validImageProfiles.length) {
+        const activeProfile = getActiveApiProfile(settingsSnapshot)
+        if (activeProfile.provider !== 'openai') throw new Error('下午茶海报目前仅支持 OpenAI 图片模型配置')
+        const profileError = validateApiProfile(activeProfile)
+        if (profileError) throw new Error(`请先完善图片 API 配置：${profileError}`)
+      }
       let executionMode: ToolTaskExecutionMode | undefined = browserFallbackBatchIdsRef.current.delete(conversationId)
         ? 'browser'
         : undefined
@@ -1507,7 +1589,7 @@ export default function ToolsWorkspace() {
     }
   }
 
-  const retryItem = async (itemId: string) => {
+  const retryItem = async (itemId: string, taskId?: string) => {
     if (batchBusy || !activeConversation || isAfternoonTeaRetryDisabled(false, activeConversation, settings, tasks)) return
     if (!imageDataUrl) {
       setBatchPageError('原图已不可用，请重新上传餐品图片')
@@ -1515,6 +1597,20 @@ export default function ToolsWorkspace() {
     }
     const item = activeConversation.posterItems.find((candidate) => candidate.id === itemId)
     if (!item) return
+    const retrySourceTask = taskId
+      ? tasks.find((candidate) => candidate.id === taskId)
+      : undefined
+    if (taskId && !retrySourceTask) {
+      setBatchPageError('找不到要重试的任务记录')
+      return
+    }
+    // 点某张任务卡重试时，只打该卡对应的中转站
+    const retryProfileId = retrySourceTask?.apiProfileId
+    const retryGenerationGroupId = retrySourceTask?.generationGroupId
+    if (taskId && !retryProfileId) {
+      setBatchPageError('该任务缺少 API 配置信息，无法单独重试')
+      return
+    }
     const retryConversationId = activeConversation.id
     batchStartingConversationIdsRef.current.add(retryConversationId)
     const operationId = `${retryConversationId}-retry-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -1558,10 +1654,13 @@ export default function ToolsWorkspace() {
         settingsSnapshot: runtime.settingsSnapshot,
         paramsSnapshot: runtime.paramsSnapshot,
         inputImage: runtime.inputImage,
-        executionMode: runtime.executionMode,
+        executionMode: runtime.executionMode ?? retrySourceTask?.executionMode,
         submit: submitAfternoonTeaPosterTask,
         onTaskCreated: batchCallbacks.onTaskCreated,
         onItemSetupError: batchCallbacks.onItemSetupError,
+        ...(taskId ? { retryTaskId: taskId } : {}),
+        ...(retryProfileId ? { retryProfileId } : {}),
+        ...(retryGenerationGroupId ? { retryGenerationGroupId } : {}),
       })
     } catch (err) {
       if (mountedRef.current && useStore.getState().activeAfternoonTeaConversationId === retryConversationId) {
@@ -1771,12 +1870,12 @@ export default function ToolsWorkspace() {
   }, imageLoading || loading || batchBusy || Boolean(confirmDialog))
 
   return (
-    <main className="safe-area-x mx-auto max-w-7xl pb-12">
+    <main className="safe-area-x mx-auto max-w-[100rem] pb-[calc(6.5rem+env(safe-area-inset-bottom))] sm:pb-12">
       <div className="grid min-h-0 sm:min-h-[calc(100vh-8rem)] sm:grid-cols-[180px_minmax(0,1fr)]">
-        <nav className="relative flex h-14 items-center border-b border-gray-200 dark:border-white/[0.08] sm:block sm:h-auto sm:border-b-0 sm:border-r sm:py-6" aria-label="工具列表">
+        <nav className="sticky top-[calc(var(--safe-area-top,0px)+3.5rem)] z-30 flex h-12 items-center border-b border-gray-200 bg-white/90 backdrop-blur dark:border-white/[0.08] dark:bg-gray-950/90 sm:static sm:block sm:h-auto sm:border-b-0 sm:border-r sm:bg-transparent sm:py-6 sm:backdrop-blur-none dark:sm:bg-transparent" aria-label="工具列表">
           <div className="hidden text-xs font-medium text-gray-400 sm:block sm:px-3">工具</div>
-          <div className="relative flex min-w-0 flex-1 items-center sm:mx-3 sm:mt-2 sm:block">
-            <div aria-current="page" className="min-w-0 flex-1 truncate py-2 text-left text-base font-semibold text-gray-900 dark:text-gray-100 sm:w-full sm:whitespace-nowrap sm:border-l-2 sm:border-blue-500 sm:bg-blue-50/70 sm:px-3 sm:pr-[68px] sm:text-sm sm:font-medium sm:text-blue-700 sm:dark:bg-blue-500/10 sm:dark:text-blue-300">
+          <div className="relative flex min-w-0 flex-1 items-center px-1 sm:mx-3 sm:mt-2 sm:block sm:px-0">
+            <div aria-current="page" className="min-w-0 flex-1 truncate py-1.5 text-left text-sm font-semibold text-gray-900 dark:text-gray-100 sm:w-full sm:whitespace-nowrap sm:border-l-2 sm:border-blue-500 sm:bg-blue-50/70 sm:px-3 sm:py-2 sm:pr-[68px] sm:text-sm sm:font-medium sm:text-blue-700 sm:dark:bg-blue-500/10 sm:dark:text-blue-300">
               餐品解析
             </div>
             <div className="relative z-10 ml-auto flex shrink-0 items-center gap-0 sm:absolute sm:right-1 sm:top-1/2 sm:ml-0 sm:-translate-y-1/2">
@@ -1819,7 +1918,7 @@ export default function ToolsWorkspace() {
             </div>
           </div>
         </nav>
-        <div className="min-w-0">
+        <div className="min-w-0 overflow-x-hidden">
           <AfternoonTeaMobileWorkflow
             key={activeConversation?.id ?? 'no-afternoon-tea-conversation'}
             configured={Boolean(analysisProfile)}
@@ -1872,8 +1971,11 @@ export default function ToolsWorkspace() {
               updateItemTags(activeConversation.id, index, tags)
             }}
             onConfirmAndGenerate={confirmAndGenerate}
-            onRetry={(itemId) => void retryItem(itemId)}
+            onRetry={(itemId, taskId) => void retryItem(itemId, taskId)}
             onTaskClick={taskActions.onClick}
+            onTaskDelete={taskActions.onDelete}
+            onTaskReuse={taskActions.onReuse}
+            onTaskEditOutputs={taskActions.onEditOutputs}
           />
         </div>
       </div>

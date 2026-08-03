@@ -147,7 +147,7 @@ function getActionButtonHtml(html: string, label: string) {
 }
 
 describe('TaskCard elapsed time', () => {
-  it('shows the final elapsed time first and hides the API channel', () => {
+  it('shows the final elapsed time first, then API channel and model', () => {
     const paramBarHtml = getParamBarHtml(renderTask({
       apiProfileName: '测试渠道',
       apiModel: 'custom-model',
@@ -155,8 +155,9 @@ describe('TaskCard elapsed time', () => {
 
     expect(paramBarHtml).toContain('耗时')
     expect(paramBarHtml).toContain('01:05')
-    expect(paramBarHtml).not.toContain('测试渠道')
-    expect(paramBarHtml.indexOf('耗时')).toBeLessThan(paramBarHtml.indexOf('custom-model'))
+    expect(paramBarHtml).toContain('测试渠道')
+    expect(paramBarHtml.indexOf('耗时')).toBeLessThan(paramBarHtml.indexOf('测试渠道'))
+    expect(paramBarHtml.indexOf('测试渠道')).toBeLessThan(paramBarHtml.indexOf('custom-model'))
   })
 
   it('does not show elapsed time in the parameter bar while running', () => {

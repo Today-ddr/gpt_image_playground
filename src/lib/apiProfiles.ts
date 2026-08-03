@@ -511,6 +511,79 @@ function validateImportedProfileRecord(input: unknown) {
   }
 }
 
+
+/** 解析参与并行生图的 profile id：保序、去重，至少回退到 activeProfileId */
+export function resolveImageGenerationProfileIds(
+  settings: Pick<AppSettings, 'profiles' | 'activeProfileId'> & { imageGenerationProfileIds?: string[] | null },
+  options: { requireExisting?: boolean } = {},
+): string[] {
+  const profiles = Array.isArray(settings.profiles) ? settings.profiles : []
+  const profileIds = profiles.map((profile) => profile.id)
+  const profileIdSet = new Set(profileIds)
+  const activeProfileId = typeof settings.activeProfileId === 'string' && profileIdSet.has(settings.activeProfileId)
+    ? settings.activeProfileId
+    : (profileIds[0] ?? '')
+  const rawIds = Array.isArray(settings.imageGenerationProfileIds) ? settings.imageGenerationProfileIds : null
+  const resolved: string[] = []
+  const seen = new Set<string>()
+
+  const candidates = rawIds && rawIds.length
+    ? rawIds
+    : (activeProfileId ? [activeProfileId] : profileIds.slice(0, 1))
+
+  for (const candidate of candidates) {
+    if (typeof candidate !== 'string' || !candidate.trim()) continue
+    const id = candidate.trim()
+    if (seen.has(id)) continue
+    if (options.requireExisting !== false && !profileIdSet.has(id)) continue
+    seen.add(id)
+    resolved.push(id)
+  }
+
+  if (!resolved.length && activeProfileId) resolved.push(activeProfileId)
+  if (!resolved.length && profileIds.length) resolved.push(profileIds[0])
+  return resolved
+}
+
+/** 返回参与并行生图的完整 profile 列表（保序、至少 1 个） */
+export function getImageGenerationProfiles(settings: Partial<AppSettings> | unknown): ApiProfile[] {
+  const normalized = normalizeSettings(settings)
+  const ids = resolveImageGenerationProfileIds(normalized)
+  const byId = new Map(normalized.profiles.map((profile) => [profile.id, profile]))
+  const activeOverlaid = getActiveApiProfile(settings)
+  const profiles = ids
+    .map((id) => {
+      if (id === activeOverlaid.id) return activeOverlaid
+      return byId.get(id)
+    })
+    .filter((profile): profile is ApiProfile => Boolean(profile))
+  if (profiles.length) return profiles
+  return [activeOverlaid]
+}
+
+/**
+ * 取生图并行配置的「原始」profile（尽量不经过 normalize 填默认值），
+ * 用于提交前校验（例如空 model 应报缺少模型 ID）。
+ */
+export function getRawImageGenerationProfiles(settings: Partial<AppSettings> | unknown): ApiProfile[] {
+  const record = settings && typeof settings === 'object' ? settings as Partial<AppSettings> : {}
+  const normalized = normalizeSettings(settings)
+  const ids = resolveImageGenerationProfileIds(normalized)
+  const rawProfiles = Array.isArray(record.profiles) ? record.profiles : normalized.profiles
+  const byId = new Map<string, ApiProfile>()
+  for (const profile of rawProfiles) {
+    if (profile && typeof profile === 'object' && typeof (profile as ApiProfile).id === 'string') {
+      byId.set((profile as ApiProfile).id, profile as ApiProfile)
+    }
+  }
+  for (const profile of normalized.profiles) {
+    if (!byId.has(profile.id)) byId.set(profile.id, profile)
+  }
+  const profiles = ids.map((id) => byId.get(id)).filter((profile): profile is ApiProfile => Boolean(profile))
+  if (profiles.length) return profiles
+  return [getActiveApiProfile(settings)]
+}
+
 export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSettings {
   const record = input && typeof input === 'object' ? input as Record<string, unknown> : {}
   const customProviders = normalizeCustomProviderDefinitions(record.customProviders)
@@ -544,6 +617,15 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     ? record.agentImageProfileId
     : active.id
 
+  const rawImageGenerationProfileIds = Array.isArray(record.imageGenerationProfileIds)
+    ? record.imageGenerationProfileIds
+    : undefined
+  const imageGenerationProfileIds = resolveImageGenerationProfileIds({
+    profiles,
+    activeProfileId,
+    imageGenerationProfileIds: rawImageGenerationProfileIds,
+  })
+
   return {
     baseUrl: active.baseUrl,
     apiKey: active.apiKey,
@@ -574,6 +656,7 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     agentImageProfileId,
     profiles,
     activeProfileId,
+    imageGenerationProfileIds,
   }
 }
 

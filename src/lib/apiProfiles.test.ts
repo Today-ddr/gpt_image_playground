@@ -11,8 +11,10 @@ import {
   findEquivalentApiProfile,
   importCustomProviderDefinitionFromJson,
   importCustomProviderSettingsFromJson,
+  getImageGenerationProfiles,
   mergeImportedSettings,
   normalizeSettings,
+  resolveImageGenerationProfileIds,
   switchApiProfileProvider,
   validateApiProfile,
 } from './apiProfiles'
@@ -744,5 +746,43 @@ describe('custom providers', () => {
     expect(restoredProfile.baseUrl).toBe('https://api.compat.example.com/v1')
     expect(restoredProfile.model).toBe('custom-openai-model')
     expect(restoredProfile.apiProxy).toBe(false)
+  })
+})
+
+describe('image generation parallel profiles', () => {
+  it('defaults imageGenerationProfileIds to the active profile', () => {
+    const settings = normalizeSettings({})
+    expect(settings.imageGenerationProfileIds).toEqual([settings.activeProfileId])
+    expect(getImageGenerationProfiles(settings)).toHaveLength(1)
+  })
+
+  it('filters missing ids and falls back to active when empty', () => {
+    const first = createDefaultOpenAIProfile({ id: 'first', name: 'A', apiKey: 'k1' })
+    const second = createDefaultOpenAIProfile({ id: 'second', name: 'B', apiKey: 'k2' })
+    const settings = normalizeSettings({
+      profiles: [first, second],
+      activeProfileId: 'first',
+      imageGenerationProfileIds: ['missing', 'second', 'second', 'first'],
+    })
+    expect(settings.imageGenerationProfileIds).toEqual(['second', 'first'])
+
+    const emptied = normalizeSettings({
+      profiles: [first, second],
+      activeProfileId: 'second',
+      imageGenerationProfileIds: [],
+    })
+    expect(emptied.imageGenerationProfileIds).toEqual(['second'])
+  })
+
+  it('drops deleted profile ids from the parallel group', () => {
+    const first = createDefaultOpenAIProfile({ id: 'first', name: 'A', apiKey: 'k1' })
+    const second = createDefaultOpenAIProfile({ id: 'second', name: 'B', apiKey: 'k2' })
+    const afterDelete = normalizeSettings({
+      profiles: [first],
+      activeProfileId: 'first',
+      imageGenerationProfileIds: ['first', 'second'],
+    })
+    expect(afterDelete.imageGenerationProfileIds).toEqual(['first'])
+    expect(resolveImageGenerationProfileIds(afterDelete)).toEqual(['first'])
   })
 })

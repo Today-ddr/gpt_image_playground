@@ -54,16 +54,44 @@ function normalizePosterItems(value: unknown): AfternoonTeaPosterBatchItem[] {
     if (!id || itemIds.has(id) || !title || !prompt) return []
     itemIds.add(id)
 
-    const taskId = normalizeString(record.taskId)
+    const rawTaskIds = Array.isArray(record.taskIds)
+      ? record.taskIds.map(normalizeString).filter(Boolean)
+      : []
+    const taskIdFromField = normalizeString(record.taskId)
+    const taskIds: string[] = []
+    const seenTaskIds = new Set<string>()
+    for (const candidate of rawTaskIds) {
+      if (!candidate || seenTaskIds.has(candidate)) continue
+      seenTaskIds.add(candidate)
+      taskIds.push(candidate)
+    }
+    const taskId = taskIdFromField || taskIds[0] || ''
+    if (taskId && taskIds.length && !seenTaskIds.has(taskId)) {
+      taskIds.unshift(taskId)
+    }
     const setupError = normalizeString(record.setupError)
     return [{
       id,
       title,
       prompt,
       ...(taskId ? { taskId } : {}),
+      ...(taskIds.length ? { taskIds } : {}),
       ...(setupError ? { setupError } : {}),
     }]
   })
+}
+
+
+/** 收集海报条目关联的全部任务 id（兼容旧单 taskId） */
+export function getAfternoonTeaPosterItemTaskIds(item: Pick<AfternoonTeaPosterBatchItem, 'taskId' | 'taskIds'>): string[] {
+  const ids: string[] = []
+  const seen = new Set<string>()
+  for (const candidate of [...(item.taskIds ?? []), ...(item.taskId ? [item.taskId] : [])]) {
+    if (!candidate || seen.has(candidate)) continue
+    seen.add(candidate)
+    ids.push(candidate)
+  }
+  return ids
 }
 
 export function normalizeAfternoonTeaConversations(value: unknown, now = Date.now()): AfternoonTeaConversation[] {
@@ -262,23 +290,30 @@ export function reconcileAfternoonTeaConversationBatch(
 
   const tasksById = new Map(tasks.map((task) => [task.id, task]))
   const posterItems = options.interruptUnclaimed
-    ? conversation.posterItems.map((item) => item.taskId || item.setupError
-      ? item
-      : { ...item, setupError: '上次批次已中断' })
+    ? conversation.posterItems.map((item) => {
+      const claimed = getAfternoonTeaPosterItemTaskIds(item).length > 0 || Boolean(item.setupError)
+      return claimed ? item : { ...item, setupError: '上次批次已中断' }
+    })
     : conversation.posterItems
   const allTerminal = posterItems.every((item) => {
     if (item.setupError) return true
-    if (!item.taskId) return false
-    const task = tasksById.get(item.taskId)
-    return !task || task.status === 'done' || task.status === 'error'
+    const taskIds = getAfternoonTeaPosterItemTaskIds(item)
+    if (!taskIds.length) return false
+    return taskIds.every((taskId) => {
+      const task = tasksById.get(taskId)
+      return !task || task.status === 'done' || task.status === 'error'
+    })
   })
   if (!allTerminal) {
     return posterItems === conversation.posterItems ? conversation : { ...conversation, posterItems }
   }
 
   const finishedAt = posterItems.reduce((latest, item) => {
-    const taskFinishedAt = item.taskId ? tasksById.get(item.taskId)?.finishedAt : null
-    return taskFinishedAt == null ? latest : Math.max(latest, taskFinishedAt)
+    const taskFinishedAts = getAfternoonTeaPosterItemTaskIds(item)
+      .map((taskId) => tasksById.get(taskId)?.finishedAt)
+      .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+    if (!taskFinishedAts.length) return latest
+    return Math.max(latest, ...taskFinishedAts)
   }, 0) || now
   return {
     ...conversation,

@@ -49,6 +49,9 @@ export interface AfternoonTeaPosterSubmitOptions {
   prompt: string
   executionMode?: 'browser' | 'server'
   onTaskCreated: (taskId: string) => void
+  /** 仅向指定 profile 提交（单任务重试） */
+  profileIds?: string[]
+  generationGroupId?: string
 }
 
 export type AfternoonTeaPosterSubmit = (
@@ -78,8 +81,12 @@ export interface RetryAfternoonTeaPosterItemOptions {
   inputImage: InputImage
   executionMode?: 'browser' | 'server'
   submit: AfternoonTeaPosterSubmit
-  onTaskCreated?: (batchId: string, itemId: string, taskId: string) => void
+  onTaskCreated?: (batchId: string, itemId: string, taskId: string, replaceTaskId?: string) => void
   onItemSetupError?: (batchId: string, itemId: string, error: unknown) => void
+  /** 仅重试该任务（及其原 profile），不 fan-out 其他中转站 */
+  retryTaskId?: string
+  retryProfileId?: string
+  retryGenerationGroupId?: string
 }
 
 export class AfternoonTeaBatchCoordinator {
@@ -234,6 +241,9 @@ export async function retryAfternoonTeaPosterItem({
   submit,
   onTaskCreated,
   onItemSetupError,
+  retryTaskId,
+  retryProfileId,
+  retryGenerationGroupId,
 }: RetryAfternoonTeaPosterItemOptions) {
   coordinator.beginRetry(batchId)
   try {
@@ -245,8 +255,12 @@ export async function retryAfternoonTeaPosterItem({
       title: item.title,
       prompt: item.prompt,
       executionMode,
+      ...(retryProfileId ? { profileIds: [retryProfileId] } : {}),
+      ...(retryGenerationGroupId ? { generationGroupId: retryGenerationGroupId } : {}),
       onTaskCreated: (taskId) => {
-        if (onTaskCreated && coordinator.accepts(batchId)) onTaskCreated(batchId, item.id, taskId)
+        if (onTaskCreated && coordinator.accepts(batchId)) {
+          onTaskCreated(batchId, item.id, taskId, retryTaskId)
+        }
       },
     })
   } catch (error) {

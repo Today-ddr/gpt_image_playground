@@ -618,10 +618,10 @@ describe('dish analysis coordination', () => {
   it('holds one global operation lease across source setup, batch run, and retry', () => {
     const startSource = workspaceSource.slice(
       workspaceSource.indexOf('const startBatch = async () => {'),
-      workspaceSource.indexOf('const retryItem = async (itemId: string) => {'),
+      workspaceSource.indexOf('const retryItem = async (itemId: string, taskId?: string) => {'),
     )
     const retrySource = workspaceSource.slice(
-      workspaceSource.indexOf('const retryItem = async (itemId: string) => {'),
+      workspaceSource.indexOf('const retryItem = async (itemId: string, taskId?: string) => {'),
       workspaceSource.indexOf('const updateUserPrompt = (conversationId: string | null, value: string) => {'),
     )
     expect(workspaceSource).toContain('const afternoonTeaBatchOperationId = useStore((state) => state.afternoonTeaBatchOperationId)')
@@ -687,7 +687,7 @@ describe('dish analysis coordination', () => {
   it('starts a batch from the latest Zustand conversation after mobile drafts flush', () => {
     const startSource = workspaceSource.slice(
       workspaceSource.indexOf('const startBatch = async () => {'),
-      workspaceSource.indexOf('const retryItem = async (itemId: string) => {'),
+      workspaceSource.indexOf('const retryItem = async (itemId: string, taskId?: string) => {'),
     )
     const stateReadIndex = startSource.indexOf('const state = useStore.getState()')
     const conversationReadIndex = startSource.indexOf('state.afternoonTeaConversations.find')
