@@ -36,6 +36,7 @@ describe('analyzeDish', () => {
     const body = JSON.parse(String(init.body))
     expect(body).toEqual({
       model: 'vision-model',
+      thinking: { type: 'disabled' },
       messages: [
         { role: 'system', content: '你是餐品分析助手' },
         {

@@ -57,6 +57,8 @@ export async function analyzeDish(opts: AnalyzeDishOptions): Promise<string> {
       },
       body: JSON.stringify({
         model: profile.understandingModel.trim(),
+        // 订单解析需要低延迟；DeepSeek 等模型默认开启 thinking，显式关闭以加速
+        thinking: { type: 'disabled' },
         messages: [
           { role: 'system', content: opts.systemPrompt.trim() },
           {
