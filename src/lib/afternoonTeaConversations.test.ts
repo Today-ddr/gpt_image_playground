@@ -6,6 +6,7 @@ import {
   canReuseRecentEmptyAfternoonTeaConversation,
   collectAfternoonTeaConversationSourceImageIds,
   createAfternoonTeaItemTitleRegionsPatch,
+  createAfternoonTeaSourceImagePatch,
   createAfternoonTeaOrderItemNamePatch,
   createAfternoonTeaOrderItemTagsPatch,
   createAfternoonTeaOrderTitlePatch,
@@ -285,6 +286,59 @@ describe('afternoon tea conversations', () => {
     expect(patch?.posterItems[0]).toMatchObject({ id: 'poster-a', title: '午后茶歇' })
     expect(patch?.posterItems[0].prompt).toContain('"left": 10')
     expect(createAfternoonTeaItemTitleRegionsPatch({ ...editable, batchStartedAt: 100 }, nextRegions)).toBeNull()
+  })
+
+  it('keeps parsed order results when attaching or replacing a source image', () => {
+    const parsed = conversation({
+      sourceImageId: null,
+      sourceImageName: '',
+      itemTitleRegions: [{ x: 0.1, y: 0.2, width: 0.3, height: 0.2 }],
+      posterItems: [{ id: 'poster-a', title: '午后茶歇', prompt: '旧位置' }],
+    })
+    const attached = createAfternoonTeaSourceImagePatch(parsed, 'source-b', 'later.png')
+
+    expect(attached).toMatchObject({
+      sourceImageId: 'source-b',
+      sourceImageName: 'later.png',
+    })
+    expect(attached?.itemTitleRegions).toEqual(createDefaultAfternoonTeaItemTitleRegions(1))
+    expect(attached?.posterItems?.[0]).toMatchObject({ id: 'poster-a', title: '午后茶歇' })
+    expect(attached?.posterItems?.[0].prompt).toContain('"left": 29')
+    expect(createAfternoonTeaSourceImagePatch({ ...parsed, batchStartedAt: 100 }, 'source-b', 'later.png')).toBeNull()
+  })
+
+  it('clears only the image fields when a parsed conversation loses its source image', () => {
+    const parsed = conversation({
+      sourceImageId: 'source-a',
+      sourceImageName: 'tea.png',
+      itemTitleRegions: [{ x: 0.1, y: 0.2, width: 0.3, height: 0.2 }],
+    })
+    const removed = createAfternoonTeaSourceImagePatch(parsed, null, '')
+
+    expect(removed).toEqual({
+      sourceImageId: null,
+      sourceImageName: '',
+      itemTitleRegions: [],
+    })
+    expect(removed).not.toHaveProperty('posterItems')
+    expect(removed).not.toHaveProperty('orderResult')
+  })
+
+  it('does not invent title regions when attaching an image before analysis', () => {
+    const unparsed = conversation({
+      sourceImageId: null,
+      sourceImageName: '',
+      orderResult: null,
+      itemTitleRegions: [],
+      posterItems: [],
+    })
+    const attached = createAfternoonTeaSourceImagePatch(unparsed, 'source-b', 'later.png')
+
+    expect(attached).toEqual({
+      sourceImageId: 'source-b',
+      sourceImageName: 'later.png',
+      itemTitleRegions: [],
+    })
   })
 
   it('edits one item display name without changing tags or frozen batches', () => {

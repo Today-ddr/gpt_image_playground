@@ -213,7 +213,7 @@ describe('AfternoonTeaItemPlacement', () => {
       onChange={() => {}}
     />)
 
-    expect(html).toContain('请先上传原图')
+    expect(html).toContain('解析已完成，请粘贴或上传餐品图片')
     expect(html).not.toContain('data-item-title-box=')
   })
 })

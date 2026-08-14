@@ -235,7 +235,7 @@ export function AfternoonTeaItemPlacement(props: AfternoonTeaItemPlacementProps)
     return (
       <section className="min-w-0 overflow-hidden rounded-md border border-gray-200 bg-white dark:border-white/[0.08] dark:bg-white/[0.03]" aria-label="订单商品位置">
         <div className="border-b border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 dark:border-white/[0.08] dark:text-gray-200">订单商品位置</div>
-        <div className="flex aspect-[4/3] items-center justify-center px-4 text-center text-sm text-amber-700 dark:text-amber-300">请先上传原图</div>
+        <div className="flex aspect-[4/3] items-center justify-center px-4 text-center text-sm text-amber-700 dark:text-amber-300">解析已完成，请粘贴或上传餐品图片</div>
       </section>
     )
   }

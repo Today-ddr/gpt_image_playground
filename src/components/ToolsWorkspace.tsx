@@ -39,6 +39,7 @@ import {
 } from '../lib/dishAnalysisPrompts'
 import {
   createAfternoonTeaItemTitleRegionsPatch,
+  createAfternoonTeaSourceImagePatch,
   createAfternoonTeaOrderItemNamePatch,
   createAfternoonTeaOrderItemTagsPatch,
   createAfternoonTeaOrderTitlePatch,
@@ -1264,7 +1265,6 @@ export default function ToolsWorkspace() {
       setError(err instanceof Error ? err.message : '读取餐品图片失败')
       return
     }
-    coordinatorRef.current.cancelRequest()
     const conversation = ensureEditableConversation()
     if (!conversation) return
     const conversationId = conversation.id
@@ -1299,12 +1299,8 @@ export default function ToolsWorkspace() {
       }
 
       const previousSourceImageId = latestConversation.sourceImageId
-      resetParsedResult(conversationId)
-      updateAfternoonTeaConversation(conversationId, {
-        sourceImageId: image.id,
-        sourceImageName: file.name,
-        itemTitleRegions: [],
-      })
+      const sourceImagePatch = createAfternoonTeaSourceImagePatch(latestConversation, image.id, file.name)
+      if (sourceImagePatch) updateAfternoonTeaConversation(conversationId, sourceImagePatch)
       if (previousSourceImageId && previousSourceImageId !== image.id) {
         void deleteImageIfUnreferenced(previousSourceImageId)
       }
@@ -1320,7 +1316,6 @@ export default function ToolsWorkspace() {
   }
 
   const removeImage = () => {
-    coordinatorRef.current.cancelRequest()
     const conversation = ensureEditableConversation()
     coordinatorRef.current.invalidateImageSelection()
     cachedSourceImageRef.current = null
@@ -1330,12 +1325,8 @@ export default function ToolsWorkspace() {
     setImageMissing(false)
     if (!conversation) return
     const previousSourceImageId = conversation.sourceImageId
-    resetParsedResult(conversation.id)
-    updateAfternoonTeaConversation(conversation.id, {
-      sourceImageId: null,
-      sourceImageName: '',
-      itemTitleRegions: [],
-    })
+    const sourceImagePatch = createAfternoonTeaSourceImagePatch(conversation, null, '')
+    if (sourceImagePatch) updateAfternoonTeaConversation(conversation.id, sourceImagePatch)
     if (previousSourceImageId) void deleteImageIfUnreferenced(previousSourceImageId)
   }
 
@@ -1346,7 +1337,6 @@ export default function ToolsWorkspace() {
     const conversationId = conversation.id
     const request = coordinatorRef.current.beginRequest()
     if (!request) return
-    const analysisRevision = coordinatorRef.current.beginImageSelection()
     resetParsedResult(conversationId)
     setLoading(true)
     setError('')
@@ -1371,7 +1361,6 @@ export default function ToolsWorkspace() {
       const activeAfternoonTeaConversationId = useStore.getState().activeAfternoonTeaConversationId
       return coordinatorRef.current.isCurrentRequest(request)
         && !request.signal.aborted
-        && coordinatorRef.current.isCurrentImageSelection(analysisRevision)
         && activeAfternoonTeaConversationId === conversationId
     }
 
@@ -1388,10 +1377,10 @@ export default function ToolsWorkspace() {
       if (!isCurrentAnalysisRequest()) return
       const latestConversation = useStore.getState().afternoonTeaConversations.find((item) => item.id === conversationId)
       if (!latestConversation) return
-      const sourceImageIdBeforePrompt = latestConversation.sourceImageId
+      const latestSourceImageId = latestConversation.sourceImageId
       const itemTitleRegions = resolveAfternoonTeaItemTitleRegionsForImage(
         requestSourceImageId,
-        sourceImageIdBeforePrompt,
+        latestSourceImageId,
         requestItemTitleRegions,
         result.items.length,
       )
@@ -1405,16 +1394,15 @@ export default function ToolsWorkspace() {
         ? cachedSourceImageRef.current
         : null
       let createdSourceImageId: string | null = null
-      const sourceImageId = requestImageDataUrl
-        ? cachedSource?.id
-          ?? latestConversation.sourceImageId
-          ?? (createdSourceImageId = await storeImage(requestImageDataUrl, 'upload'))
-        : latestConversation.sourceImageId
+      const sourceImageId = latestSourceImageId
+        ?? (requestImageDataUrl
+          ? cachedSource?.id ?? (createdSourceImageId = await storeImage(requestImageDataUrl, 'upload'))
+          : null)
       if (!isCurrentAnalysisRequest()) {
         if (createdSourceImageId) void deleteImageIfUnreferenced(createdSourceImageId)
         return
       }
-      if (sourceImageId && requestImageDataUrl) {
+      if (sourceImageId && requestImageDataUrl && latestSourceImageId === requestSourceImageId) {
         cachedSourceImageRef.current = { dataUrl: requestImageDataUrl, id: sourceImageId }
       }
       analysisPromptSnapshotsRef.current = {
@@ -1428,7 +1416,7 @@ export default function ToolsWorkspace() {
       updateAfternoonTeaConversation(conversationId, {
         title: latestConversation.title === '新下午茶会话' ? result.titles[0] : latestConversation.title,
         sourceImageId,
-        sourceImageName: requestImageName || latestConversation.sourceImageName,
+        sourceImageName: latestConversation.sourceImageName || requestImageName,
         orderText: requestUserPrompt,
         titleCount: requestTitleCount,
         itemTitleRegions,
@@ -1867,7 +1855,7 @@ export default function ToolsWorkspace() {
     if (!file) return false
     void handleImageChange(file)
     return true
-  }, imageLoading || loading || batchBusy || Boolean(confirmDialog))
+  }, imageLoading || batchBusy || Boolean(confirmDialog))
 
   return (
     <main className="safe-area-x mx-auto max-w-[100rem] pb-[calc(6.5rem+env(safe-area-inset-bottom))] sm:pb-12">

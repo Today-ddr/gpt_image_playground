@@ -394,6 +394,41 @@ describe('AfternoonTeaMobileWorkflow', () => {
     expect(html).not.toContain('>餐品标签<')
   })
 
+  it('lets review attach a source image after text-only analysis', () => {
+    const html = renderWorkflow({ imageDataUrl: '' })
+    const placementStart = html.indexOf('aria-label="餐品摆放"')
+    const placementEnd = html.indexOf('aria-label="海报标题"', placementStart)
+    const placementArea = html.slice(placementStart, placementEnd)
+
+    expect(html).toContain('解析已完成，请粘贴或上传餐品图片')
+    expect(placementArea).toContain('aria-label="拍照"')
+    expect(placementArea).toContain('aria-label="选择照片"')
+    expect(placementArea).toContain('Ctrl/⌘ + V 粘贴')
+    expect(html).toContain('生成海报需要一张餐品图片')
+    expect(html).not.toContain('aria-label="移除餐品图片"')
+  })
+
+  it('keeps image pickers available while analysis is running', () => {
+    const html = renderWorkflow({
+      orderResult: null,
+      analysisStatus: 'running',
+      busy: true,
+      imageDataUrl: '',
+      itemTitleRegions: [],
+    })
+    const imageStart = html.indexOf('aria-label="餐品图片"')
+    const imageEnd = html.indexOf('aria-label="菜单内容"', imageStart)
+    const imageArea = html.slice(imageStart, imageEnd)
+
+    expect(html).toContain('可先解析菜单，稍后再贴图')
+    expect(imageArea).toContain('aria-label="拍照"')
+    expect(imageArea).toContain('aria-label="选择照片"')
+    expect(imageArea).not.toContain('pointer-events-none')
+    const menuInputIndex = html.indexOf('aria-label="菜单输入"')
+    const menuInputTag = html.slice(html.lastIndexOf('<textarea', menuInputIndex), html.indexOf('>', menuInputIndex) + 1)
+    expect(menuInputTag).toContain('disabled')
+  })
+
   it('shows item tags inline and exposes one editor for both name and tags', () => {
     const html = renderWorkflow()
     const itemSectionStart = mobileWorkflowSource.indexOf('<section aria-label="餐品与标签">')
@@ -641,4 +676,3 @@ describe('generate split pane', () => {
     expect(mobileWorkflowSource).toContain('repeat(auto-fill,minmax(min(100%,19rem),1fr))')
   })
 })
-

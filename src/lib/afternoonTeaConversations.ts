@@ -1,6 +1,9 @@
 import type { AfternoonTeaConversation, AfternoonTeaOrderResult, AfternoonTeaPosterBatchItem, TaskRecord, AfternoonTeaTitleRegion } from '../types'
 import { DEFAULT_DISH_TITLE_COUNT } from './dishAnalysisPrompts'
-import { normalizeAfternoonTeaItemTitleRegions } from './afternoonTeaTitlePlacement'
+import {
+  createDefaultAfternoonTeaItemTitleRegions,
+  normalizeAfternoonTeaItemTitleRegions,
+} from './afternoonTeaTitlePlacement'
 import { rebuildAfternoonTeaPosterItemPrompts } from './afternoonTeaPosterPromptBuilder'
 
 const DEFAULT_CONVERSATION_TITLE = '新下午茶会话'
@@ -149,6 +152,41 @@ export function createAfternoonTeaItemTitleRegionsPatch(
   return {
     itemTitleRegions: normalizedRegions,
     posterItems: rebuildAfternoonTeaPosterItemPrompts(conversation.orderResult, conversation.posterItems, normalizedRegions, { resetClaims: true }),
+  }
+}
+
+export function createAfternoonTeaSourceImagePatch(
+  conversation: AfternoonTeaConversation,
+  sourceImageId: string | null,
+  sourceImageName: string,
+): Pick<AfternoonTeaConversation, 'sourceImageId' | 'sourceImageName' | 'itemTitleRegions'> & Partial<Pick<AfternoonTeaConversation, 'posterItems'>> | null {
+  if (isAfternoonTeaConversationFrozen(conversation)) return null
+  if (conversation.sourceImageId === sourceImageId && conversation.sourceImageName === sourceImageName) return null
+  if (!conversation.orderResult) {
+    return {
+      sourceImageId,
+      sourceImageName,
+      itemTitleRegions: [],
+    }
+  }
+  if (!sourceImageId) {
+    return {
+      sourceImageId: null,
+      sourceImageName: '',
+      itemTitleRegions: [],
+    }
+  }
+  const itemTitleRegions = createDefaultAfternoonTeaItemTitleRegions(conversation.orderResult.items.length)
+  return {
+    sourceImageId,
+    sourceImageName,
+    itemTitleRegions,
+    posterItems: rebuildAfternoonTeaPosterItemPrompts(
+      conversation.orderResult,
+      conversation.posterItems,
+      itemTitleRegions,
+      { resetClaims: true },
+    ),
   }
 }
 

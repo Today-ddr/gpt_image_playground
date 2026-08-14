@@ -216,6 +216,30 @@ export function writeGenerateSplitLeftPercent(
   }
 }
 
+function AfternoonTeaSourceImagePickers(props: {
+  disabled: boolean
+  onImageChange: (file: File | null) => void
+}) {
+  const handleImageInputChange = (event: ChangeEvent<HTMLInputElement>) => {
+    props.onImageChange(event.target.files?.[0] ?? null)
+    event.target.value = ''
+  }
+  return (
+    <div className="mt-2 grid grid-cols-2 gap-2">
+      <label className={`flex min-h-11 touch-manipulation items-center justify-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 text-sm font-medium text-blue-700 has-[:focus-visible]:outline-none has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-blue-500 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-300 ${props.disabled ? 'pointer-events-none opacity-50' : ''}`}>
+        <CameraIcon className="h-5 w-5" />
+        <span>拍照</span>
+        <input type="file" accept="image/*" capture="environment" disabled={props.disabled} onChange={handleImageInputChange} className="sr-only" aria-label="拍照" />
+      </label>
+      <label className={`flex min-h-11 touch-manipulation items-center justify-center gap-2 rounded-md border border-gray-200 bg-white px-3 text-sm font-medium text-gray-700 has-[:focus-visible]:outline-none has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-blue-500 dark:border-white/[0.1] dark:bg-white/[0.04] dark:text-gray-200 ${props.disabled ? 'pointer-events-none opacity-50' : ''}`}>
+        <ImportIcon className="h-5 w-5" />
+        <span>照片</span>
+        <input type="file" accept="image/*" disabled={props.disabled} onChange={handleImageInputChange} className="sr-only" aria-label="选择照片" />
+      </label>
+    </div>
+  )
+}
+
 export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProps) {
   const phase = deriveMobileAfternoonTeaPhase({
     orderResult: props.orderResult,
@@ -421,12 +445,9 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
   const selectedIndex = currentCandidate
     ? availableCandidates.findIndex((candidate) => candidate.itemId === currentCandidate.itemId)
     : -1
-  const locked = props.locked || props.busy || props.imageLoading
+  const imageLocked = props.locked || props.imageLoading
+  const locked = imageLocked || props.busy
 
-  const handleImageInputChange = (event: ChangeEvent<HTMLInputElement>) => {
-    props.onImageChange(event.target.files?.[0] ?? null)
-    event.target.value = ''
-  }
   const handlePaste = async () => {
     const result = await clipboardCoordinator.read(props.userPrompt)
     if (!result) return
@@ -560,7 +581,7 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
             <div className="mb-2 flex items-center justify-between gap-3">
               <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">餐品图片</h2>
               {props.imageDataUrl && (
-                <button type="button" onClick={props.onRemoveImage} disabled={locked || props.imageLoading} className="flex h-11 w-11 items-center justify-center rounded-md text-gray-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-50" aria-label="移除餐品图片">
+                <button type="button" onClick={props.onRemoveImage} disabled={imageLocked} className="flex h-11 w-11 items-center justify-center rounded-md text-gray-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-50" aria-label="移除餐品图片">
                   <CloseIcon className="h-5 w-5" />
                 </button>
               )}
@@ -571,21 +592,10 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
               </div>
             ) : (
               <div className="flex aspect-[4/3] items-center justify-center rounded-md border border-dashed border-gray-300 bg-gray-50/60 px-4 text-center text-sm text-gray-500 dark:border-white/[0.12] dark:bg-white/[0.02] dark:text-gray-400">
-                {props.imageLoading ? '正在读取图片...' : props.imageMissing ? '原图不可用，请重新选择' : '选择一张餐品图片'}
+                {props.imageLoading ? '正在读取图片...' : props.imageMissing ? '原图不可用，请重新选择' : '可先解析菜单，稍后再贴图'}
               </div>
             )}
-            <div className="mt-2 grid grid-cols-2 gap-2">
-              <label className={`flex min-h-11 touch-manipulation items-center justify-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 text-sm font-medium text-blue-700 has-[:focus-visible]:outline-none has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-blue-500 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-300 ${locked ? 'pointer-events-none opacity-50' : ''}`}>
-                <CameraIcon className="h-5 w-5" />
-                <span>拍照</span>
-                <input type="file" accept="image/*" capture="environment" disabled={locked} onChange={handleImageInputChange} className="sr-only" aria-label="拍照" />
-              </label>
-              <label className={`flex min-h-11 touch-manipulation items-center justify-center gap-2 rounded-md border border-gray-200 bg-white px-3 text-sm font-medium text-gray-700 has-[:focus-visible]:outline-none has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-blue-500 dark:border-white/[0.1] dark:bg-white/[0.04] dark:text-gray-200 ${locked ? 'pointer-events-none opacity-50' : ''}`}>
-                <ImportIcon className="h-5 w-5" />
-                <span>照片</span>
-                <input type="file" accept="image/*" disabled={locked} onChange={handleImageInputChange} className="sr-only" aria-label="选择照片" />
-              </label>
-            </div>
+            <AfternoonTeaSourceImagePickers disabled={imageLocked} onImageChange={props.onImageChange} />
           </section>
 
           <div className="space-y-4">
@@ -647,9 +657,22 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
           <section aria-label="餐品摆放">
             <div className="mb-2 flex items-center justify-between gap-3">
               <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">餐品摆放</h2>
-              <span className="text-xs text-gray-500 dark:text-gray-400">{props.orderResult.items.length} 个餐品</span>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-500 dark:text-gray-400">{props.orderResult.items.length} 个餐品</span>
+                {props.imageDataUrl && (
+                  <button type="button" onClick={props.onRemoveImage} disabled={imageLocked} className="flex h-11 w-11 items-center justify-center rounded-md text-gray-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-50" aria-label="移除餐品图片">
+                    <CloseIcon className="h-5 w-5" />
+                  </button>
+                )}
+              </div>
             </div>
             <AfternoonTeaItemPlacement imageSrc={props.imageDataUrl} items={props.orderResult.items} regions={props.itemTitleRegions} locked={locked} onChange={props.onItemTitleRegionsChange} />
+            {!props.imageDataUrl && (
+              <>
+                <AfternoonTeaSourceImagePickers disabled={imageLocked} onImageChange={props.onImageChange} />
+                <div className="mt-2 text-center text-xs text-gray-400">也可以 Ctrl/⌘ + V 粘贴，单张最大 20 MiB</div>
+              </>
+            )}
           </section>
 
           <div className="space-y-5">
