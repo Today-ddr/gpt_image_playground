@@ -88,10 +88,22 @@ describe('subscribeDocumentImagePaste', () => {
     expect(firstCallback).not.toHaveBeenCalled()
     expect(secondCallback).toHaveBeenCalledTimes(1)
 
+    addEventListener.mockRestore()
+    removeEventListener.mockRestore()
     cleanup()
     target.dispatchEvent(createPasteEvent([image.item]))
 
-    expect(removeEventListener).toHaveBeenCalledTimes(1)
     expect(secondCallback).toHaveBeenCalledTimes(1)
+  })
+
+  it('listens on the capture phase so image pastes do not update focused text fields', () => {
+    const target = new EventTarget()
+    const addEventListener = vi.spyOn(target, 'addEventListener')
+    const removeEventListener = vi.spyOn(target, 'removeEventListener')
+    const cleanup = subscribeDocumentImagePaste(target, () => ({ disabled: false, onImages: () => true }))
+
+    expect(addEventListener).toHaveBeenCalledWith('paste', expect.any(Function), { capture: true })
+    cleanup()
+    expect(removeEventListener).toHaveBeenCalledWith('paste', expect.any(Function), { capture: true })
   })
 })

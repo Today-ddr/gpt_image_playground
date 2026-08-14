@@ -22,11 +22,15 @@ export function subscribeDocumentImagePaste(
       return file?.type.startsWith('image/') ? [file] : []
     })
     if (files.length === 0) return
-    if (options.onImages(files)) event.preventDefault()
+    if (options.onImages(files)) {
+      event.preventDefault()
+      event.stopPropagation()
+    }
   }
 
-  target.addEventListener('paste', handlePaste)
-  return () => target.removeEventListener('paste', handlePaste)
+  const listenerOptions = { capture: true } as const
+  target.addEventListener('paste', handlePaste, listenerOptions)
+  return () => target.removeEventListener('paste', handlePaste, listenerOptions)
 }
 
 export function useDocumentImagePaste(

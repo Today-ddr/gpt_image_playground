@@ -1103,8 +1103,12 @@ export default function ToolsWorkspace() {
     setImageDataUrl(sourceImage)
   }
 
-  const createEditableConversationFrom = (conversation: AfternoonTeaConversation) => {
+  const createEditableConversationFrom = (
+    conversation: AfternoonTeaConversation,
+    options?: { keepParsedResult?: boolean },
+  ) => {
     const conversationId = createAfternoonTeaConversation()
+    const keepParsedResult = Boolean(options?.keepParsedResult && conversation.orderResult)
     updateAfternoonTeaConversation(conversationId, {
       sourceImageId: conversation.sourceImageId,
       sourceImageName: conversation.sourceImageName,
@@ -1112,11 +1116,17 @@ export default function ToolsWorkspace() {
       titleCount: conversation.titleCount,
       itemTitleRegions: conversation.itemTitleRegions,
       systemPrompt: conversation.systemPrompt,
-      analysisSystemPromptSnapshot: null,
-      analysisUserPromptSnapshot: null,
-      analysisElapsed: null,
-      orderResult: null,
-      posterItems: [],
+      analysisSystemPromptSnapshot: keepParsedResult ? conversation.analysisSystemPromptSnapshot : null,
+      analysisUserPromptSnapshot: keepParsedResult ? conversation.analysisUserPromptSnapshot : null,
+      analysisElapsed: keepParsedResult ? conversation.analysisElapsed : null,
+      orderResult: keepParsedResult ? conversation.orderResult : null,
+      posterItems: keepParsedResult
+        ? conversation.posterItems.map((item) => ({
+          id: item.id,
+          title: item.title,
+          prompt: item.prompt,
+        }))
+        : [],
       batchStartedAt: null,
       batchFinishedAt: null,
     })
@@ -1143,6 +1153,21 @@ export default function ToolsWorkspace() {
       return useStore.getState().afternoonTeaConversations.find((item) => item.id === conversationId) ?? null
     }
     if (conversation && isAfternoonTeaConversationFrozen(conversation)) return createEditableConversationFrom(conversation)
+    return conversation
+  }
+
+  const ensureImageEditableConversation = () => {
+    const state = useStore.getState()
+    const conversation = state.afternoonTeaConversations.find((item) => item.id === state.activeAfternoonTeaConversationId) ?? null
+    if (!conversation) {
+      const conversationId = state.createAfternoonTeaConversation()
+      initializeNewConversationPrompt(conversationId)
+      void restoreConversation(conversationId)
+      return useStore.getState().afternoonTeaConversations.find((item) => item.id === conversationId) ?? null
+    }
+    if (isAfternoonTeaConversationFrozen(conversation)) {
+      return createEditableConversationFrom(conversation, { keepParsedResult: true })
+    }
     return conversation
   }
 
@@ -1265,7 +1290,7 @@ export default function ToolsWorkspace() {
       setError(err instanceof Error ? err.message : '读取餐品图片失败')
       return
     }
-    const conversation = ensureEditableConversation()
+    const conversation = ensureImageEditableConversation()
     if (!conversation) return
     const conversationId = conversation.id
     const selection = coordinatorRef.current.beginImageSelection()
@@ -1316,7 +1341,7 @@ export default function ToolsWorkspace() {
   }
 
   const removeImage = () => {
-    const conversation = ensureEditableConversation()
+    const conversation = ensureImageEditableConversation()
     coordinatorRef.current.invalidateImageSelection()
     cachedSourceImageRef.current = null
     setImageDataUrl('')
@@ -1667,6 +1692,8 @@ export default function ToolsWorkspace() {
   const updateUserPrompt = (conversationId: string | null, value: string) => {
     const state = useStore.getState()
     if (state.activeAfternoonTeaConversationId !== conversationId) return
+    const currentConversation = state.afternoonTeaConversations.find((item) => item.id === conversationId)
+    if (currentConversation && currentConversation.orderText === value) return
     coordinatorRef.current.cancelRequest()
     coordinatorRef.current.invalidateImageSelection()
     const conversation = ensureEditableConversation()
