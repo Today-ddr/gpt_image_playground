@@ -145,8 +145,24 @@ describe('AfternoonTeaItemPlacement', () => {
     expect(firstBox).toContain('opacity-100')
     expect(secondPin).toContain('aria-pressed="false"')
     expect(secondPin).toContain('data-item-title-pin="1"')
-    expect(placementSource).toContain('点编号选择，再拖当前框')
+    expect(placementSource).toContain('点编号选择，点空白收起')
     expect((html.match(/data-item-title-pin=/g) ?? [])).toHaveLength(2)
+  })
+
+  it('collapses every title box to a pin when no item is selected', () => {
+    const html = renderToStaticMarkup(<AfternoonTeaItemPlacement
+      imageSrc="data:image/png;base64,AQID"
+      items={items}
+      regions={regions}
+      locked={false}
+      selectedIndex={null}
+      onChange={() => {}}
+    />)
+
+    expect((html.match(/data-item-title-pin=/g) ?? [])).toHaveLength(items.length)
+    expect(html).not.toContain('aria-label="商品 蟹肉沙拉紫菜包饭 标题位置"')
+    expect(placementSource).toContain('onPointerDown={handleStagePointerDown}')
+    expect(placementSource).toContain('props.onSelectedIndexChange?.(null)')
   })
 
   it('commits pointer movement only on pointerup', () => {

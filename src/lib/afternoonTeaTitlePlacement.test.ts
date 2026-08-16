@@ -114,8 +114,8 @@ describe('afternoon tea title placement', () => {
     })
   })
 
-  it('falls back to the first item when the selected placement index is missing', () => {
-    expect(resolveAfternoonTeaPlacementSelection(null, 8)).toBe(0)
+  it('keeps an explicit empty selection and only repairs out-of-range indexes', () => {
+    expect(resolveAfternoonTeaPlacementSelection(null, 8)).toBeNull()
     expect(resolveAfternoonTeaPlacementSelection(3, 8)).toBe(3)
     expect(resolveAfternoonTeaPlacementSelection(8, 8)).toBe(0)
     expect(resolveAfternoonTeaPlacementSelection(1, 0)).toBeNull()

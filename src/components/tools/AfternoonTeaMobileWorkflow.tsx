@@ -254,7 +254,7 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
   const [editingPosterTitle, setEditingPosterTitle] = useState<number | null>(null)
   const [editingItemName, setEditingItemName] = useState<number | null>(null)
   const [reviewError, setReviewError] = useState('')
-  const [placementSelectedIndex, setPlacementSelectedIndex] = useState(0)
+  const [placementSelectedIndex, setPlacementSelectedIndex] = useState<number | null>(0)
   const [clipboardError, setClipboardError] = useState('')
   const [clipboardAvailable] = useState(canReadAfternoonTeaClipboard)
   const [clipboardCoordinator] = useState(createAfternoonTeaClipboardCoordinator)
@@ -285,7 +285,7 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
     setItemTagDrafts(props.orderResult?.items.map((item) => item.tags.join('，')) ?? [])
   }, [itemTagKey])
   useEffect(() => {
-    setPlacementSelectedIndex((current) => resolveAfternoonTeaPlacementSelection(current, props.orderResult?.items.length ?? 0) ?? 0)
+    setPlacementSelectedIndex((current) => resolveAfternoonTeaPlacementSelection(current, props.orderResult?.items.length ?? 0))
   }, [props.orderResult?.items.length])
   useEffect(() => () => clipboardCoordinator.invalidate(), [clipboardCoordinator])
   useEffect(() => {

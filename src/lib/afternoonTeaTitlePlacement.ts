@@ -139,7 +139,8 @@ export function resolveAfternoonTeaPlacementSelection(
 ) {
   if (!isFiniteNumber(itemCount) || itemCount <= 0) return null
   const count = Math.floor(itemCount)
-  if (selectedIndex == null || !Number.isInteger(selectedIndex) || selectedIndex < 0 || selectedIndex >= count) {
+  if (selectedIndex == null) return null
+  if (!Number.isInteger(selectedIndex) || selectedIndex < 0 || selectedIndex >= count) {
     return 0
   }
   return selectedIndex
