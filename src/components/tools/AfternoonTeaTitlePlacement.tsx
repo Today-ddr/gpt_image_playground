@@ -157,8 +157,8 @@ export function AfternoonTeaItemPlacement(props: AfternoonTeaItemPlacementProps)
     if (target !== stageRef.current && !(target instanceof HTMLImageElement)) return
     clearSelection()
   }
-  const toggleViewMode = () => {
-    const nextMode: AfternoonTeaPlacementViewMode = viewMode === 'pin' ? 'boxes' : 'pin'
+  const setPlacementViewMode = (nextMode: AfternoonTeaPlacementViewMode) => {
+    if (nextMode === viewMode) return
     setViewMode(nextMode)
     writeAfternoonTeaPlacementViewMode(nextMode)
   }
@@ -289,16 +289,28 @@ export function AfternoonTeaItemPlacement(props: AfternoonTeaItemPlacementProps)
         <span className="min-w-0 text-sm font-medium text-gray-700 dark:text-gray-200">订单商品位置</span>
         <div className="flex shrink-0 items-center gap-2">
           <span className="text-xs text-gray-400 dark:text-gray-500">{props.locked ? '已锁定' : imageSize ? viewMode === 'pin' ? '拖图钉，点空白收起' : '可拖动全部标题框' : '图片加载中'}</span>
-          <button
-            type="button"
-            onClick={toggleViewMode}
-            disabled={props.locked || !imageSize}
-            aria-pressed={viewMode === 'pin'}
-            aria-label={viewMode === 'pin' ? '切换为全框模式' : '切换为图钉模式'}
-            className="min-h-8 rounded-md border border-gray-200 bg-white px-2 text-xs font-medium text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-50 dark:border-white/[0.1] dark:bg-white/[0.04] dark:text-gray-200"
-          >
-            {viewMode === 'pin' ? '图钉' : '全框'}
-          </button>
+          <div role="tablist" aria-label="摆放显示方式" className="inline-flex rounded-md border border-gray-200 bg-gray-100 p-0.5 dark:border-white/[0.1] dark:bg-white/[0.04]">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={viewMode === 'pin'}
+              onClick={() => setPlacementViewMode('pin')}
+              disabled={props.locked || !imageSize}
+              className={`min-h-8 rounded px-2.5 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-50 ${viewMode === 'pin' ? 'bg-white text-gray-900 shadow-sm dark:bg-white/[0.1] dark:text-gray-100' : 'text-gray-500 dark:text-gray-400'}`}
+            >
+              图钉
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={viewMode === 'boxes'}
+              onClick={() => setPlacementViewMode('boxes')}
+              disabled={props.locked || !imageSize}
+              className={`min-h-8 rounded px-2.5 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-50 ${viewMode === 'boxes' ? 'bg-white text-gray-900 shadow-sm dark:bg-white/[0.1] dark:text-gray-100' : 'text-gray-500 dark:text-gray-400'}`}
+            >
+              全框
+            </button>
+          </div>
         </div>
       </div>
       <div className="min-w-0 max-w-full bg-gray-50 p-1.5 dark:bg-black/20 sm:p-2">
