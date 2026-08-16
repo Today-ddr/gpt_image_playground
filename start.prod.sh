@@ -32,7 +32,7 @@ mkdir -p data/jobs
 
 echo "拉取镜像 ghcr.io/${GHCR_OWNER}/gpt_image_playground:${IMAGE_TAG} ..."
 echo "拉取镜像 ghcr.io/${GHCR_OWNER}/gpt_image_playground-job-api:${IMAGE_TAG} ..."
-if ! docker compose -f "$compose_file" pull; then
+if ! docker compose -f "$compose_file" pull --policy always; then
   echo '' >&2
   echo '拉取失败。若仓库/Package 是私有的，请先登录 GHCR：' >&2
   echo '  # 在 GitHub → Settings → Developer settings → Personal access tokens' >&2
@@ -43,7 +43,7 @@ if ! docker compose -f "$compose_file" pull; then
   exit 1
 fi
 
-docker compose -f "$compose_file" up -d --remove-orphans
+docker compose -f "$compose_file" up -d --force-recreate --remove-orphans
 
 published_address=$(docker compose -f "$compose_file" port web 80)
 app_port=${published_address##*:}
@@ -67,4 +67,4 @@ echo "已启动（预构建镜像，无本机编译）：http://localhost:${app_
 echo "镜像标签：${IMAGE_TAG}  owner：${GHCR_OWNER}"
 echo "查看日志：docker compose -f ${compose_file} logs -f"
 echo "停止服务：docker compose -f ${compose_file} down"
-echo "更新版本：git pull && IMAGE_TAG=latest ./start.prod.sh"
+echo "更新版本：git pull && IMAGE_TAG=${IMAGE_TAG} ./start.prod.sh"
