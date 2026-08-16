@@ -6,9 +6,23 @@ import {
   DEFAULT_SETTINGS,
   normalizeSettings,
 } from './apiProfiles'
-import { buildSettingsFromUrlParams, clearUrlSettingParams, getAppModeFromUrlParams, hasUrlSettingParams, setAppModeUrlParams, setOpenAIProfileImportUrlParams } from './urlSettings'
+import {
+  buildSettingsFromUrlParams,
+  clearUrlSettingParams,
+  countNewStationProfilesAfterImport,
+  createStationShareClipboardText,
+  createStationSharePayload,
+  createStationShareUrl,
+  getAppModeFromUrlParams,
+  hasUrlSettingParams,
+  parseStationShareText,
+  setAppModeUrlParams,
+  setOpenAIProfileImportUrlParams,
+  STATION_SHARE_URL_MAX_LENGTH,
+} from './urlSettings'
 import appSource from '../App.tsx?raw'
 import mainSource from '../main.tsx?raw'
+import settingsModalSource from '../components/SettingsModal.tsx?raw'
 
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -606,5 +620,155 @@ describe('URL settings params', () => {
       timeout: 240,
       apiMode: 'images',
     })
+  })
+})
+
+describe('station share', () => {
+  const usedCustomProvider = {
+    id: 'custom-used',
+    name: 'Used Custom',
+    submit: {
+      path: 'images/generations',
+      method: 'POST' as const,
+      contentType: 'json' as const,
+      body: { model: '$profile.model', prompt: '$prompt' },
+      result: { imageUrlPaths: ['data.*.url'], b64JsonPaths: [] },
+    },
+  }
+  const unusedCustomProvider = {
+    id: 'custom-unused',
+    name: 'Unused Custom',
+    submit: {
+      path: 'images/generations',
+      method: 'POST' as const,
+      contentType: 'json' as const,
+      body: { model: '$profile.model', prompt: '$prompt' },
+      result: { imageUrlPaths: ['data.*.url'], b64JsonPaths: [] },
+    },
+  }
+
+  function createSharedStationsSettings() {
+    const openaiProfile = createDefaultOpenAIProfile({
+      id: 'share-openai',
+      name: 'OpenAI 中转',
+      baseUrl: 'https://openai-share.example.com/v1',
+      apiKey: 'openai-share-key',
+      model: 'gpt-image-share',
+      providerDrafts: { openai: { model: 'draft-only' } },
+    })
+    const falProfile = createDefaultFalProfile({
+      id: 'share-fal',
+      name: 'fal 中转',
+      apiKey: 'fal-share-key',
+    })
+    const customProfile = createDefaultOpenAIProfile({
+      id: 'share-custom',
+      name: '自定义中转',
+      provider: usedCustomProvider.id,
+      baseUrl: 'https://custom-share.example.com/v1',
+      apiKey: 'custom-share-key',
+      model: 'custom-share-model',
+    })
+    return normalizeSettings({
+      ...DEFAULT_SETTINGS,
+      customProviders: [usedCustomProvider, unusedCustomProvider],
+      profiles: [openaiProfile, falProfile, customProfile],
+      activeProfileId: falProfile.id,
+    })
+  }
+
+  it('packs every station with API keys and only the custom providers in use', () => {
+    const settings = createSharedStationsSettings()
+    const payload = createStationSharePayload(settings)
+
+    expect(payload.profiles.map((profile) => profile.id)).toEqual(['share-fal', 'share-openai', 'share-custom'])
+    expect(payload.profiles.map((profile) => profile.apiKey)).toEqual(['fal-share-key', 'openai-share-key', 'custom-share-key'])
+    expect(payload.customProviders.map((provider) => provider.id)).toEqual([usedCustomProvider.id])
+    expect(payload.profiles.some((profile) => 'providerDrafts' in profile && profile.providerDrafts)).toBe(false)
+  })
+
+  it('imports a generated share URL into a fresh workspace and activates the original current station', () => {
+    const settings = createSharedStationsSettings()
+    const payload = createStationSharePayload(settings)
+    const shareUrl = createStationShareUrl('https://app.example.com/tools?foo=1#hash', payload)
+    const imported = parseStationShareText(shareUrl)
+    const next = normalizeSettings({
+      ...DEFAULT_SETTINGS,
+      ...buildSettingsFromUrlParams(DEFAULT_SETTINGS, new URL(shareUrl).searchParams),
+    })
+    const activeProfile = next.profiles.find((profile) => profile.id === next.activeProfileId)
+
+    expect(shareUrl).not.toContain('foo=1')
+    expect(shareUrl).not.toContain('#hash')
+    expect(imported.profiles).toHaveLength(3)
+    expect(next.profiles).toHaveLength(3)
+    expect(next.customProviders).toHaveLength(1)
+    expect(activeProfile).toMatchObject({
+      name: 'fal 中转',
+      provider: 'fal',
+      apiKey: 'fal-share-key',
+    })
+  })
+
+  it('parses a full URL, a query string, raw JSON, and a settings wrapper', () => {
+    const settings = createSharedStationsSettings()
+    const payload = createStationSharePayload(settings)
+    const shareUrl = createStationShareUrl('https://app.example.com/', payload)
+
+    expect(parseStationShareText(`  ${shareUrl}  `).profiles).toHaveLength(3)
+    expect(parseStationShareText(new URL(shareUrl).search).profiles[0]).toMatchObject({ id: 'share-fal' })
+    expect(parseStationShareText(JSON.stringify(payload)).customProviders).toHaveLength(1)
+    expect(parseStationShareText(JSON.stringify({ version: 1, settings: payload })).profiles.map((profile) => profile.apiKey)).toContain('openai-share-key')
+    expect(() => parseStationShareText('')).toThrow('请粘贴导入 URL 或 JSON')
+    expect(() => parseStationShareText('not-a-share')).toThrow('无法识别分享内容，请粘贴导入 URL 或 JSON')
+  })
+
+  it('does not duplicate stations when the same share is imported again', () => {
+    const settings = createSharedStationsSettings()
+    const payload = createStationSharePayload(settings)
+    const firstImport = normalizeSettings({
+      ...DEFAULT_SETTINGS,
+      ...buildSettingsFromUrlParams(DEFAULT_SETTINGS, new URLSearchParams({ settings: JSON.stringify(payload) })),
+    })
+    const secondImport = normalizeSettings({
+      ...firstImport,
+      ...buildSettingsFromUrlParams(firstImport, new URLSearchParams({ settings: JSON.stringify(payload) })),
+    })
+
+    expect(firstImport.profiles).toHaveLength(3)
+    expect(secondImport.profiles).toHaveLength(3)
+    expect(countNewStationProfilesAfterImport(firstImport, payload)).toBe(0)
+  })
+
+  it('falls back to JSON when the share URL would be truncated', () => {
+    const bulkySettings = normalizeSettings({
+      ...DEFAULT_SETTINGS,
+      profiles: Array.from({ length: 12 }, (_, index) => createDefaultOpenAIProfile({
+        id: `bulky-${index}`,
+        name: `很长的中转站名称用来撑开分享链接-${index}`,
+        baseUrl: `https://relay-${index}.example.com/v1`,
+        apiKey: `very-long-api-key-${index}-${'x'.repeat(40)}`,
+        model: `very-long-model-id-${index}`,
+      })),
+      activeProfileId: 'bulky-0',
+    })
+    const payload = createStationSharePayload(bulkySettings)
+    const shared = createStationShareClipboardText('https://app.example.com/', payload)
+
+    expect(createStationShareUrl('https://app.example.com/', payload).length).toBeGreaterThan(STATION_SHARE_URL_MAX_LENGTH)
+    expect(shared.format).toBe('json')
+    expect(parseStationShareText(shared.text).profiles).toHaveLength(12)
+  })
+
+  it('wires share-all and paste-import onto the existing merge path', () => {
+    expect(settingsModalSource).toContain('createStationSharePayload')
+    expect(settingsModalSource).toContain('createStationShareClipboardText')
+    expect(settingsModalSource).toContain('parseStationShareText')
+    expect(settingsModalSource).toContain('mergeImportedSettings')
+    expect(settingsModalSource).toContain('activateFirstImportedProfile')
+    expect(settingsModalSource).toContain('分享全部')
+    expect(settingsModalSource).toContain('粘贴导入')
+    expect(settingsModalSource).toContain('已复制')
+    expect(settingsModalSource).toContain('含 API Key')
   })
 })

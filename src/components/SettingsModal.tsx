@@ -32,7 +32,14 @@ import { copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboar
 import { requestBrowserNotificationPermission, type BrowserNotificationPermissionResult } from '../lib/browserNotification'
 import { formatStorageBytes, getBrowserStorageUsage, type BrowserStorageUsage } from '../lib/browserStorage'
 import { fetchApiModels } from '../lib/apiModels'
-import { setOpenAIProfileImportUrlParams } from '../lib/urlSettings'
+import {
+  activateFirstImportedProfile,
+  countNewStationProfilesAfterImport,
+  createStationShareClipboardText,
+  createStationSharePayload,
+  parseStationShareText,
+  setOpenAIProfileImportUrlParams,
+} from '../lib/urlSettings'
 import { GITHUB_ISSUES_URL, GITHUB_REPOSITORY, GITHUB_REPOSITORY_URL } from '../lib/repository'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, type AgentApiConfigMode, type ApiProfile, type AppSettings, type CustomProviderDefinition, type ZipDownloadRoute } from '../types'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
@@ -385,6 +392,10 @@ export default function SettingsModal() {
   const profileTouchDragRef = useRef<{ id: string, startX: number, startY: number, moved: boolean } | null>(null)
   const [copyImportUrlProfile, setCopyImportUrlProfile] = useState<ApiProfile | null>(null)
   const [copyImportUrlOptions, setCopyImportUrlOptions] = useState<CopyImportUrlOptions>(readCopyImportUrlOptions)
+  const [showShareAllStationsDialog, setShowShareAllStationsDialog] = useState(false)
+  const [showPasteImportDialog, setShowPasteImportDialog] = useState(false)
+  const [pasteImportText, setPasteImportText] = useState('')
+  const [pasteImportError, setPasteImportError] = useState('')
   const [modelOptionsByProfile, setModelOptionsByProfile] = useState<Record<string, string[]>>({})
   const [modelListStateByProfile, setModelListStateByProfile] = useState<Record<string, { loading: boolean, message: string, error: boolean }>>({})
 
@@ -710,6 +721,43 @@ export default function SettingsModal() {
     setCopyImportUrlOptions(readCopyImportUrlOptions())
   }
 
+  const closeShareAllStationsDialog = () => setShowShareAllStationsDialog(false)
+
+  const closePasteImportDialog = () => {
+    setShowPasteImportDialog(false)
+    setPasteImportText('')
+    setPasteImportError('')
+  }
+
+  const copyAllStations = async () => {
+    try {
+      const payload = createStationSharePayload(draft)
+      const shared = createStationShareClipboardText(window.location.href, payload)
+      await copyTextToClipboard(shared.text)
+      const copiedMessage = `已复制 ${payload.profiles.length} 个中转站（含 API Key），请勿发给不信任的人`
+      showToast(shared.format === 'json' ? `链接过长，已复制 JSON，请在设置里粘贴导入。${copiedMessage}` : copiedMessage, 'success')
+      closeShareAllStationsDialog()
+    } catch (err) {
+      showToast(getClipboardFailureMessage('复制中转站配置失败', err), 'error')
+    }
+  }
+
+  const importSharedStations = () => {
+    try {
+      const payload = parseStationShareText(pasteImportText)
+      const current = normalizeSettings(draft)
+      const addedCount = countNewStationProfilesAfterImport(current, payload)
+      const next = activateFirstImportedProfile(mergeImportedSettings(current, payload), payload)
+      commitSettings(next)
+      setTimeoutInput(String(getActiveApiProfile(next).timeout))
+      closePasteImportDialog()
+      if (addedCount > 0) showToast(`已导入 ${addedCount} 个中转站`, 'success')
+      else showToast('这些中转站已存在，未重复添加', 'info')
+    } catch (err) {
+      setPasteImportError(err instanceof Error ? err.message : '导入失败')
+    }
+  }
+
   const getDraftWithActiveProfilePatch = (patch: Partial<ApiProfile>) => ({
       ...draft,
       profiles: draft.profiles.map((profile) => profile.id === activeProfile.id ? { ...profile, ...patch } : profile),
@@ -759,6 +807,14 @@ export default function SettingsModal() {
   const handleClose = () => {
     if (isExportingData || isImportingData) {
       showDataTransferBusyToast()
+      return
+    }
+    if (showShareAllStationsDialog) {
+      closeShareAllStationsDialog()
+      return
+    }
+    if (showPasteImportDialog) {
+      closePasteImportDialog()
       return
     }
     if (showZipDownloadRouteManager) {
@@ -866,6 +922,8 @@ export default function SettingsModal() {
   }
 
   useCloseOnEscape(showSettings && !dataTransferMode, handleClose)
+  useCloseOnEscape(showShareAllStationsDialog, closeShareAllStationsDialog)
+  useCloseOnEscape(showPasteImportDialog, closePasteImportDialog)
   usePreventBackgroundScroll(showSettings, showZipDownloadRouteManager ? zipDownloadRouteScrollBoundaryRef : showCustomProviderImport ? customProviderScrollBoundaryRef : settingsScrollBoundaryRef)
 
   if (!showSettings) return null
@@ -1440,7 +1498,7 @@ export default function SettingsModal() {
             {activeTab === 'api' && (
               <div className="space-y-4">
                 <div>
-                  <div className="mb-1.5 flex items-center gap-1.5">
+                  <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
                     <span className="block text-sm text-gray-600 dark:text-gray-300">当前配置</span>
                     <span className="relative inline-flex">
                       <button
@@ -1494,6 +1552,27 @@ export default function SettingsModal() {
                         复制当前配置
                       </ViewportTooltip>
                     </span>}
+                    {!defaultConfigOnly && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setShowShareAllStationsDialog(true)}
+                          className="rounded-md px-1.5 py-0.5 text-xs font-medium text-blue-600 transition hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-500/10"
+                        >
+                          分享全部
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPasteImportError('')
+                            setShowPasteImportDialog(true)
+                          }}
+                          className="rounded-md px-1.5 py-0.5 text-xs font-medium text-blue-600 transition hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-500/10"
+                        >
+                          粘贴导入
+                        </button>
+                      </>
+                    )}
                   </div>
                   <div ref={profileMenuRef} className="relative">
                     <button
@@ -2524,6 +2603,95 @@ export default function SettingsModal() {
                   包含 API Key
                 </button>
               </div>
+            </div>
+          </div>,
+          document.body,
+        )}
+        {showShareAllStationsDialog && createPortal(
+          <div
+            data-no-drag-select
+            className="fixed inset-0 z-[110] flex items-center justify-center p-4"
+            onClick={closeShareAllStationsDialog}
+          >
+            <div className="absolute inset-0 bg-black/20 dark:bg-black/40 backdrop-blur-md animate-overlay-in" />
+            <div
+              className="relative bg-white/90 dark:bg-gray-900/90 backdrop-blur-xl border border-white/50 dark:border-white/[0.08] rounded-3xl shadow-[0_8px_40px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_40px_rgb(0,0,0,0.4)] max-w-sm w-full p-6 z-10 ring-1 ring-black/5 dark:ring-white/10 animate-confirm-in"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <button
+                type="button"
+                onClick={closeShareAllStationsDialog}
+                className="absolute right-4 top-4 shrink-0 rounded-full p-1.5 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-white/[0.06] dark:hover:text-gray-200"
+                aria-label="关闭"
+              >
+                <CloseIcon className="h-5 w-5" />
+              </button>
+              <h3 className="mb-3 pr-8 flex items-start gap-2.5 text-base font-bold text-gray-800 dark:text-gray-100 leading-snug">
+                <CopyIcon className="h-5 w-5 shrink-0 text-blue-500 mt-0.5" />
+                <span>分享全部中转站</span>
+              </h3>
+              <div className="text-[13px] text-gray-500 dark:text-gray-400 mb-5 leading-relaxed">
+                将复制当前 {draft.profiles.length} 个中转站配置，其中包含 API Key。请勿发给不信任的人。
+              </div>
+              <button
+                type="button"
+                onClick={() => { void copyAllStations() }}
+                className="w-full rounded-xl bg-blue-500 py-2 text-sm font-medium text-white shadow-sm shadow-blue-500/20 transition hover:bg-blue-600"
+              >
+                复制全部配置
+              </button>
+            </div>
+          </div>,
+          document.body,
+        )}
+        {showPasteImportDialog && createPortal(
+          <div
+            data-no-drag-select
+            className="fixed inset-0 z-[110] flex items-center justify-center p-4"
+            onClick={closePasteImportDialog}
+          >
+            <div className="absolute inset-0 bg-black/20 dark:bg-black/40 backdrop-blur-md animate-overlay-in" />
+            <div
+              className="relative bg-white/90 dark:bg-gray-900/90 backdrop-blur-xl border border-white/50 dark:border-white/[0.08] rounded-3xl shadow-[0_8px_40px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_40px_rgb(0,0,0,0.4)] max-w-sm w-full p-6 z-10 ring-1 ring-black/5 dark:ring-white/10 animate-confirm-in"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <button
+                type="button"
+                onClick={closePasteImportDialog}
+                className="absolute right-4 top-4 shrink-0 rounded-full p-1.5 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-white/[0.06] dark:hover:text-gray-200"
+                aria-label="关闭"
+              >
+                <CloseIcon className="h-5 w-5" />
+              </button>
+              <h3 className="mb-3 pr-8 flex items-start gap-2.5 text-base font-bold text-gray-800 dark:text-gray-100 leading-snug">
+                <ImportIcon className="h-5 w-5 shrink-0 text-blue-500 mt-0.5" />
+                <span>粘贴导入中转站</span>
+              </h3>
+              <div className="text-[13px] text-gray-500 dark:text-gray-400 mb-3 leading-relaxed">
+                粘贴分享链接或 JSON，已有中转站会自动去重。
+              </div>
+              <textarea
+                value={pasteImportText}
+                onChange={(event) => {
+                  setPasteImportText(event.target.value)
+                  if (pasteImportError) setPasteImportError('')
+                }}
+                rows={6}
+                placeholder="粘贴导入 URL 或 JSON"
+                className="mb-3 w-full resize-y rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-800 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-100 dark:focus:border-blue-500/50"
+                aria-label="中转站分享内容"
+              />
+              {pasteImportError && (
+                <div role="alert" className="mb-3 text-[13px] text-red-600 dark:text-red-300">{pasteImportError}</div>
+              )}
+              <button
+                type="button"
+                onClick={importSharedStations}
+                disabled={!pasteImportText.trim()}
+                className="w-full rounded-xl bg-blue-500 py-2 text-sm font-medium text-white shadow-sm shadow-blue-500/20 transition hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                导入
+              </button>
             </div>
           </div>,
           document.body,

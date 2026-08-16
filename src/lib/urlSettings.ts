@@ -1,4 +1,4 @@
-import type { ApiMode, ApiProfile, AppMode, AppSettings } from '../types'
+import type { ApiMode, ApiProfile, AppMode, AppSettings, CustomProviderDefinition } from '../types'
 import { normalizeBaseUrl } from './devProxy'
 import {
   createDefaultOpenAIProfile,
@@ -13,6 +13,17 @@ import {
 
 const URL_SETTING_KEYS = ['settings', 'apiUrl', 'apiKey', 'codexCli', 'apiMode', 'model', 'understandingModel', 'profileName', 'streamImages', 'streamPartialImages']
 const APP_MODE_URL_KEY = 'appMode'
+export const STATION_SHARE_URL_MAX_LENGTH = 2000
+
+export type StationSharePayload = {
+  customProviders: CustomProviderDefinition[]
+  profiles: ApiProfile[]
+}
+
+export type StationShareClipboardText = {
+  text: string
+  format: 'url' | 'json'
+}
 
 export function getAppModeFromUrlParams(searchParams: URLSearchParams): AppMode | null {
   return searchParams.get(APP_MODE_URL_KEY) === 'tools' ? 'tools' : null
@@ -78,6 +89,104 @@ function getUrlSettingsPayload(searchParams: URLSearchParams): unknown | null {
   } catch {
     return null
   }
+}
+
+function cloneShareableProfile(profile: ApiProfile): ApiProfile {
+  const { providerDrafts: _providerDrafts, ...shareableProfile } = profile
+  return shareableProfile
+}
+
+function extractStationSharePayload(value: unknown): StationSharePayload | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const record = value as Record<string, unknown>
+  const nested = record.settings
+  const source = nested && typeof nested === 'object' && !Array.isArray(nested)
+    ? nested as Record<string, unknown>
+    : record
+  if (!Array.isArray(source.profiles) || source.profiles.length === 0) return null
+  return {
+    customProviders: Array.isArray(source.customProviders) ? source.customProviders as CustomProviderDefinition[] : [],
+    profiles: source.profiles as ApiProfile[],
+  }
+}
+
+function parseStationShareJson(text: string): StationSharePayload | null {
+  try {
+    return extractStationSharePayload(JSON.parse(text))
+  } catch {
+    return null
+  }
+}
+
+function parseStationShareSearch(search: string): StationSharePayload | null {
+  const query = search.startsWith('?') ? search.slice(1) : search
+  const raw = new URLSearchParams(query).get('settings')
+  if (!raw) return null
+  return parseStationShareJson(raw)
+}
+
+export function createStationSharePayload(settings: Partial<AppSettings> | unknown): StationSharePayload {
+  const normalized = normalizeSettings(settings)
+  const activeProfile = normalized.profiles.find((profile) => profile.id === normalized.activeProfileId) ?? normalized.profiles[0]
+  const remainingProfiles = activeProfile
+    ? normalized.profiles.filter((profile) => profile.id !== activeProfile.id)
+    : normalized.profiles
+  const profiles = (activeProfile ? [activeProfile, ...remainingProfiles] : remainingProfiles).map(cloneShareableProfile)
+  const usedProviderIds = new Set(profiles.map((profile) => profile.provider))
+  return {
+    customProviders: normalized.customProviders.filter((provider) => usedProviderIds.has(provider.id)),
+    profiles,
+  }
+}
+
+export function createStationShareUrl(originHref: string, payload: StationSharePayload): string {
+  const url = new URL(originHref)
+  url.search = ''
+  url.hash = ''
+  url.searchParams.set('settings', JSON.stringify(payload))
+  return url.toString()
+}
+
+export function createStationShareClipboardText(originHref: string, payload: StationSharePayload): StationShareClipboardText {
+  const url = createStationShareUrl(originHref, payload)
+  if (url.length <= STATION_SHARE_URL_MAX_LENGTH) return { text: url, format: 'url' }
+  return { text: JSON.stringify(payload), format: 'json' }
+}
+
+export function parseStationShareText(text: string): StationSharePayload {
+  const trimmed = text.trim()
+  if (!trimmed) throw new Error('请粘贴导入 URL 或 JSON')
+
+  try {
+    const fromAbsoluteUrl = parseStationShareSearch(new URL(trimmed).search)
+    if (fromAbsoluteUrl) return fromAbsoluteUrl
+  } catch {
+    // 不是完整 URL，继续尝试 query / JSON
+  }
+
+  const queryStart = trimmed.indexOf('?')
+  if (queryStart >= 0) {
+    const fromQuery = parseStationShareSearch(trimmed.slice(queryStart))
+    if (fromQuery) return fromQuery
+  } else if (trimmed.includes('settings=')) {
+    const fromBareQuery = parseStationShareSearch(trimmed)
+    if (fromBareQuery) return fromBareQuery
+  }
+
+  const fromJson = parseStationShareJson(trimmed)
+  if (fromJson) return fromJson
+
+  throw new Error('无法识别分享内容，请粘贴导入 URL 或 JSON')
+}
+
+export function countNewStationProfilesAfterImport(
+  currentSettings: Partial<AppSettings> | unknown,
+  importedSettings: StationSharePayload,
+): number {
+  const current = normalizeSettings(currentSettings)
+  const next = mergeImportedSettings(current, importedSettings)
+  const currentKeys = new Set(current.profiles.map((profile) => getProfileDedupKey(profile)))
+  return next.profiles.filter((profile) => !currentKeys.has(getProfileDedupKey(profile))).length
 }
 
 export function activateFirstImportedProfile(settings: AppSettings, importedSettings: unknown): AppSettings {
