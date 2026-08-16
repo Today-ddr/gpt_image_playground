@@ -263,11 +263,11 @@ export function AfternoonTeaItemPlacement(props: AfternoonTeaItemPlacementProps)
   }
 
   return (
-    <section className="min-w-0 max-w-full overflow-hidden rounded-md border border-gray-200 bg-white dark:border-white/[0.08] dark:bg-white/[0.03]" aria-label="订单商品位置设置">
-      <div className="flex min-w-0 items-center justify-between gap-2 border-b border-gray-200 px-3 py-2 dark:border-white/[0.08]">
-        <span className="min-w-0 text-sm font-medium text-gray-700 dark:text-gray-200">订单商品位置</span>
-        <div className="flex shrink-0 items-center gap-2">
-          <span className="text-xs text-gray-400 dark:text-gray-500">{props.locked ? '已锁定' : imageSize ? viewMode === 'pin' ? '拖动图钉定位' : '可拖动全部标题框' : '图片加载中'}</span>
+    <section className={`min-w-0 max-w-full rounded-md border border-gray-200 bg-white dark:border-white/[0.08] dark:bg-white/[0.03] ${viewMode === 'pin' ? 'overflow-visible' : 'overflow-hidden'}`} aria-label="订单商品位置设置">
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-2 gap-y-1.5 border-b border-gray-200 px-3 py-2 dark:border-white/[0.08]">
+        <span className="hidden min-w-0 text-sm font-medium text-gray-700 sm:inline dark:text-gray-200">订单商品位置</span>
+        <div className="ml-auto flex shrink-0 items-center gap-2">
+          <span className="hidden text-xs text-gray-400 sm:inline dark:text-gray-500">{props.locked ? '已锁定' : imageSize ? viewMode === 'pin' ? '拖动图钉定位' : '可拖动全部标题框' : '图片加载中'}</span>
           <div role="tablist" aria-label="摆放显示方式" className="inline-flex rounded-md border border-gray-200 bg-gray-100 p-0.5 dark:border-white/[0.1] dark:bg-white/[0.04]">
             <button
               type="button"
@@ -275,7 +275,7 @@ export function AfternoonTeaItemPlacement(props: AfternoonTeaItemPlacementProps)
               aria-selected={viewMode === 'pin'}
               onClick={() => setPlacementViewMode('pin')}
               disabled={props.locked || !imageSize}
-              className={`min-h-8 rounded px-2.5 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-50 ${viewMode === 'pin' ? 'bg-white text-gray-900 shadow-sm dark:bg-white/[0.1] dark:text-gray-100' : 'text-gray-500 dark:text-gray-400'}`}
+              className={`min-h-11 rounded px-3 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-50 sm:min-h-8 sm:px-2.5 ${viewMode === 'pin' ? 'bg-white text-gray-900 shadow-sm dark:bg-white/[0.1] dark:text-gray-100' : 'text-gray-500 dark:text-gray-400'}`}
             >
               图钉
             </button>
@@ -285,20 +285,20 @@ export function AfternoonTeaItemPlacement(props: AfternoonTeaItemPlacementProps)
               aria-selected={viewMode === 'boxes'}
               onClick={() => setPlacementViewMode('boxes')}
               disabled={props.locked || !imageSize}
-              className={`min-h-8 rounded px-2.5 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-50 ${viewMode === 'boxes' ? 'bg-white text-gray-900 shadow-sm dark:bg-white/[0.1] dark:text-gray-100' : 'text-gray-500 dark:text-gray-400'}`}
+              className={`min-h-11 rounded px-3 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-50 sm:min-h-8 sm:px-2.5 ${viewMode === 'boxes' ? 'bg-white text-gray-900 shadow-sm dark:bg-white/[0.1] dark:text-gray-100' : 'text-gray-500 dark:text-gray-400'}`}
             >
               全框
             </button>
           </div>
         </div>
       </div>
-      <div className="min-w-0 max-w-full bg-gray-50 p-1.5 dark:bg-black/20 sm:p-2">
+      <div className={`min-w-0 max-w-full bg-gray-50 dark:bg-black/20 ${viewMode === 'pin' ? 'p-5 sm:p-6' : 'p-1.5 sm:p-2'}`}>
         <div
           ref={stageRef}
           data-title-placement-stage
           aria-label="订单商品标题位置预览"
           aria-busy={!imageSize}
-          className="relative w-full min-w-0 max-w-full overflow-hidden bg-gray-100 dark:bg-black/30"
+          className={`relative w-full min-w-0 max-w-full bg-gray-100 dark:bg-black/30 ${viewMode === 'pin' ? 'overflow-visible' : 'overflow-hidden'}`}
           style={{ aspectRatio: imageSize ? `${imageSize.width} / ${imageSize.height}` : '4 / 3' }}
         >
           <img
@@ -330,14 +330,14 @@ export function AfternoonTeaItemPlacement(props: AfternoonTeaItemPlacementProps)
                   onPointerCancel={cancelDrag}
                   onLostPointerCapture={cancelDrag}
                   onKeyDown={(event) => handleKeyDown(index, event)}
-                  className={`absolute z-[1] flex h-11 w-11 -translate-x-1/2 -translate-y-1/2 items-center justify-center touch-manipulation ${!imageSize ? 'invisible pointer-events-none' : ''} ${props.locked ? 'cursor-not-allowed' : 'cursor-grab active:cursor-grabbing'}`}
+                  className={`absolute flex h-11 w-11 -translate-x-1/2 -translate-y-1/2 items-center justify-center touch-manipulation ${isSelected ? 'z-20' : 'z-[1]'} ${!imageSize ? 'invisible pointer-events-none' : ''} ${props.locked ? 'cursor-not-allowed' : 'cursor-grab active:cursor-grabbing'}`}
                   style={{
                     left: `${pin.x * 100}%`,
                     top: `${pin.y * 100}%`,
                     touchAction: 'none',
                   }}
                 >
-                  <span className={`flex h-7 w-7 items-center justify-center rounded-full border-2 border-white bg-blue-600 text-[11px] font-semibold tabular-nums text-white shadow-sm ${isSelected ? 'ring-2 ring-blue-200' : ''}`}>
+                  <span className={`flex h-7 w-7 items-center justify-center rounded-full border-2 border-white bg-blue-600 text-[11px] font-semibold tabular-nums text-white shadow-sm ${isSelected ? 'ring-2 ring-blue-200 ring-offset-1 ring-offset-transparent' : ''}`}>
                     {index + 1}
                   </span>
                 </button>

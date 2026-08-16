@@ -174,6 +174,10 @@ describe('AfternoonTeaItemPlacement', () => {
     expect(html).toContain('aria-label="拖动商品 金枪鱼紫菜包饭"')
     expect((html.match(/data-item-title-pin=/g) ?? [])).toHaveLength(items.length)
     expect(html).not.toContain('aria-label="商品 蟹肉沙拉紫菜包饭 标题位置"')
+    expect(placementSource).toContain('hidden min-w-0 text-sm font-medium text-gray-700 sm:inline')
+    expect(placementSource).toContain('hidden text-xs text-gray-400 sm:inline')
+    expect(placementSource).toContain("viewMode === 'pin' ? 'overflow-visible' : 'overflow-hidden'")
+    expect(placementSource).toContain("viewMode === 'pin' ? 'p-5 sm:p-6' : 'p-1.5 sm:p-2'")
   })
 
   it('lets pins start a drag without expanding into a title box', () => {
