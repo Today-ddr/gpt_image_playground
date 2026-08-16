@@ -398,7 +398,7 @@ describe('AfternoonTeaMobileWorkflow', () => {
     const html = renderWorkflow()
 
     expect(html).toContain('data-item-title-pin="1"')
-    expect(html).toContain('aria-label="选择商品 柠檬红茶"')
+    expect(html).toContain('aria-label="拖动商品 柠檬红茶"')
     expect(html).toContain('aria-label="商品 草莓蛋糕 标题位置"')
     expect(html).toContain('aria-label="定位餐品 1"')
     expect(html).toContain('aria-label="定位餐品 2"')

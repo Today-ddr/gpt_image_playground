@@ -10,6 +10,10 @@ import {
   normalizeAfternoonTeaTitleRegion,
   resolveAfternoonTeaPlacementSelection,
   resolveAfternoonTeaTitleRegionForImage,
+  resolveAfternoonTeaPlacementViewMode,
+  readAfternoonTeaPlacementViewMode,
+  writeAfternoonTeaPlacementViewMode,
+  AFTERNOON_TEA_PLACEMENT_VIEW_MODE_STORAGE_KEY,
 } from './afternoonTeaTitlePlacement'
 
 describe('afternoon tea title placement', () => {
@@ -124,5 +128,20 @@ describe('afternoon tea title placement', () => {
   it('places an unselected pin at the title box center', () => {
     expect(getAfternoonTeaPlacementPinCenter({ x: 0.1, y: 0.2, width: 0.3, height: 0.2 }))
       .toEqual({ x: 0.25, y: 0.3 })
+  })
+
+  it('persists only pin or boxes placement view modes', () => {
+    const storage = new Map<string, string>()
+    const fakeStorage = {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => { storage.set(key, value) },
+    }
+
+    expect(resolveAfternoonTeaPlacementViewMode('boxes')).toBe('boxes')
+    expect(resolveAfternoonTeaPlacementViewMode('other')).toBe('pin')
+    expect(readAfternoonTeaPlacementViewMode(fakeStorage)).toBe('pin')
+    writeAfternoonTeaPlacementViewMode('boxes', fakeStorage)
+    expect(storage.get(AFTERNOON_TEA_PLACEMENT_VIEW_MODE_STORAGE_KEY)).toBe('boxes')
+    expect(readAfternoonTeaPlacementViewMode(fakeStorage)).toBe('boxes')
   })
 })

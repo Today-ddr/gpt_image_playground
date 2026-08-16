@@ -154,6 +154,37 @@ export function getAfternoonTeaPlacementPinCenter(region: AfternoonTeaTitleRegio
   }
 }
 
+export type AfternoonTeaPlacementViewMode = 'pin' | 'boxes'
+
+export const AFTERNOON_TEA_PLACEMENT_VIEW_MODE_STORAGE_KEY = 'gpt-image-playground.tools-placement-view-mode'
+
+export function resolveAfternoonTeaPlacementViewMode(value: unknown): AfternoonTeaPlacementViewMode {
+  return value === 'boxes' ? 'boxes' : 'pin'
+}
+
+export function readAfternoonTeaPlacementViewMode(
+  storage: Pick<Storage, 'getItem'> | null = typeof window === 'undefined' ? null : window.localStorage,
+) {
+  if (!storage) return 'pin'
+  try {
+    return resolveAfternoonTeaPlacementViewMode(storage.getItem(AFTERNOON_TEA_PLACEMENT_VIEW_MODE_STORAGE_KEY))
+  } catch {
+    return 'pin'
+  }
+}
+
+export function writeAfternoonTeaPlacementViewMode(
+  value: AfternoonTeaPlacementViewMode,
+  storage: Pick<Storage, 'setItem'> | null = typeof window === 'undefined' ? null : window.localStorage,
+) {
+  if (!storage) return
+  try {
+    storage.setItem(AFTERNOON_TEA_PLACEMENT_VIEW_MODE_STORAGE_KEY, resolveAfternoonTeaPlacementViewMode(value))
+  } catch {
+    // ignore quota / private mode failures
+  }
+}
+
 export function getNormalizedPointerDelta(
   start: PointerPoint,
   current: PointerPoint,

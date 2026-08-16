@@ -145,8 +145,16 @@ describe('AfternoonTeaItemPlacement', () => {
     expect(firstBox).toContain('opacity-100')
     expect(secondPin).toContain('aria-pressed="false"')
     expect(secondPin).toContain('data-item-title-pin="1"')
-    expect(placementSource).toContain('点编号选择，点空白收起')
+    expect(placementSource).toContain('拖图钉，点空白收起')
+    expect(placementSource).toContain('切换为全框模式')
+    expect(html).toContain('aria-label="拖动商品 金枪鱼紫菜包饭"')
     expect((html.match(/data-item-title-pin=/g) ?? [])).toHaveLength(2)
+  })
+
+  it('lets pins start a drag without expanding immediately', () => {
+    expect(placementSource).toContain("selectOnStart: false, selectOnRelease: true")
+    expect(placementSource).toContain('drag.selectOnRelease && !drag.didMove')
+    expect(placementSource).toContain("viewMode === 'pin' ? 'boxes' : 'pin'")
   })
 
   it('collapses every title box to a pin when no item is selected', () => {
