@@ -1,8 +1,9 @@
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AfternoonTeaItem, AfternoonTeaTitleRegion } from '../../types'
 import { AfternoonTeaItemPlacement, fitFontSizePx } from './AfternoonTeaTitlePlacement'
 import placementSource from './AfternoonTeaTitlePlacement.tsx?raw'
+import { AFTERNOON_TEA_PLACEMENT_VIEW_MODE_STORAGE_KEY } from '../../lib/afternoonTeaTitlePlacement'
 
 const items: AfternoonTeaItem[] = [
   { displayName: '蟹肉沙拉紫菜包饭', tags: [] },
@@ -16,6 +17,24 @@ const regions: AfternoonTeaTitleRegion[] = [
   { x: 0.05, y: 0.25, width: 0.3, height: 0.16 },
 ]
 
+const memoryStorage = new Map<string, string>()
+const fakeStorage = {
+  getItem: (key: string) => memoryStorage.get(key) ?? null,
+  setItem: (key: string, value: string) => { memoryStorage.set(key, value) },
+  removeItem: (key: string) => { memoryStorage.delete(key) },
+}
+
+afterEach(() => {
+  memoryStorage.clear()
+  vi.unstubAllGlobals()
+})
+
+function renderBoxes(node: Parameters<typeof renderToStaticMarkup>[0]) {
+  memoryStorage.set(AFTERNOON_TEA_PLACEMENT_VIEW_MODE_STORAGE_KEY, 'boxes')
+  vi.stubGlobal('window', { localStorage: fakeStorage })
+  return renderToStaticMarkup(node)
+}
+
 describe('AfternoonTeaItemPlacement', () => {
   it('renders one draggable label for every order item, using displayName', () => {
     const html = renderToStaticMarkup(<AfternoonTeaItemPlacement
@@ -27,14 +46,16 @@ describe('AfternoonTeaItemPlacement', () => {
     />)
 
     expect((html.match(/data-item-title-box=/g) ?? [])).toHaveLength(items.length)
+    expect((html.match(/data-item-title-pin=/g) ?? [])).toHaveLength(items.length)
     expect(html).toContain('蟹肉沙拉紫菜包饭')
     expect(html).toContain('金枪鱼紫菜包饭')
     expect(html).toContain('蛋黄肉松紫菜包饭')
     expect(html).toContain('touch-action:none')
+    expect(html).not.toContain('data-fit-label')
   })
 
   it('keeps the visible frame equal to the percent rectangle without enabling every expanded hit area', () => {
-    const html = renderToStaticMarkup(<AfternoonTeaItemPlacement
+    const html = renderBoxes(<AfternoonTeaItemPlacement
       imageSrc="data:image/png;base64,AQID"
       items={items}
       regions={regions}
@@ -55,7 +76,7 @@ describe('AfternoonTeaItemPlacement', () => {
   })
 
   it('uses compact wrapping text inside narrow mobile title boxes', () => {
-    const html = renderToStaticMarkup(<AfternoonTeaItemPlacement
+    const html = renderBoxes(<AfternoonTeaItemPlacement
       imageSrc="data:image/png;base64,AQID"
       items={[{ displayName: '蟹肉沙拉紫菜包饭', tags: [] }]}
       regions={[regions[0]]}
@@ -130,7 +151,7 @@ describe('AfternoonTeaItemPlacement', () => {
     })).toBe(72)
   })
 
-  it('visually distinguishes the active title box on mobile without dimming desktop boxes', () => {
+  it('keeps every pin as a numbered marker and highlights the selected one', () => {
     const html = renderToStaticMarkup(<AfternoonTeaItemPlacement
       imageSrc="data:image/png;base64,AQID"
       items={items}
@@ -138,43 +159,44 @@ describe('AfternoonTeaItemPlacement', () => {
       locked={false}
       onChange={() => {}}
     />)
-    const firstBox = html.match(/<div data-item-title-box="0"[^>]*>/)?.[0] ?? ''
+    const firstPin = html.match(/<button[^>]*data-item-title-box="0"[^>]*>/)?.[0] ?? ''
     const secondPin = html.match(/<button[^>]*data-item-title-box="1"[^>]*>/)?.[0] ?? ''
 
-    expect(firstBox).toContain('aria-pressed="true"')
-    expect(firstBox).toContain('opacity-100')
+    expect(firstPin).toContain('aria-pressed="true"')
+    expect(firstPin).toContain('data-item-title-pin="0"')
     expect(secondPin).toContain('aria-pressed="false"')
     expect(secondPin).toContain('data-item-title-pin="1"')
-    expect(placementSource).toContain('拖图钉，点空白收起')
+    expect(placementSource).toContain('拖动图钉定位')
     expect(placementSource).toContain('role="tablist"')
     expect(html).toContain('aria-label="摆放显示方式"')
     expect(html).toContain('>图钉<')
     expect(html).toContain('>全框<')
     expect(html).toContain('aria-label="拖动商品 金枪鱼紫菜包饭"')
-    expect((html.match(/data-item-title-pin=/g) ?? [])).toHaveLength(2)
+    expect((html.match(/data-item-title-pin=/g) ?? [])).toHaveLength(items.length)
+    expect(html).not.toContain('aria-label="商品 蟹肉沙拉紫菜包饭 标题位置"')
   })
 
-  it('lets pins start a drag without expanding immediately', () => {
-    expect(placementSource).toContain("selectOnStart: false, selectOnRelease: true")
-    expect(placementSource).toContain('drag.selectOnRelease && !drag.didMove')
+  it('lets pins start a drag without expanding into a title box', () => {
+    expect(placementSource).toContain("if (viewMode === 'pin')")
+    expect(placementSource).not.toContain('selectOnStart')
+    expect(placementSource).not.toContain('selectOnRelease')
     expect(placementSource).toContain("setPlacementViewMode('pin')")
     expect(placementSource).toContain("setPlacementViewMode('boxes')")
   })
 
-  it('collapses every title box to a pin when no item is selected', () => {
+  it('keeps every item as a pin even when one is selected', () => {
     const html = renderToStaticMarkup(<AfternoonTeaItemPlacement
       imageSrc="data:image/png;base64,AQID"
       items={items}
       regions={regions}
       locked={false}
-      selectedIndex={null}
+      selectedIndex={0}
       onChange={() => {}}
     />)
 
     expect((html.match(/data-item-title-pin=/g) ?? [])).toHaveLength(items.length)
     expect(html).not.toContain('aria-label="商品 蟹肉沙拉紫菜包饭 标题位置"')
-    expect(placementSource).toContain('onPointerDown={handleStagePointerDown}')
-    expect(placementSource).toContain('props.onSelectedIndexChange?.(null)')
+    expect(placementSource).not.toContain('handleStagePointerDown')
   })
 
   it('commits pointer movement only on pointerup', () => {
@@ -229,9 +251,9 @@ describe('AfternoonTeaItemPlacement', () => {
     expect(html).toContain('aria-busy="true"')
     expect(html).toContain('图片加载中')
     expect(html).not.toContain('>可拖动<')
-    expect(html.match(/<div data-item-title-box="0"[^>]*>/)?.[0]).toContain('invisible')
-    expect(html.match(/<div data-item-title-box="0"[^>]*>/)?.[0]).toContain('pointer-events-none')
-    expect(html.match(/<div data-item-title-box="0"[^>]*>/)?.[0]).toContain('tabindex="-1"')
+    expect(html.match(/<button[^>]*data-item-title-box="0"[^>]*>/)?.[0]).toContain('invisible')
+    expect(html.match(/<button[^>]*data-item-title-box="0"[^>]*>/)?.[0]).toContain('pointer-events-none')
+    expect(html.match(/<button[^>]*data-item-title-box="0"[^>]*>/)?.[0]).toContain('disabled=""')
   })
 
   it('renders a non-editable empty state without an image', () => {

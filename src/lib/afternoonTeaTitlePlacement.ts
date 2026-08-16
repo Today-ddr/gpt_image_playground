@@ -37,16 +37,14 @@ function isValidRegion(value: AfternoonTeaTitleRegion) {
     && isFiniteNumber(value.y)
     && isFiniteNumber(value.width)
     && isFiniteNumber(value.height)
-    && value.x >= 0
-    && value.y >= 0
     && value.width > 0
     && value.height > 0
-    && value.x <= 1
-    && value.y <= 1
     && value.width <= 1
     && value.height <= 1
-    && value.x + value.width <= 1
-    && value.y + value.height <= 1
+    && value.x + value.width / 2 >= 0
+    && value.y + value.height / 2 >= 0
+    && value.x + value.width / 2 <= 1
+    && value.y + value.height / 2 <= 1
 }
 
 function readValidRegion(value: unknown): AfternoonTeaTitleRegion | null {
@@ -93,9 +91,11 @@ export function clampAfternoonTeaTitleRegion(region: AfternoonTeaTitleRegion): A
     : DEFAULT_AFTERNOON_TEA_TITLE_REGION.height
   const x = isFiniteNumber(region.x) ? region.x : DEFAULT_AFTERNOON_TEA_TITLE_REGION.x
   const y = isFiniteNumber(region.y) ? region.y : DEFAULT_AFTERNOON_TEA_TITLE_REGION.y
+  const pinX = Math.min(Math.max(x + width / 2, 0), 1)
+  const pinY = Math.min(Math.max(y + height / 2, 0), 1)
   return {
-    x: Math.min(Math.max(x, 0), 1 - width),
-    y: Math.min(Math.max(y, 0), 1 - height),
+    x: pinX - width / 2,
+    y: pinY - height / 2,
     width,
     height,
   }
@@ -112,12 +112,12 @@ export function moveAfternoonTeaTitleRegion(
     x: x + (isFiniteNumber(delta.x) ? delta.x : 0),
     y: y + (isFiniteNumber(delta.y) ? delta.y : 0),
   })
-  const maxX = Math.max(0, Math.floor((1 - clamped.width) * 1000) / 1000)
-  const maxY = Math.max(0, Math.floor((1 - clamped.height) * 1000) / 1000)
+  const pinX = Math.min(Math.max(roundRegionValue(clamped.x + clamped.width / 2), 0), 1)
+  const pinY = Math.min(Math.max(roundRegionValue(clamped.y + clamped.height / 2), 0), 1)
   return {
     ...clamped,
-    x: Math.min(Math.round(clamped.x * 1000) / 1000, maxX),
-    y: Math.min(Math.round(clamped.y * 1000) / 1000, maxY),
+    x: roundRegionValue(pinX - clamped.width / 2),
+    y: roundRegionValue(pinY - clamped.height / 2),
   }
 }
 
@@ -224,10 +224,10 @@ export function getAfternoonTeaTitlePlacement(region: AfternoonTeaTitleRegion): 
   return {
     semanticRegion: labels[row][column],
     boxPercent: {
-      left: Math.round(normalized.x * 100),
-      top: Math.round(normalized.y * 100),
-      right: Math.round((normalized.x + normalized.width) * 100),
-      bottom: Math.round((normalized.y + normalized.height) * 100),
+      left: Math.max(0, Math.round(normalized.x * 100)),
+      top: Math.max(0, Math.round(normalized.y * 100)),
+      right: Math.min(100, Math.round((normalized.x + normalized.width) * 100)),
+      bottom: Math.min(100, Math.round((normalized.y + normalized.height) * 100)),
     },
   }
 }

@@ -394,12 +394,13 @@ describe('AfternoonTeaMobileWorkflow', () => {
     expect(html).not.toContain('>餐品标签<')
   })
 
-  it('collapses unselected review items to numbered pins and highlights the selected list row', () => {
+  it('shows numbered pins for every review item and highlights the selected list row', () => {
     const html = renderWorkflow()
 
+    expect(html).toContain('data-item-title-pin="0"')
     expect(html).toContain('data-item-title-pin="1"')
     expect(html).toContain('aria-label="拖动商品 柠檬红茶"')
-    expect(html).toContain('aria-label="商品 草莓蛋糕 标题位置"')
+    expect(html).toContain('aria-label="拖动商品 草莓蛋糕"')
     expect(html).toContain('aria-label="定位餐品 1"')
     expect(html).toContain('aria-label="定位餐品 2"')
     expect(html).toContain('aria-pressed="true"')

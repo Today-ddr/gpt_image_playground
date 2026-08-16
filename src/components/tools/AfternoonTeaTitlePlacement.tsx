@@ -124,8 +124,6 @@ type DragState = {
   startRegions: AfternoonTeaTitleRegion[]
   latestRegions: AfternoonTeaTitleRegion[]
   imageRect: { width: number; height: number }
-  didMove: boolean
-  selectOnRelease: boolean
 }
 
 export function AfternoonTeaItemPlacement(props: AfternoonTeaItemPlacementProps) {
@@ -145,17 +143,6 @@ export function AfternoonTeaItemPlacement(props: AfternoonTeaItemPlacementProps)
   const selectIndex = (index: number) => {
     if (!isSelectionControlled) setActiveIndex(index)
     props.onSelectedIndexChange?.(index)
-  }
-  const clearSelection = () => {
-    if (!isSelectionControlled) setActiveIndex(null)
-    props.onSelectedIndexChange?.(null)
-  }
-  const handleStagePointerDown = (event: PointerEvent<HTMLDivElement>) => {
-    if (viewMode !== 'pin') return
-    if (props.locked || !imageSize || dragRef.current) return
-    const target = event.target
-    if (target !== stageRef.current && !(target instanceof HTMLImageElement)) return
-    clearSelection()
   }
   const setPlacementViewMode = (nextMode: AfternoonTeaPlacementViewMode) => {
     if (nextMode === viewMode) return
@@ -188,7 +175,6 @@ export function AfternoonTeaItemPlacement(props: AfternoonTeaItemPlacementProps)
     const nextRegions = drag.startRegions.map((region, index) => index === drag.index
       ? moveAfternoonTeaTitleRegion(region, delta)
       : region)
-    if (Math.abs(delta.x) > 0.004 || Math.abs(delta.y) > 0.004) drag.didMove = true
     drag.latestRegions = nextRegions
     setPreviewRegions(nextRegions)
   }
@@ -206,7 +192,6 @@ export function AfternoonTeaItemPlacement(props: AfternoonTeaItemPlacementProps)
       return
     }
     props.onChange(drag.latestRegions)
-    if (drag.selectOnRelease && !drag.didMove) selectIndex(drag.index)
   }
 
   const cancelDrag = (event: PointerEvent<HTMLElement>) => {
@@ -219,15 +204,11 @@ export function AfternoonTeaItemPlacement(props: AfternoonTeaItemPlacementProps)
     setPreviewRegions(drag.startRegions)
   }
 
-  const handlePointerDown = (
-    index: number,
-    event: PointerEvent<HTMLElement>,
-    options?: { selectOnStart?: boolean; selectOnRelease?: boolean },
-  ) => {
+  const handlePointerDown = (index: number, event: PointerEvent<HTMLElement>) => {
     if (props.locked || !event.isPrimary || event.button !== 0) return
     const imageRect = stageRef.current?.getBoundingClientRect()
     if (!imageRect || imageRect.width <= 0 || imageRect.height <= 0 || !imageSize) return
-    if (options?.selectOnStart !== false) selectIndex(index)
+    selectIndex(index)
     const startRegions = normalizeAfternoonTeaItemTitleRegions(previewRegions, props.items.length)
     const target = event.currentTarget
     dragRef.current = {
@@ -238,8 +219,6 @@ export function AfternoonTeaItemPlacement(props: AfternoonTeaItemPlacementProps)
       startRegions,
       latestRegions: startRegions,
       imageRect: { width: imageRect.width, height: imageRect.height },
-      didMove: false,
-      selectOnRelease: Boolean(options?.selectOnRelease),
     }
     target.setPointerCapture(event.pointerId)
     event.preventDefault()
@@ -252,7 +231,7 @@ export function AfternoonTeaItemPlacement(props: AfternoonTeaItemPlacementProps)
     event.preventDefault()
   }
 
-  const handleKeyDown = (index: number, event: KeyboardEvent<HTMLDivElement>) => {
+  const handleKeyDown = (index: number, event: KeyboardEvent<HTMLElement>) => {
     if (props.locked || !imageSize) return
     const step = event.shiftKey ? 0.05 : 0.01
     const delta = {
@@ -288,7 +267,7 @@ export function AfternoonTeaItemPlacement(props: AfternoonTeaItemPlacementProps)
       <div className="flex min-w-0 items-center justify-between gap-2 border-b border-gray-200 px-3 py-2 dark:border-white/[0.08]">
         <span className="min-w-0 text-sm font-medium text-gray-700 dark:text-gray-200">订单商品位置</span>
         <div className="flex shrink-0 items-center gap-2">
-          <span className="text-xs text-gray-400 dark:text-gray-500">{props.locked ? '已锁定' : imageSize ? viewMode === 'pin' ? '拖图钉，点空白收起' : '可拖动全部标题框' : '图片加载中'}</span>
+          <span className="text-xs text-gray-400 dark:text-gray-500">{props.locked ? '已锁定' : imageSize ? viewMode === 'pin' ? '拖动图钉定位' : '可拖动全部标题框' : '图片加载中'}</span>
           <div role="tablist" aria-label="摆放显示方式" className="inline-flex rounded-md border border-gray-200 bg-gray-100 p-0.5 dark:border-white/[0.1] dark:bg-white/[0.04]">
             <button
               type="button"
@@ -319,7 +298,6 @@ export function AfternoonTeaItemPlacement(props: AfternoonTeaItemPlacementProps)
           data-title-placement-stage
           aria-label="订单商品标题位置预览"
           aria-busy={!imageSize}
-          onPointerDown={handleStagePointerDown}
           className="relative w-full min-w-0 max-w-full overflow-hidden bg-gray-100 dark:bg-black/30"
           style={{ aspectRatio: imageSize ? `${imageSize.width} / ${imageSize.height}` : '4 / 3' }}
         >
@@ -333,8 +311,8 @@ export function AfternoonTeaItemPlacement(props: AfternoonTeaItemPlacementProps)
           {previewRegions.map((region, index) => {
             const item = props.items[index]
             if (!item) return null
-            const isActive = viewMode === 'pin' && resolvedSelectedIndex === index
-            if (viewMode === 'pin' && !isActive) {
+            const isSelected = resolvedSelectedIndex === index
+            if (viewMode === 'pin') {
               const pin = getAfternoonTeaPlacementPinCenter(region)
               return (
                 <button
@@ -344,13 +322,14 @@ export function AfternoonTeaItemPlacement(props: AfternoonTeaItemPlacementProps)
                   data-item-title-pin={index}
                   data-order-item-index={index}
                   aria-label={`拖动商品 ${item.displayName}`}
-                  aria-pressed="false"
+                  aria-pressed={isSelected}
                   disabled={props.locked || !imageSize}
-                  onPointerDown={(event) => handlePointerDown(index, event, { selectOnStart: false, selectOnRelease: true })}
+                  onPointerDown={(event) => handlePointerDown(index, event)}
                   onPointerMove={handlePointerMove}
                   onPointerUp={commitDrag}
                   onPointerCancel={cancelDrag}
                   onLostPointerCapture={cancelDrag}
+                  onKeyDown={(event) => handleKeyDown(index, event)}
                   className={`absolute z-[1] flex h-11 w-11 -translate-x-1/2 -translate-y-1/2 items-center justify-center touch-manipulation ${!imageSize ? 'invisible pointer-events-none' : ''} ${props.locked ? 'cursor-not-allowed' : 'cursor-grab active:cursor-grabbing'}`}
                   style={{
                     left: `${pin.x * 100}%`,
@@ -358,7 +337,7 @@ export function AfternoonTeaItemPlacement(props: AfternoonTeaItemPlacementProps)
                     touchAction: 'none',
                   }}
                 >
-                  <span className="flex h-7 w-7 items-center justify-center rounded-full border-2 border-white bg-blue-600 text-[11px] font-semibold tabular-nums text-white shadow-sm">
+                  <span className={`flex h-7 w-7 items-center justify-center rounded-full border-2 border-white bg-blue-600 text-[11px] font-semibold tabular-nums text-white shadow-sm ${isSelected ? 'ring-2 ring-blue-200' : ''}`}>
                     {index + 1}
                   </span>
                 </button>
@@ -371,12 +350,12 @@ export function AfternoonTeaItemPlacement(props: AfternoonTeaItemPlacementProps)
                 data-order-item-index={index}
                 aria-label={`商品 ${item.displayName} 标题位置`}
                 aria-disabled={props.locked || !imageSize}
-                aria-pressed={resolvedSelectedIndex === index}
+                aria-pressed={isSelected}
                 role="button"
                 tabIndex={props.locked || !imageSize ? -1 : 0}
                 onFocus={() => selectIndex(index)}
                 onKeyDown={(event) => handleKeyDown(index, event)}
-                className={`absolute overflow-visible ${resolvedSelectedIndex === index || viewMode === 'pin' ? 'z-10 opacity-100' : 'z-0 opacity-50 sm:opacity-100'} ${!imageSize ? 'invisible pointer-events-none' : ''}`}
+                className={`absolute overflow-visible ${isSelected ? 'z-10 opacity-100' : 'z-0 opacity-50 sm:opacity-100'} ${!imageSize ? 'invisible pointer-events-none' : ''}`}
                 style={{
                   left: `${region.x * 100}%`,
                   top: `${region.y * 100}%`,

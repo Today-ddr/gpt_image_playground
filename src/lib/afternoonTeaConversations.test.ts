@@ -254,8 +254,8 @@ describe('afternoon tea conversations', () => {
   })
 
   it.each([
-    [{ x: -0.1, y: 0.1, width: 0.4, height: 0.2 }, 'negative'],
-    [{ x: 0.1, y: 0.1, width: 0.91, height: 0.2 }, 'horizontal overflow'],
+    [{ x: -0.3, y: 0.1, width: 0.4, height: 0.2 }, 'pin overflow left'],
+    [{ x: 0.7, y: 0.1, width: 0.91, height: 0.2 }, 'pin overflow right'],
     [{ x: Number.NaN, y: 0.1, width: 0.4, height: 0.2 }, 'NaN'],
     [{ x: 0.1, y: Number.POSITIVE_INFINITY, width: 0.4, height: 0.2 }, 'Infinity'],
   ])('normalizes invalid imported item title regions to the indexed default for %s', (titleRegion, _label) => {
