@@ -133,6 +133,26 @@ export function resolveAfternoonTeaItemTitleRegionsForImage(
   return createDefaultAfternoonTeaItemTitleRegions(itemCount)
 }
 
+export function resolveAfternoonTeaPlacementSelection(
+  selectedIndex: number | null | undefined,
+  itemCount: number,
+) {
+  if (!isFiniteNumber(itemCount) || itemCount <= 0) return null
+  const count = Math.floor(itemCount)
+  if (selectedIndex == null || !Number.isInteger(selectedIndex) || selectedIndex < 0 || selectedIndex >= count) {
+    return 0
+  }
+  return selectedIndex
+}
+
+export function getAfternoonTeaPlacementPinCenter(region: AfternoonTeaTitleRegion) {
+  const normalized = clampAfternoonTeaTitleRegion(normalizeAfternoonTeaTitleRegion(region))
+  return {
+    x: roundRegionValue(normalized.x + normalized.width / 2),
+    y: roundRegionValue(normalized.y + normalized.height / 2),
+  }
+}
+
 export function getNormalizedPointerDelta(
   start: PointerPoint,
   current: PointerPoint,

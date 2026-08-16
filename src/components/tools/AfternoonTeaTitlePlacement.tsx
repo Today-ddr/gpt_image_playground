@@ -4,6 +4,8 @@ import {
   getNormalizedPointerDelta,
   moveAfternoonTeaTitleRegion,
   normalizeAfternoonTeaItemTitleRegions,
+  getAfternoonTeaPlacementPinCenter,
+  resolveAfternoonTeaPlacementSelection,
 } from '../../lib/afternoonTeaTitlePlacement'
 
 export type AfternoonTeaItemPlacementProps = {
@@ -12,6 +14,8 @@ export type AfternoonTeaItemPlacementProps = {
   regions: AfternoonTeaTitleRegion[]
   locked: boolean
   onChange: (regions: AfternoonTeaTitleRegion[]) => void
+  selectedIndex?: number | null
+  onSelectedIndexChange?: (index: number) => void
 }
 
 const LABEL_FONT_MIN_PX = 8
@@ -127,6 +131,15 @@ export function AfternoonTeaItemPlacement(props: AfternoonTeaItemPlacementProps)
   const [loadedImageSize, setLoadedImageSize] = useState<{ src: string; width: number; height: number } | null>(null)
   const imageSize = loadedImageSize?.src === props.imageSrc ? loadedImageSize : null
   const regionsKey = props.regions.map((region) => `${region.x}:${region.y}:${region.width}:${region.height}`).join('|')
+  const isSelectionControlled = props.selectedIndex !== undefined
+  const resolvedSelectedIndex = resolveAfternoonTeaPlacementSelection(
+    isSelectionControlled ? props.selectedIndex : activeIndex,
+    props.items.length,
+  )
+  const selectIndex = (index: number) => {
+    if (!isSelectionControlled) setActiveIndex(index)
+    props.onSelectedIndexChange?.(index)
+  }
 
   useEffect(() => {
     const drag = dragRef.current
@@ -135,9 +148,9 @@ export function AfternoonTeaItemPlacement(props: AfternoonTeaItemPlacementProps)
       dragRef.current = null
     }
     if (!dragRef.current) setPreviewRegions(normalizeAfternoonTeaItemTitleRegions(props.regions, props.items.length))
-    setActiveIndex((current) => props.items.length === 0
-      ? null
-      : current != null && current < props.items.length ? current : 0)
+    if (!isSelectionControlled) {
+      setActiveIndex((current) => resolveAfternoonTeaPlacementSelection(current, props.items.length))
+    }
   }, [props.items.length, props.locked, regionsKey])
 
   useEffect(() => {
@@ -186,7 +199,7 @@ export function AfternoonTeaItemPlacement(props: AfternoonTeaItemPlacementProps)
     if (props.locked || !event.isPrimary || event.button !== 0) return
     const imageRect = stageRef.current?.getBoundingClientRect()
     if (!imageRect || imageRect.width <= 0 || imageRect.height <= 0 || !imageSize) return
-    setActiveIndex(index)
+    selectIndex(index)
     const startRegions = normalizeAfternoonTeaItemTitleRegions(previewRegions, props.items.length)
     const target = event.currentTarget
     dragRef.current = {
@@ -244,7 +257,7 @@ export function AfternoonTeaItemPlacement(props: AfternoonTeaItemPlacementProps)
     <section className="min-w-0 max-w-full overflow-hidden rounded-md border border-gray-200 bg-white dark:border-white/[0.08] dark:bg-white/[0.03]" aria-label="订单商品位置设置">
       <div className="flex min-w-0 items-center justify-between gap-2 border-b border-gray-200 px-3 py-2 dark:border-white/[0.08]">
         <span className="min-w-0 text-sm font-medium text-gray-700 dark:text-gray-200">订单商品位置</span>
-        <span className="shrink-0 text-xs text-gray-400 dark:text-gray-500">{props.locked ? '已锁定' : imageSize ? '可拖动' : '图片加载中'}</span>
+        <span className="shrink-0 text-xs text-gray-400 dark:text-gray-500">{props.locked ? '已锁定' : imageSize ? '点编号选择，再拖当前框' : '图片加载中'}</span>
       </div>
       <div className="min-w-0 max-w-full bg-gray-50 p-1.5 dark:bg-black/20 sm:p-2">
         <div
@@ -265,6 +278,32 @@ export function AfternoonTeaItemPlacement(props: AfternoonTeaItemPlacementProps)
           {previewRegions.map((region, index) => {
             const item = props.items[index]
             if (!item) return null
+            const isActive = resolvedSelectedIndex === index
+            if (!isActive) {
+              const pin = getAfternoonTeaPlacementPinCenter(region)
+              return (
+                <button
+                  key={index}
+                  type="button"
+                  data-item-title-box={index}
+                  data-item-title-pin={index}
+                  data-order-item-index={index}
+                  aria-label={`选择商品 ${item.displayName}`}
+                  aria-pressed="false"
+                  disabled={props.locked || !imageSize}
+                  onClick={() => selectIndex(index)}
+                  className={`absolute z-[1] flex h-11 w-11 -translate-x-1/2 -translate-y-1/2 items-center justify-center touch-manipulation ${!imageSize ? 'invisible pointer-events-none' : ''}`}
+                  style={{
+                    left: `${pin.x * 100}%`,
+                    top: `${pin.y * 100}%`,
+                  }}
+                >
+                  <span className="flex h-7 w-7 items-center justify-center rounded-full border-2 border-white bg-blue-600 text-[11px] font-semibold tabular-nums text-white shadow-sm">
+                    {index + 1}
+                  </span>
+                </button>
+              )
+            }
             return (
               <div
                 key={index}
@@ -272,12 +311,12 @@ export function AfternoonTeaItemPlacement(props: AfternoonTeaItemPlacementProps)
                 data-order-item-index={index}
                 aria-label={`商品 ${item.displayName} 标题位置`}
                 aria-disabled={props.locked || !imageSize}
-                aria-pressed={activeIndex === index}
+                aria-pressed="true"
                 role="button"
                 tabIndex={props.locked || !imageSize ? -1 : 0}
-                onFocus={() => setActiveIndex(index)}
+                onFocus={() => selectIndex(index)}
                 onKeyDown={(event) => handleKeyDown(index, event)}
-                className={`absolute overflow-visible transition-opacity ${activeIndex === index ? 'z-10 opacity-100' : 'z-0 opacity-50 sm:opacity-100'} ${!imageSize ? 'invisible pointer-events-none' : ''}`}
+                className={`absolute z-10 overflow-visible opacity-100 ${!imageSize ? 'invisible pointer-events-none' : ''}`}
                 style={{
                   left: `${region.x * 100}%`,
                   top: `${region.y * 100}%`,
@@ -297,7 +336,7 @@ export function AfternoonTeaItemPlacement(props: AfternoonTeaItemPlacementProps)
                 >
                   <FitLabelText text={item.displayName} />
                 </div>
-                {!props.locked && imageSize && activeIndex === index && (
+                {!props.locked && imageSize && (
                   <div
                     data-title-placement-hit-area
                     aria-hidden="true"

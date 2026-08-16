@@ -4,9 +4,11 @@ import {
   DEFAULT_AFTERNOON_TEA_TITLE_REGION,
   clampAfternoonTeaTitleRegion,
   getAfternoonTeaTitlePlacement,
+  getAfternoonTeaPlacementPinCenter,
   getNormalizedPointerDelta,
   moveAfternoonTeaTitleRegion,
   normalizeAfternoonTeaTitleRegion,
+  resolveAfternoonTeaPlacementSelection,
   resolveAfternoonTeaTitleRegionForImage,
 } from './afternoonTeaTitlePlacement'
 
@@ -110,5 +112,17 @@ describe('afternoon tea title placement', () => {
       semanticRegion: '上方居中',
       boxPercent: { left: 29, top: 6, right: 71, bottom: 22 },
     })
+  })
+
+  it('falls back to the first item when the selected placement index is missing', () => {
+    expect(resolveAfternoonTeaPlacementSelection(null, 8)).toBe(0)
+    expect(resolveAfternoonTeaPlacementSelection(3, 8)).toBe(3)
+    expect(resolveAfternoonTeaPlacementSelection(8, 8)).toBe(0)
+    expect(resolveAfternoonTeaPlacementSelection(1, 0)).toBeNull()
+  })
+
+  it('places an unselected pin at the title box center', () => {
+    expect(getAfternoonTeaPlacementPinCenter({ x: 0.1, y: 0.2, width: 0.3, height: 0.2 }))
+      .toEqual({ x: 0.25, y: 0.3 })
   })
 })

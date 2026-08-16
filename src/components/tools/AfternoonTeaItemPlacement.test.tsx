@@ -48,9 +48,9 @@ describe('AfternoonTeaItemPlacement', () => {
     expect(firstBox).not.toContain('min-h-11')
     expect(firstBox).not.toContain('min-w-[44px]')
     expect(html).not.toContain('data-title-placement-hit-area')
-    expect(placementSource).toContain('activeIndex === index')
-    expect(placementSource).toContain('onFocus={() => setActiveIndex(index)}')
-    expect(placementSource).toContain('setActiveIndex(index)')
+    expect(placementSource).toContain('resolvedSelectedIndex === index')
+    expect(placementSource).toContain('onFocus={() => selectIndex(index)}')
+    expect(placementSource).toContain('selectIndex(index)')
     expect(placementSource).toContain('h-11 w-11')
   })
 
@@ -94,7 +94,7 @@ describe('AfternoonTeaItemPlacement', () => {
     expect(html).not.toContain('<select')
     expect(placementSource).not.toContain('setActiveIndex(Number(event.target.value))')
     expect(placementSource).toContain('setActiveIndex(index)')
-    expect(placementSource).toContain('onFocus={() => setActiveIndex(index)}')
+    expect(placementSource).toContain('onFocus={() => selectIndex(index)}')
   })
 
   it('picks the largest fitting font size within min and max bounds', () => {
@@ -139,12 +139,14 @@ describe('AfternoonTeaItemPlacement', () => {
       onChange={() => {}}
     />)
     const firstBox = html.match(/<div data-item-title-box="0"[^>]*>/)?.[0] ?? ''
-    const secondBox = html.match(/<div data-item-title-box="1"[^>]*>/)?.[0] ?? ''
+    const secondPin = html.match(/<button[^>]*data-item-title-box="1"[^>]*>/)?.[0] ?? ''
 
     expect(firstBox).toContain('aria-pressed="true"')
     expect(firstBox).toContain('opacity-100')
-    expect(secondBox).toContain('aria-pressed="false"')
-    expect(secondBox).toContain('opacity-50 sm:opacity-100')
+    expect(secondPin).toContain('aria-pressed="false"')
+    expect(secondPin).toContain('data-item-title-pin="1"')
+    expect(placementSource).toContain('点编号选择，再拖当前框')
+    expect((html.match(/data-item-title-pin=/g) ?? [])).toHaveLength(2)
   })
 
   it('commits pointer movement only on pointerup', () => {

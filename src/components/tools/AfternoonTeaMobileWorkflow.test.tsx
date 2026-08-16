@@ -394,6 +394,19 @@ describe('AfternoonTeaMobileWorkflow', () => {
     expect(html).not.toContain('>餐品标签<')
   })
 
+  it('collapses unselected review items to numbered pins and highlights the selected list row', () => {
+    const html = renderWorkflow()
+
+    expect(html).toContain('data-item-title-pin="1"')
+    expect(html).toContain('aria-label="选择商品 柠檬红茶"')
+    expect(html).toContain('aria-label="商品 草莓蛋糕 标题位置"')
+    expect(html).toContain('aria-label="定位餐品 1"')
+    expect(html).toContain('aria-label="定位餐品 2"')
+    expect(html).toContain('aria-pressed="true"')
+    expect(mobileWorkflowSource).toContain('selectedIndex={placementSelectedIndex}')
+    expect(mobileWorkflowSource).toContain('onSelectedIndexChange={setPlacementSelectedIndex}')
+  })
+
   it('lets review attach a source image after text-only analysis', () => {
     const html = renderWorkflow({ imageDataUrl: '' })
     const placementStart = html.indexOf('aria-label="餐品摆放"')

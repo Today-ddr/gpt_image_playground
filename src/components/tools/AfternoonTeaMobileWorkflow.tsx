@@ -19,6 +19,7 @@ import TaskCard from '../TaskCard'
 import { WandAnimation } from '../wand-animation-react'
 import type { AfternoonTeaPosterViewItem } from './AfternoonTeaPosterStep'
 import { AfternoonTeaItemPlacement } from './AfternoonTeaTitlePlacement'
+import { resolveAfternoonTeaPlacementSelection } from '../../lib/afternoonTeaTitlePlacement'
 
 export type MobileAfternoonTeaPhase = 'input' | 'analyzing' | 'review' | 'generating' | 'results'
 
@@ -253,6 +254,7 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
   const [editingPosterTitle, setEditingPosterTitle] = useState<number | null>(null)
   const [editingItemName, setEditingItemName] = useState<number | null>(null)
   const [reviewError, setReviewError] = useState('')
+  const [placementSelectedIndex, setPlacementSelectedIndex] = useState(0)
   const [clipboardError, setClipboardError] = useState('')
   const [clipboardAvailable] = useState(canReadAfternoonTeaClipboard)
   const [clipboardCoordinator] = useState(createAfternoonTeaClipboardCoordinator)
@@ -282,6 +284,9 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
   useEffect(() => {
     setItemTagDrafts(props.orderResult?.items.map((item) => item.tags.join('，')) ?? [])
   }, [itemTagKey])
+  useEffect(() => {
+    setPlacementSelectedIndex((current) => resolveAfternoonTeaPlacementSelection(current, props.orderResult?.items.length ?? 0) ?? 0)
+  }, [props.orderResult?.items.length])
   useEffect(() => () => clipboardCoordinator.invalidate(), [clipboardCoordinator])
   useEffect(() => {
     if (previousPhaseRef.current === 'analyzing' && phase === 'review') {
@@ -666,7 +671,7 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
                 )}
               </div>
             </div>
-            <AfternoonTeaItemPlacement imageSrc={props.imageDataUrl} items={props.orderResult.items} regions={props.itemTitleRegions} locked={locked} onChange={props.onItemTitleRegionsChange} />
+            <AfternoonTeaItemPlacement imageSrc={props.imageDataUrl} items={props.orderResult.items} regions={props.itemTitleRegions} locked={locked} selectedIndex={placementSelectedIndex} onSelectedIndexChange={setPlacementSelectedIndex} onChange={props.onItemTitleRegionsChange} />
             {!props.imageDataUrl && (
               <>
                 <AfternoonTeaSourceImagePickers disabled={imageLocked} onImageChange={props.onImageChange} />
@@ -708,7 +713,7 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
             <h2 className="mb-2 text-sm font-semibold text-gray-900 dark:text-gray-100">餐品与标签</h2>
             <div className="divide-y divide-gray-200 border-y border-gray-200 dark:divide-white/[0.08] dark:border-white/[0.08]">
               {props.orderResult.items.map((item, index) => (
-                <div key={`${index}-${item.displayName}`} className="min-h-14 min-w-0 py-1.5">
+                <div key={`${index}-${item.displayName}`} className={`min-h-14 min-w-0 py-1.5 ${placementSelectedIndex === index ? 'bg-blue-50 dark:bg-blue-500/10' : ''}`}>
                   {editingItemName === index ? (
                     <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end" onBlur={(event) => {
                       if (event.currentTarget.contains(event.relatedTarget as Node | null)) return
@@ -734,13 +739,16 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
                     </div>
                   ) : (
                     <div className="flex min-w-0 items-center gap-2">
-                      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5 py-1">
+                      <button type="button" onClick={() => setPlacementSelectedIndex(index)} className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500" aria-label={`定位餐品 ${index + 1}`} aria-pressed={placementSelectedIndex === index}>
+                        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-blue-600 text-[11px] font-semibold tabular-nums text-white">{index + 1}</span>
+                        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5 py-1">
                         <span className="min-w-0 break-words text-sm font-medium text-gray-900 dark:text-gray-100">{itemNameDrafts[index] ?? item.displayName}</span>
                         {normalizeTags(itemTagDrafts[index] ?? item.tags.join('，')).map((tag, tagIndex) => (
                           <span key={`${tag}-${tagIndex}`} className="max-w-full break-words rounded-full bg-gray-100 px-2 py-1 text-xs leading-5 text-gray-600 dark:bg-white/[0.07] dark:text-gray-300">{tag}</span>
                         ))}
-                      </div>
-                      <button type="button" onClick={() => setEditingItemName(index)} disabled={locked} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-gray-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-50 dark:text-gray-400" aria-label={`编辑餐品与标签 ${index + 1}`}>
+                        </div>
+                      </button>
+                      <button type="button" onClick={() => { setPlacementSelectedIndex(index); setEditingItemName(index) }} disabled={locked} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-gray-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-50 dark:text-gray-400" aria-label={`编辑餐品与标签 ${index + 1}`}>
                         <EditIcon className="h-4 w-4" />
                       </button>
                     </div>
