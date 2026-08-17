@@ -2,6 +2,47 @@ export const DISH_SYSTEM_PROMPT_STORAGE_KEY = 'gpt-image-playground.dish-analysi
 
 export const DEFAULT_DISH_TITLE_COUNT = 4
 
+/** 备选标题数量：默认至少 8 条，海报更多时按 titleCount + 6 */
+export function getDishAnalysisCandidateCount(titleCount: number) {
+  const normalizedTitleCount = Number.isFinite(titleCount) ? Math.max(1, Math.floor(titleCount)) : DEFAULT_DISH_TITLE_COUNT
+  return Math.max(8, normalizedTitleCount + 6)
+}
+
+/** 审查页兜底备选：旧会话或模型没返回 titleCandidates 时也能点选 */
+export const DEFAULT_AFTERNOON_TEA_TITLE_CANDIDATES = [
+  '今日下午茶',
+  '下午茶时光',
+  '下午茶分享',
+  '今日茶歇',
+  '午后茶歇',
+  '今日小食',
+  '午后小食',
+  '本周甜品',
+]
+
+export function uniqueAfternoonTeaTitles(values: Array<string | null | undefined>) {
+  const seen = new Set<string>()
+  const titles: string[] = []
+  for (const value of values) {
+    const title = typeof value === 'string' ? value.trim() : ''
+    if (!title || seen.has(title)) continue
+    seen.add(title)
+    titles.push(title)
+  }
+  return titles
+}
+
+export function resolveAfternoonTeaTitleCandidates(orderResult: {
+  titles: string[]
+  titleCandidates?: string[]
+}) {
+  return uniqueAfternoonTeaTitles([
+    ...orderResult.titles,
+    ...(orderResult.titleCandidates ?? []),
+    ...DEFAULT_AFTERNOON_TEA_TITLE_CANDIDATES,
+  ])
+}
+
 export const DEFAULT_DISH_USER_PROMPT = ''
 
 export const DEFAULT_DISH_SYSTEM_PROMPT = `你是一个公司下午茶图片设计助手。
@@ -57,7 +98,9 @@ tags：
 tags：
 ["金枪鱼", "紫菜", "米饭"]
 【标题 titles】
-生成 {{titleCount}} 个适合放在下午茶分享图片顶部的大标题。
+生成 {{candidateCount}} 个互不重复、适合放在下午茶分享图片顶部的大标题。
+titles 填写最推荐的前 {{titleCount}} 个。
+titleCandidates 填写全部 {{candidateCount}} 个备选，且必须包含 titles 中的每一条。
 
 使用场景：
 公司行政日常发布下午茶照片到企业微信群。
@@ -73,22 +116,15 @@ tags：
 - 简单直接。
 - 一眼能看懂是下午茶分享。
 - 风格自然、轻松、日常。
+- 同一批里必须错开说法，不要反复使用同一句模板。
+- 用不同时间词或场景词错开，例如：今日、本周、午后。
+- 可以结合菜单内容做轻微变化，例如时令水果、甜品、茶歇、小食。
 
-标题方向：
-优先使用以下类型：
-1. 下午茶主题：
-例如：
-今日下午茶
-下午茶时光
-下午茶分享
-2. 茶歇主题：
-例如：
-今日茶歇
-午后茶歇
-3. 小食分享主题：
-例如：
-今日小食
-午后小食
+标题方向可以混用，但整批不要都写成固定句：
+- 下午茶
+- 茶歇
+- 小食
+- 甜品
 
 避免：
 - 过度文艺：
@@ -126,6 +162,9 @@ tags：
   "titles": [
     ""
   ],
+  "titleCandidates": [
+    ""
+  ],
   "items": [
     {
       "displayName": "",
@@ -135,9 +174,13 @@ tags：
 }`
 
 export function buildDishAnalysisSystemPrompt(systemPrompt: string, count: number) {
-  return systemPrompt.replace(/{{titleCount}}/g, String(count))
+  const candidateCount = getDishAnalysisCandidateCount(count)
+  return systemPrompt
+    .replace(/{{candidateCount}}/g, String(candidateCount))
+    .replace(/{{titleCount}}/g, String(count))
 }
 
 export function buildDishAnalysisUserPrompt(orderText: string, count: number) {
-  return `标题数量：${count}\n\n下午茶订单：\n${orderText.trim()}`
+  const candidateCount = getDishAnalysisCandidateCount(count)
+  return `标题数量：${count}\n备选标题数量：${candidateCount}\n\n下午茶订单：\n${orderText.trim()}`
 }

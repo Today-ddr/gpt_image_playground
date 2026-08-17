@@ -152,6 +152,8 @@ export interface AfternoonTeaItem {
 
 export interface AfternoonTeaOrderResult {
   titles: string[]
+  /** 解析时给出的标题备选，包含已选 titles；旧会话可能没有该字段 */
+  titleCandidates?: string[]
   items: AfternoonTeaItem[]
 }
 

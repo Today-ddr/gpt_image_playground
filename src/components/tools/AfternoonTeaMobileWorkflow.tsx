@@ -20,6 +20,7 @@ import { WandAnimation } from '../wand-animation-react'
 import type { AfternoonTeaPosterViewItem } from './AfternoonTeaPosterStep'
 import { AfternoonTeaItemPlacement } from './AfternoonTeaTitlePlacement'
 import { resolveAfternoonTeaPlacementSelection } from '../../lib/afternoonTeaTitlePlacement'
+import { resolveAfternoonTeaTitleCandidates } from '../../lib/dishAnalysisPrompts'
 
 export type MobileAfternoonTeaPhase = 'input' | 'analyzing' | 'review' | 'generating' | 'results'
 
@@ -64,6 +65,81 @@ export function expandAfternoonTeaMobileResultSlots(items: AfternoonTeaPosterVie
       profileName: item.task?.apiProfileName,
     }]
   })
+}
+
+export type AfternoonTeaMobileResultSlot = ReturnType<typeof expandAfternoonTeaMobileResultSlots>[number]
+
+export function getAfternoonTeaResultSlotNumber(slots: Array<Pick<AfternoonTeaMobileResultSlot, 'key'>>, slotKey: string) {
+  const index = slots.findIndex((slot) => slot.key === slotKey)
+  return index >= 0 ? index + 1 : 0
+}
+
+function getAfternoonTeaCompletionTimestamp(slot: Pick<AfternoonTeaMobileResultSlot, 'task'>) {
+  const finishedAt = slot.task?.finishedAt
+  if (typeof finishedAt === 'number' && Number.isFinite(finishedAt)) return finishedAt
+  const createdAt = slot.task?.createdAt
+  if (typeof createdAt === 'number' && Number.isFinite(createdAt)) return createdAt
+  return Number.POSITIVE_INFINITY
+}
+
+/** 只给已出图的槽位按完成时间编号；生成中不编号 */
+export function getAfternoonTeaCompletionOrderNumbers(
+  slots: Array<Pick<AfternoonTeaMobileResultSlot, 'key' | 'status' | 'task'>>,
+) {
+  const completed = slots.filter((slot) => slot.status === 'done' && Boolean(slot.task?.outputImages[0]))
+  const ordered = [...completed].sort((left, right) => {
+    const timeDelta = getAfternoonTeaCompletionTimestamp(left) - getAfternoonTeaCompletionTimestamp(right)
+    if (timeDelta !== 0) return timeDelta
+    return left.key.localeCompare(right.key)
+  })
+  return new Map(ordered.map((slot, index) => [slot.key, index + 1]))
+}
+
+export function getAfternoonTeaSlotSignature(slot: Pick<AfternoonTeaMobileResultSlot, 'key' | 'status' | 'task'>) {
+  const outputImageId = slot.status === 'done' ? (slot.task?.outputImages[0] ?? '') : ''
+  return `${slot.key}\u0001${slot.status}\u0001${outputImageId}`
+}
+
+export function collectFreshAfternoonTeaSlotKeys(
+  previousSignatures: ReadonlyMap<string, string>,
+  nextSlots: Array<Pick<AfternoonTeaMobileResultSlot, 'key' | 'status' | 'task'>>,
+) {
+  return nextSlots.flatMap((slot) => {
+    if (slot.status !== 'done' || !slot.task?.outputImages[0]) return []
+    const previousSignature = previousSignatures.get(slot.key)
+    if (!previousSignature) return []
+    const [, previousStatus = '', previousImageId = ''] = previousSignature.split('\u0001')
+    if (previousStatus !== 'done') return [slot.key]
+    return previousImageId && previousImageId !== slot.task.outputImages[0] ? [slot.key] : []
+  })
+}
+
+export function dismissAfternoonTeaFreshSlotKeys(freshSlotKeys: string[], slotKey: string) {
+  return freshSlotKeys.filter((key) => key !== slotKey)
+}
+
+export function findAfternoonTeaResultSlotForCandidate(
+  slots: AfternoonTeaMobileResultSlot[],
+  candidate: Pick<MobileAfternoonTeaCandidate, 'itemId' | 'sourceItemId' | 'task'>,
+) {
+  return slots.find((slot) => slot.task?.id === candidate.task.id)
+    ?? slots.find((slot) => slot.key === candidate.itemId || slot.itemId === candidate.sourceItemId)
+    ?? null
+}
+
+export function applyAfternoonTeaTitleCandidate(titles: string[], focusedIndex: number, candidate: string) {
+  const normalized = candidate.trim()
+  if (!normalized) return null
+  if (!Number.isInteger(focusedIndex) || focusedIndex < 0 || focusedIndex >= titles.length) return null
+  if (titles[focusedIndex] === normalized) return titles
+  if (titles.includes(normalized)) return null
+  return titles.map((title, index) => index === focusedIndex ? normalized : title)
+}
+
+export function advanceAfternoonTeaTitleFocusIndex(currentIndex: number, titleCount: number) {
+  if (!Number.isInteger(titleCount) || titleCount <= 0) return 0
+  if (!Number.isInteger(currentIndex) || currentIndex < 0) return 0
+  return (currentIndex + 1) % titleCount
 }
 
 type AfternoonTeaMobileWorkflowProps = {
@@ -132,6 +208,15 @@ export function getMobileAfternoonTeaCandidates(items: AfternoonTeaPosterViewIte
       imageId: slot.task.outputImages[0],
       task: slot.task,
     }]
+  })
+}
+
+export function sortAfternoonTeaCandidatesByCompletionTime(candidates: MobileAfternoonTeaCandidate[]) {
+  return [...candidates].sort((left, right) => {
+    const leftTime = left.task.finishedAt ?? left.task.createdAt
+    const rightTime = right.task.finishedAt ?? right.task.createdAt
+    if (leftTime !== rightTime) return leftTime - rightTime
+    return left.itemId.localeCompare(right.itemId)
   })
 }
 
@@ -255,6 +340,7 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
   const [editingItemName, setEditingItemName] = useState<number | null>(null)
   const [reviewError, setReviewError] = useState('')
   const [placementSelectedIndex, setPlacementSelectedIndex] = useState<number | null>(0)
+  const [posterTitleFocusIndex, setPosterTitleFocusIndex] = useState(0)
   const [clipboardError, setClipboardError] = useState('')
   const [clipboardAvailable] = useState(canReadAfternoonTeaClipboard)
   const [clipboardCoordinator] = useState(createAfternoonTeaClipboardCoordinator)
@@ -277,6 +363,13 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
     setEditingPosterTitle(null)
     setReviewError('')
   }, [titleKey])
+  useEffect(() => {
+    const nextTitleCount = props.orderResult?.titles.length ?? 0
+    setPosterTitleFocusIndex((current) => {
+      if (nextTitleCount <= 0) return 0
+      return Math.min(current, nextTitleCount - 1)
+    })
+  }, [props.orderResult?.titles.length])
   useEffect(() => {
     setItemNameDrafts(props.orderResult?.items.map((item) => item.displayName) ?? [])
     setEditingItemName(null)
@@ -302,7 +395,12 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
 
   const candidates = useMemo(() => getMobileAfternoonTeaCandidates(props.items), [props.items])
   const [unavailableImageIds, setUnavailableImageIds] = useState<string[]>([])
-  const availableCandidates = candidates.filter((candidate) => !unavailableImageIds.includes(candidate.imageId))
+  const availableCandidates = useMemo(
+    () => sortAfternoonTeaCandidatesByCompletionTime(
+      candidates.filter((candidate) => !unavailableImageIds.includes(candidate.imageId)),
+    ),
+    [candidates, unavailableImageIds],
+  )
   const [selectedItemId, setSelectedItemId] = useState<string | null>(() => resolveMobileAfternoonTeaSelection(candidates, null))
   const [selectedImageSrc, setSelectedImageSrc] = useState('')
   const [preparedFile, setPreparedFile] = useState<File | null>(null)
@@ -363,6 +461,24 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
   }, [selectedItemId, candidateKey])
 
   const resultSlots = useMemo(() => expandAfternoonTeaMobileResultSlots(props.items), [props.items])
+  const completionOrderNumbers = useMemo(() => getAfternoonTeaCompletionOrderNumbers(resultSlots), [resultSlots])
+  const previousSlotSignaturesRef = useRef(new Map<string, string>())
+  const [freshSlotKeys, setFreshSlotKeys] = useState<string[]>([])
+  const [latestFreshSlotKey, setLatestFreshSlotKey] = useState<string | null>(null)
+
+  useEffect(() => {
+    const nextFreshKeys = collectFreshAfternoonTeaSlotKeys(previousSlotSignaturesRef.current, resultSlots)
+    if (nextFreshKeys.length) {
+      setFreshSlotKeys((current) => [...new Set([...current, ...nextFreshKeys])])
+      setLatestFreshSlotKey(nextFreshKeys[nextFreshKeys.length - 1] ?? null)
+    }
+    previousSlotSignaturesRef.current = new Map(resultSlots.map((slot) => [slot.key, getAfternoonTeaSlotSignature(slot)]))
+  }, [resultSlots])
+
+  const dismissFreshSlot = (slotKey: string) => {
+    setFreshSlotKeys((current) => dismissAfternoonTeaFreshSlotKeys(current, slotKey))
+    setLatestFreshSlotKey((current) => current === slotKey ? null : current)
+  }
 
   useEffect(() => {
     setGenerateSplitLeftPercent(readGenerateSplitLeftPercent())
@@ -450,6 +566,15 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
   const selectedIndex = currentCandidate
     ? availableCandidates.findIndex((candidate) => candidate.itemId === currentCandidate.itemId)
     : -1
+  const currentResultSlot = currentCandidate
+    ? findAfternoonTeaResultSlotForCandidate(resultSlots, currentCandidate)
+    : null
+  const currentResultSlotNumber = currentResultSlot
+    ? (completionOrderNumbers.get(currentResultSlot.key) ?? 0)
+    : 0
+  const latestFreshSlotNumber = latestFreshSlotKey
+    ? (completionOrderNumbers.get(latestFreshSlotKey) ?? 0)
+    : 0
   const imageLocked = props.locked || props.imageLoading
   const locked = imageLocked || props.busy
 
@@ -534,6 +659,16 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
     })
     setReviewError('')
     props.onConfirmAndGenerate()
+  }
+
+  const handleAfternoonTeaTitleCandidate = (candidate: string) => {
+    const currentTitles = props.orderResult?.titles ?? posterTitleDrafts
+    const nextTitles = applyAfternoonTeaTitleCandidate(currentTitles, posterTitleFocusIndex, candidate)
+    if (!nextTitles || nextTitles === currentTitles) return
+    const nextTitle = nextTitles[posterTitleFocusIndex]
+    if (!nextTitle) return
+    props.onPosterTitleChange(posterTitleFocusIndex, nextTitle)
+    setPosterTitleFocusIndex(advanceAfternoonTeaTitleFocusIndex(posterTitleFocusIndex, currentTitles.length))
   }
   const moveSelection = (direction: -1 | 1) => {
     if (selectedIndex < 0 || availableCandidates.length < 2) return
@@ -683,10 +818,13 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
           <div className="space-y-5">
             <section aria-label="海报标题">
               <h2 className="mb-2 text-sm font-semibold text-gray-900 dark:text-gray-100">海报标题</h2>
+              <p className="mb-2 text-xs text-gray-500 dark:text-gray-400">点备选即可替换当前标题，选完自动到下一条</p>
               <div className="divide-y divide-gray-200 border-y border-gray-200 dark:divide-white/[0.08] dark:border-white/[0.08]">
                 {props.orderResult.titles.map((title, index) => (
-                  <div key={`${index}-${title}`} role="group" aria-label={`海报标题 ${String(index + 1).padStart(2, '0')}`} className="flex min-h-16 min-w-0 items-center gap-2 bg-blue-50 px-2 py-2 dark:bg-blue-500/10">
+                  <div key={`${index}-${title}`} role="group" aria-label={`海报标题 ${String(index + 1).padStart(2, '0')}`} className={`flex min-h-16 min-w-0 items-center gap-2 bg-blue-50 px-2 py-2 dark:bg-blue-500/10 ${posterTitleFocusIndex === index ? 'ring-2 ring-inset ring-blue-400 dark:ring-blue-500/60' : ''}`}>
+                    <button type="button" onClick={() => setPosterTitleFocusIndex(index)} className="flex h-11 w-7 shrink-0 items-center justify-center rounded-md text-xs font-semibold tabular-nums text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-blue-300" aria-label={`选择海报标题槽 ${index + 1}`} aria-pressed={posterTitleFocusIndex === index}>
                     <span className="w-7 shrink-0 text-xs font-semibold tabular-nums text-blue-600 dark:text-blue-300">{String(index + 1).padStart(2, '0')}</span>
+                    </button>
                     {editingPosterTitle === index ? (
                       <>
                         <input autoFocus type="text" value={posterTitleDrafts[index] ?? title} maxLength={60} onChange={(event) => setPosterTitleDrafts((drafts) => drafts.map((value, titleIndex) => titleIndex === index ? event.target.value : value))} onBlur={() => commitPosterTitle(index)} onKeyDown={(event) => {
@@ -698,14 +836,43 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
                       </>
                     ) : (
                       <>
-                        <span className="min-w-0 flex-1 break-words text-base font-semibold text-blue-950 dark:text-blue-100">{title}</span>
-                        <button type="button" onClick={() => setEditingPosterTitle(index)} disabled={locked} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-gray-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-50 dark:text-gray-400" aria-label={`编辑海报标题 ${index + 1}`}>
+                        <button type="button" onClick={() => setPosterTitleFocusIndex(index)} className="min-w-0 flex-1 break-words text-left text-base font-semibold text-blue-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-blue-100">{title}</button>
+                        <button type="button" onClick={() => { setPosterTitleFocusIndex(index); setEditingPosterTitle(index) }} disabled={locked} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-gray-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-50 dark:text-gray-400" aria-label={`编辑海报标题 ${index + 1}`}>
                           <EditIcon className="h-4 w-4" />
                         </button>
                       </>
                     )}
                   </div>
                 ))}
+              </div>
+              <div className="mt-3" aria-label="备选标题">
+                <div className="mb-1.5 text-xs text-gray-500 dark:text-gray-400">备选标题</div>
+                <div className="flex flex-wrap gap-2">
+                  {resolveAfternoonTeaTitleCandidates(props.orderResult).map((candidate) => {
+                    const selectedTitleIndex = props.orderResult.titles.indexOf(candidate)
+                    const isCurrent = selectedTitleIndex === posterTitleFocusIndex
+                    const isUsedElsewhere = selectedTitleIndex >= 0 && !isCurrent
+                    return (
+                      <button
+                        key={candidate}
+                        type="button"
+                        disabled={locked || isUsedElsewhere}
+                        aria-pressed={isCurrent}
+                        aria-label={`备选标题 ${candidate}`}
+                        onClick={() => handleAfternoonTeaTitleCandidate(candidate)}
+                        className={`min-h-9 rounded-full px-3 text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50 ${
+                          isCurrent
+                            ? 'bg-blue-600 text-white'
+                            : isUsedElsewhere
+                              ? 'bg-blue-50 text-blue-700 dark:bg-blue-500/15 dark:text-blue-200'
+                              : 'border border-gray-300 bg-white text-gray-700 hover:border-blue-300 hover:text-blue-700 dark:border-white/[0.12] dark:bg-white/[0.04] dark:text-gray-200 dark:hover:border-blue-400 dark:hover:text-blue-200'
+                        }`}
+                      >
+                        {candidate}
+                      </button>
+                    )
+                  })}
+                </div>
               </div>
             </section>
 
@@ -791,11 +958,16 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
             >
               <div className="mb-2 flex items-center justify-between gap-3">
                 <h2 className="min-w-0 break-words text-sm font-semibold text-gray-900 dark:text-gray-100">{currentCandidate.title}</h2>
-                <span className="shrink-0 text-xs tabular-nums text-gray-500 dark:text-gray-400">{selectedIndex + 1} / {availableCandidates.length}</span>
+                {currentResultSlotNumber > 0 && (
+                  <span className="shrink-0 text-xs tabular-nums text-gray-500 dark:text-gray-400" aria-label={`第 ${currentResultSlotNumber} 张，已出 ${completionOrderNumbers.size} 张`}>第 {currentResultSlotNumber} 张 · 已出 {completionOrderNumbers.size} 张</span>
+                )}
               </div>
               <div className="relative flex min-h-40 items-center justify-center overflow-hidden rounded-md bg-gray-100 dark:bg-black/30 sm:min-h-72" onTouchStart={(event) => { touchStartXRef.current = event.touches[0]?.clientX ?? null }} onTouchEnd={handleTouchEnd}>
                 {selectedImageSrc ? (
-                  <button type="button" onClick={() => props.onTaskClick(currentCandidate.task)} className="flex h-full min-h-40 w-full items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500 sm:min-h-72" aria-label={`查看 ${currentCandidate.title} 详情`}>
+                  <button type="button" onClick={() => {
+                    if (currentResultSlot) dismissFreshSlot(currentResultSlot.key)
+                    props.onTaskClick(currentCandidate.task)
+                  }} className="flex h-full min-h-40 w-full items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500 sm:min-h-72" aria-label={`查看 ${currentCandidate.title} 详情`}>
                     <img src={selectedImageSrc} alt={currentCandidate.title} className="max-h-[28svh] w-full object-contain sm:max-h-[58svh]" />
                   </button>
                 ) : (
@@ -813,11 +985,21 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
                 )}
               </div>
               <div className="hide-scrollbar mt-2 flex min-h-14 gap-2 overflow-x-auto pb-1 sm:min-h-16">
-                {availableCandidates.map((candidate) => (
-                  <button key={candidate.itemId} type="button" onClick={() => setSelectedItemId(candidate.itemId)} className={`h-14 w-14 shrink-0 overflow-hidden rounded-md border-2 bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:bg-black/20 sm:h-16 sm:w-16 ${candidate.itemId === selectedItemId ? 'border-blue-600' : 'border-transparent'}`} aria-label={`选择海报 ${candidate.title}`} aria-pressed={candidate.itemId === selectedItemId}>
-                    {thumbnails[candidate.imageId] ? <img src={thumbnails[candidate.imageId]} alt="" className="h-full w-full object-cover" /> : <span className="text-xs text-gray-400">{availableCandidates.indexOf(candidate) + 1}</span>}
-                  </button>
-                ))}
+                {availableCandidates.map((candidate, candidateIndex) => {
+                  const slot = findAfternoonTeaResultSlotForCandidate(resultSlots, candidate)
+                  const slotNumber = slot ? (completionOrderNumbers.get(slot.key) ?? 0) : 0
+                  const isFresh = slot ? freshSlotKeys.includes(slot.key) : false
+                  return (
+                    <button key={candidate.itemId} type="button" onClick={() => {
+                      if (slot) dismissFreshSlot(slot.key)
+                      setSelectedItemId(candidate.itemId)
+                    }} className={`relative h-14 w-14 shrink-0 overflow-hidden rounded-md border-2 bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:bg-black/20 sm:h-16 sm:w-16 ${candidate.itemId === selectedItemId ? 'border-blue-600' : 'border-transparent'}`} aria-label={`选择海报 ${candidate.title}`} aria-pressed={candidate.itemId === selectedItemId}>
+                      {thumbnails[candidate.imageId] ? <img src={thumbnails[candidate.imageId]} alt="" className="h-full w-full object-cover" /> : <span className="text-xs text-gray-400">{slotNumber || candidateIndex + 1}</span>}
+                      {slotNumber > 0 && <span className="absolute left-0.5 top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-blue-600 px-1 text-[10px] font-semibold text-white">{slotNumber}</span>}
+                      {isFresh && <span className="absolute right-0.5 top-0.5 h-2 w-2 rounded-full bg-blue-500" aria-label="新" />}
+                    </button>
+                  )
+                })}
               </div>
             </section>
           )}
@@ -881,6 +1063,7 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
                 <span>等待 {counters.queued}</span>
                 <span>生成中 {counters.running}</span>
                 <span>耗时 {formatElapsed(batchElapsed)}</span>
+                {latestFreshSlotNumber > 0 && <span>刚出图：第 {latestFreshSlotNumber} 张</span>}
               </div>
             </section>
 
@@ -891,12 +1074,22 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
                 className="grid grid-cols-1 gap-3 sm:[grid-template-columns:repeat(auto-fill,minmax(min(100%,19rem),1fr))]"
               >
                 {resultSlots.map((slot) => slot.task ? (
-                  <div key={slot.key} data-mobile-result-slot={slot.itemId} data-task-card={slot.task.id} className="min-w-0">
+                  <div key={slot.key} data-mobile-result-slot={slot.itemId} data-task-card={slot.task.id} data-result-slot-number={completionOrderNumbers.get(slot.key) || undefined} data-result-slot-fresh={freshSlotKeys.includes(slot.key) ? 'true' : undefined} className={`relative min-w-0 ${freshSlotKeys.includes(slot.key) ? 'rounded-xl ring-2 ring-blue-500 ring-offset-2 dark:ring-offset-gray-950' : ''}`}>
+                    {completionOrderNumbers.has(slot.key) && (
+                      <>
+                        <span className="sr-only">第 {completionOrderNumbers.get(slot.key)} 张</span>
+                        <span className="pointer-events-none absolute right-2 top-2 z-20 rounded-full bg-blue-600 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-white shadow-sm">第 {completionOrderNumbers.get(slot.key)} 张</span>
+                      </>
+                    )}
+                    {freshSlotKeys.includes(slot.key) && <span className="pointer-events-none absolute right-2 top-8 z-20 rounded bg-blue-600 px-1.5 py-0.5 text-[10px] font-semibold text-white">新</span>}
                     <TaskCard
                       task={slot.task}
                       disableSwipe
                       retryDisabled={props.busy || props.retryDisabled}
-                      onClick={() => props.onTaskClick(slot.task!)}
+                      onClick={() => {
+                        dismissFreshSlot(slot.key)
+                        props.onTaskClick(slot.task!)
+                      }}
                       onDelete={() => props.onTaskDelete?.(slot.task!)}
                       onReuse={() => props.onTaskReuse?.(slot.task!)}
                       onEditOutputs={() => props.onTaskEditOutputs?.(slot.task!)}
@@ -904,7 +1097,13 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
                     />
                   </div>
                 ) : (
-                  <div key={slot.key} data-mobile-result-slot={slot.itemId} className="flex min-h-14 min-w-0 items-center gap-2 rounded-md border border-gray-200 px-3 py-2 dark:border-white/[0.08]">
+                  <div key={slot.key} data-mobile-result-slot={slot.itemId} data-result-slot-number={completionOrderNumbers.get(slot.key) || undefined} className="relative flex min-h-14 min-w-0 items-center gap-2 rounded-md border border-gray-200 px-3 py-2 dark:border-white/[0.08]">
+                    {completionOrderNumbers.has(slot.key) && (
+                      <>
+                        <span className="sr-only">第 {completionOrderNumbers.get(slot.key)} 张</span>
+                        <span className="flex h-6 shrink-0 items-center justify-center rounded-full bg-blue-600 px-2 text-[11px] font-semibold tabular-nums text-white">第 {completionOrderNumbers.get(slot.key)} 张</span>
+                      </>
+                    )}
                     <span className={`h-2 w-2 shrink-0 rounded-full ${slot.status === 'done' ? 'bg-emerald-500' : slot.status === 'error' ? 'bg-red-500' : slot.status === 'running' ? 'bg-blue-500' : 'bg-gray-300 dark:bg-gray-600'}`} />
                     <div className="min-w-0 flex-1">
                       <div className="break-words text-sm font-medium text-gray-900 dark:text-gray-100">{slot.title}</div>

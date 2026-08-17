@@ -48,11 +48,43 @@ ${JSON.stringify(validResult)}
 
   it.each([
     [['午后茶歇'], 2],
-    [['午后茶歇', '暖心时光', '轻松一刻'], 2],
-  ])('requires the title count to equal the expected count', (titles, count) => {
+  ])('rejects fewer titles than the expected count', (titles, count) => {
     const text = JSON.stringify({ ...validResult, titles })
 
     expect(() => parseAfternoonTeaOrderResult(text, count)).toThrow('下午茶订单解析结果格式无效')
+  })
+
+  it('keeps the first expected titles and treats extra titles as candidates', () => {
+    const text = JSON.stringify({
+      ...validResult,
+      titles: ['午后茶歇', '暖心时光', '轻松一刻', '今日小食'],
+    })
+
+    expect(parseAfternoonTeaOrderResult(text, 2)).toEqual({
+      ...validResult,
+      titleCandidates: ['午后茶歇', '暖心时光', '轻松一刻', '今日小食'],
+    })
+  })
+
+  it('merges titleCandidates and still succeeds when the pool is shorter than requested', () => {
+    const text = JSON.stringify({
+      ...validResult,
+      titleCandidates: [' 今日小食 ', '午后茶歇'],
+    })
+
+    expect(parseAfternoonTeaOrderResult(text, 2)).toEqual({
+      ...validResult,
+      titleCandidates: ['午后茶歇', '暖心时光', '今日小食'],
+    })
+  })
+
+  it('ignores a malformed titleCandidates field instead of failing the whole order', () => {
+    const text = JSON.stringify({
+      ...validResult,
+      titleCandidates: [1, '今日小食'],
+    })
+
+    expect(parseAfternoonTeaOrderResult(text, 2)).toEqual(validResult)
   })
 
   it.each([

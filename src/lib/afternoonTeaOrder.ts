@@ -2,6 +2,23 @@ import type { AfternoonTeaOrderResult } from '../types'
 
 const INVALID_RESULT_MESSAGE = '下午茶订单解析结果格式无效'
 
+function uniqueAfternoonTeaTitles(values: string[]) {
+  const seen = new Set<string>()
+  const titles: string[] = []
+  for (const value of values) {
+    const title = value.trim()
+    if (!title || seen.has(title)) continue
+    seen.add(title)
+    titles.push(title)
+  }
+  return titles
+}
+
+function readAfternoonTeaTitleList(value: unknown): string[] | null {
+  if (!Array.isArray(value) || !value.every((title) => typeof title === 'string')) return null
+  return uniqueAfternoonTeaTitles(value)
+}
+
 export function parseAfternoonTeaOrderResult(text: string, expectedTitleCount: number): AfternoonTeaOrderResult {
   const source = text.trim()
   const match = source.match(/^```json\s*\n([\s\S]*?)\n```$/)
@@ -24,18 +41,14 @@ export function parseAfternoonTeaOrderResult(text: string, expectedTitleCount: n
   if (!Array.isArray(result.titles) || !Array.isArray(result.items) || result.items.length === 0) {
     throw new Error(INVALID_RESULT_MESSAGE)
   }
-  if (!result.titles.every((title) => typeof title === 'string')) {
+  const rawTitles = readAfternoonTeaTitleList(result.titles)
+  if (!rawTitles || rawTitles.length < expectedTitleCount) {
     throw new Error(INVALID_RESULT_MESSAGE)
   }
 
-  const titles = result.titles.map((title) => title.trim())
-  if (
-    titles.length !== expectedTitleCount
-    || titles.some((title) => !title)
-    || new Set(titles).size !== titles.length
-  ) {
-    throw new Error(INVALID_RESULT_MESSAGE)
-  }
+  const titles = rawTitles.slice(0, expectedTitleCount)
+  const rawCandidates = readAfternoonTeaTitleList(result.titleCandidates)
+  const candidateSource = rawCandidates ?? (rawTitles.length > expectedTitleCount ? rawTitles : null)
 
   const items = result.items.map((item) => {
     if (!item || typeof item !== 'object' || Array.isArray(item)) {
@@ -56,5 +69,10 @@ export function parseAfternoonTeaOrderResult(text: string, expectedTitleCount: n
     }
   })
 
-  return { titles, items }
+  if (!candidateSource) return { titles, items }
+  return {
+    titles,
+    titleCandidates: uniqueAfternoonTeaTitles([...titles, ...candidateSource]),
+    items,
+  }
 }

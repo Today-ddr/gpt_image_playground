@@ -23,7 +23,7 @@ afterEach(() => {
   vi.resetModules()
 })
 
-function task(id: string, status: TaskRecord['status'], outputImages: string[] = []): TaskRecord {
+function task(id: string, status: TaskRecord['status'], outputImages: string[] = [], finishedAt = status === 'running' ? null : 2): TaskRecord {
   return {
     id,
     prompt: `${id} prompt`,
@@ -36,7 +36,7 @@ function task(id: string, status: TaskRecord['status'], outputImages: string[] =
     status,
     error: status === 'error' ? '生成失败' : null,
     createdAt: 1,
-    finishedAt: status === 'running' ? null : 2,
+    finishedAt,
     elapsed: status === 'running' ? null : 1,
   }
 }
@@ -248,6 +248,16 @@ describe('mobile afternoon tea result selection', () => {
 
     expect(candidates.map((candidate) => candidate.itemId)).toEqual(['poster-a', 'poster-b'])
     expect(resolveMobileAfternoonTeaSelection(candidates, 'poster-b')).toBe('poster-b')
+  })
+
+  it('orders the current-poster strip by completion time, not title slot', () => {
+    const laterFirst = { ...first, task: task('task-a', 'done', ['image-a'], 40) }
+    const earlierSecond = { ...second, task: task('task-b', 'done', ['image-b'], 10) }
+    const candidates = mobileWorkflowHelpers.sortAfternoonTeaCandidatesByCompletionTime(
+      getMobileAfternoonTeaCandidates([laterFirst, earlierSecond]),
+    )
+
+    expect(candidates.map((candidate) => candidate.itemId)).toEqual(['poster-b', 'poster-a'])
   })
 })
 
@@ -688,5 +698,153 @@ describe('generate split pane', () => {
     expect(mobileWorkflowSource).toContain('isDesktopGenerateSplit')
     expect(mobileWorkflowSource).toContain('data-generate-result-grid')
     expect(mobileWorkflowSource).toContain('repeat(auto-fill,minmax(min(100%,19rem),1fr))')
+  })
+})
+
+describe('afternoon tea result slot numbering', () => {
+  const running = { key: 'poster-a', status: 'running' as const, task: task('task-a', 'running') }
+  const done = { key: 'poster-b', status: 'done' as const, task: task('task-b', 'done', ['image-b']) }
+  const queued = { key: 'poster-c', status: 'queued' as const }
+  const retry = { key: 'poster-d', status: 'done' as const, task: task('task-d', 'done', ['image-d2']) }
+
+  it('numbers slots in the expanded batch order', () => {
+    const slots = [
+      { key: 'poster-a' },
+      { key: 'poster-b' },
+      { key: 'poster-c' },
+      { key: 'poster-d' },
+    ]
+    expect(mobileWorkflowHelpers.getAfternoonTeaResultSlotNumber(slots, 'poster-a')).toBe(1)
+    expect(mobileWorkflowHelpers.getAfternoonTeaResultSlotNumber(slots, 'poster-c')).toBe(3)
+    expect(mobileWorkflowHelpers.getAfternoonTeaResultSlotNumber(slots, 'missing')).toBe(0)
+  })
+
+  it('numbers finished images by completion time and skips in-progress slots', () => {
+    const numbers = mobileWorkflowHelpers.getAfternoonTeaCompletionOrderNumbers([
+      { key: 'poster-a', status: 'running', task: task('task-a', 'running') },
+      { key: 'poster-b', status: 'done', task: task('task-b', 'done', ['image-b'], 40) },
+      { key: 'poster-c', status: 'queued' },
+      { key: 'poster-d', status: 'done', task: task('task-d', 'done', ['image-d'], 20) },
+    ])
+
+    expect([...numbers.entries()]).toEqual([
+      ['poster-d', 1],
+      ['poster-b', 2],
+    ])
+  })
+
+  it('marks a slot fresh only when it newly finishes or the output image changes', () => {
+    const previous = new Map([
+      [running.key, mobileWorkflowHelpers.getAfternoonTeaSlotSignature(running)],
+      [done.key, mobileWorkflowHelpers.getAfternoonTeaSlotSignature(done)],
+      [queued.key, mobileWorkflowHelpers.getAfternoonTeaSlotSignature(queued)],
+      [retry.key, mobileWorkflowHelpers.getAfternoonTeaSlotSignature({ ...retry, task: task('task-d', 'done', ['image-d1']) })],
+    ])
+    const next = [
+      { ...running, status: 'done' as const, task: task('task-a', 'done', ['image-a']) },
+      done,
+      queued,
+      retry,
+    ]
+
+    expect(mobileWorkflowHelpers.collectFreshAfternoonTeaSlotKeys(previous, next)).toEqual(['poster-a', 'poster-d'])
+    expect(mobileWorkflowHelpers.collectFreshAfternoonTeaSlotKeys(new Map(), next)).toEqual([])
+    expect(mobileWorkflowHelpers.collectFreshAfternoonTeaSlotKeys(previous, [running, done, queued])).toEqual([])
+  })
+
+  it('does not treat a still-running stream preview as a finished image', () => {
+    const streaming = { key: 'poster-a', status: 'running' as const, task: { ...task('task-a', 'running'), outputImages: ['preview-a'] } }
+    const previous = new Map([[streaming.key, mobileWorkflowHelpers.getAfternoonTeaSlotSignature(streaming)]])
+    expect(mobileWorkflowHelpers.collectFreshAfternoonTeaSlotKeys(previous, [streaming])).toEqual([])
+  })
+
+  it('shows completion numbers only after an image is ready', () => {
+    const html = renderWorkflow({
+      items: [
+        { id: 'poster-a', title: '午后茶歇', prompt: 'prompt A', status: 'done', task: task('task-a', 'done', ['image-a'], 30) },
+        { id: 'poster-b', title: '暖心时光', prompt: 'prompt B', status: 'running', task: task('task-b', 'running') },
+        { id: 'poster-c', title: '轻松一刻', prompt: 'prompt C', status: 'queued' },
+        { id: 'poster-d', title: '今日小食', prompt: 'prompt D', status: 'error', task: task('task-d', 'error') },
+      ],
+      batchStartedAt: 10,
+      batchFinishedAt: null,
+    })
+
+    expect(html).toContain('第 1 张')
+    expect(html).toContain('第 1 张 · 已出 1 张')
+    expect(html).not.toContain('第 2 张')
+    expect(html).not.toContain('第 3 张')
+    expect(html).not.toContain('第 4 张')
+    expect(html).toContain('data-result-slot-number="1"')
+    expect(html).not.toContain('data-result-slot-number="2"')
+    expect(mobileWorkflowSource).toContain('dismissFreshSlot(slot.key)')
+    expect(mobileWorkflowSource).toContain('刚出图：第 {latestFreshSlotNumber} 张')
+  })
+})
+
+describe('afternoon tea title candidates', () => {
+  it('applies an unused candidate to the focused slot only', () => {
+    expect(mobileWorkflowHelpers.applyAfternoonTeaTitleCandidate(['午后茶歇', '暖心时光'], 0, '今日小食'))
+      .toEqual(['今日小食', '暖心时光'])
+    expect(mobileWorkflowHelpers.applyAfternoonTeaTitleCandidate(['午后茶歇', '暖心时光'], 0, '暖心时光')).toBeNull()
+    expect(mobileWorkflowHelpers.applyAfternoonTeaTitleCandidate(['午后茶歇', '暖心时光'], 0, '午后茶歇'))
+      .toEqual(['午后茶歇', '暖心时光'])
+  })
+
+  it('advances the focused poster title to the next slot and wraps around', () => {
+    expect(mobileWorkflowHelpers.advanceAfternoonTeaTitleFocusIndex(0, 2)).toBe(1)
+    expect(mobileWorkflowHelpers.advanceAfternoonTeaTitleFocusIndex(1, 2)).toBe(0)
+    expect(mobileWorkflowHelpers.advanceAfternoonTeaTitleFocusIndex(3, 4)).toBe(0)
+    expect(mobileWorkflowHelpers.advanceAfternoonTeaTitleFocusIndex(-1, 2)).toBe(0)
+  })
+
+  it('shows fallback title chips even when the parsed result has no candidate pool', () => {
+    const html = renderWorkflow()
+    expect(html).toContain('aria-label="备选标题"')
+    expect(html).toContain('点备选即可替换当前标题，选完自动到下一条')
+    expect(html).toContain('aria-label="备选标题 今日小食"')
+  })
+
+  it('renders unused title chips and applies the focused slot on click', async () => {
+    const onPosterTitleChange = vi.fn()
+    const driver = await createWorkflowHookDriver({
+      orderResult: {
+        ...orderResult,
+        titleCandidates: ['午后茶歇', '暖心时光', '今日小食', '本周甜品'],
+      },
+      onPosterTitleChange,
+    })
+    let tree = driver.render()
+
+    expect(elementText(elementByLabel(tree, '备选标题'))).toContain('今日小食')
+    expect(elementByLabel(tree, '备选标题 午后茶歇').props['aria-pressed']).toBe(true)
+    expect(elementByLabel(tree, '备选标题 暖心时光').props.disabled).toBe(true)
+
+    callHandler(elementByLabel(tree, '选择海报标题槽 2'), 'onClick')
+    tree = driver.render()
+    callHandler(elementByLabel(tree, '备选标题 今日小食'), 'onClick')
+
+    expect(onPosterTitleChange).toHaveBeenCalledWith(1, '今日小食')
+    tree = driver.render()
+    expect(elementByLabel(tree, '选择海报标题槽 1').props['aria-pressed']).toBe(true)
+    expect(elementByLabel(tree, '选择海报标题槽 2').props['aria-pressed']).toBe(false)
+  })
+
+  it('applies the first unused chip to the current slot and then focuses the next slot', async () => {
+    const onPosterTitleChange = vi.fn()
+    const driver = await createWorkflowHookDriver({
+      orderResult: {
+        ...orderResult,
+        titleCandidates: ['午后茶歇', '暖心时光', '今日小食', '本周甜品'],
+      },
+      onPosterTitleChange,
+    })
+    let tree = driver.render()
+
+    callHandler(elementByLabel(tree, '备选标题 今日小食'), 'onClick')
+
+    expect(onPosterTitleChange).toHaveBeenCalledWith(0, '今日小食')
+    tree = driver.render()
+    expect(elementByLabel(tree, '选择海报标题槽 2').props['aria-pressed']).toBe(true)
   })
 })

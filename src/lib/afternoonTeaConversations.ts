@@ -29,6 +29,9 @@ function normalizeOrderResult(value: unknown): AfternoonTeaOrderResult | null {
   const titles = Array.isArray(result.titles)
     ? [...new Set(result.titles.map(normalizeString).filter(Boolean))]
     : []
+  const titleCandidates = Array.isArray(result.titleCandidates)
+    ? [...new Set([...titles, ...result.titleCandidates.map(normalizeString).filter(Boolean)])]
+    : undefined
   const items = Array.isArray(result.items)
     ? result.items.flatMap((item) => {
         if (!item || typeof item !== 'object' || Array.isArray(item)) return []
@@ -41,7 +44,12 @@ function normalizeOrderResult(value: unknown): AfternoonTeaOrderResult | null {
       })
     : []
 
-  return titles.length > 0 && items.length > 0 ? { titles, items } : null
+  if (titles.length === 0 || items.length === 0) return null
+  return {
+    titles,
+    items,
+    ...(titleCandidates && titleCandidates.length > 0 ? { titleCandidates } : {}),
+  }
 }
 
 function normalizePosterItems(value: unknown): AfternoonTeaPosterBatchItem[] {
@@ -254,9 +262,17 @@ export function createAfternoonTeaOrderTitlesPatch(
   if (titles.length !== conversation.orderResult.titles.length) return null
   const normalizedTitles = titles.map((title) => title.trim())
   if (normalizedTitles.some((title) => !title) || new Set(normalizedTitles).size !== normalizedTitles.length) return null
+  const previousTitles = conversation.orderResult.titles
+  const existingCandidates = conversation.orderResult.titleCandidates
+  const shouldPersistCandidates = Boolean(existingCandidates)
+    || normalizedTitles.some((title) => !previousTitles.includes(title))
+  const titleCandidates = shouldPersistCandidates
+    ? [...new Set([...(existingCandidates ?? previousTitles), ...normalizedTitles].map((title) => title.trim()).filter(Boolean))]
+    : undefined
   const orderResult = {
     ...conversation.orderResult,
     titles: normalizedTitles,
+    ...(titleCandidates ? { titleCandidates } : {}),
   }
   return {
     orderResult,

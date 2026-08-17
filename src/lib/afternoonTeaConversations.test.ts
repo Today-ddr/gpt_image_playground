@@ -185,6 +185,19 @@ describe('afternoon tea conversations', () => {
     expect(normalizeAfternoonTeaConversations([valid], 999)).toEqual([valid])
   })
 
+  it('persists title candidates when normalizing a stored conversation', () => {
+    const [normalized] = normalizeAfternoonTeaConversations([{
+      id: 'conversation-title-candidates',
+      orderResult: {
+        titles: ['午后茶歇', '暖心时光'],
+        titleCandidates: [' 今日小食 ', '午后茶歇', '暖心时光'],
+        items: [{ displayName: '草莓蛋糕', tags: ['草莓'] }],
+      },
+    }], 999)
+
+    expect(normalized.orderResult?.titleCandidates).toEqual(['午后茶歇', '暖心时光', '今日小食'])
+  })
+
   it.each([
     [undefined, 'missing'],
     [Number.NaN, 'NaN'],
@@ -410,6 +423,47 @@ describe('afternoon tea conversations', () => {
     expect(patch?.posterItems[1].prompt).toContain('"title": "午后茶歇"')
     expect(patch?.posterItems[1].prompt).not.toContain('"title": "暖心时光"')
     expect(patch?.posterItems.every((item) => !item.taskId && !item.setupError)).toBe(true)
+  })
+
+  it('keeps existing title candidates when swapping selected poster titles', () => {
+    const editable = conversation({
+      orderResult: {
+        titles: ['午后茶歇', '暖心时光'],
+        titleCandidates: ['午后茶歇', '暖心时光', '今日小食', '本周甜品'],
+        items: [{ displayName: '草莓蛋糕', tags: ['草莓'] }],
+      },
+    })
+    const patch = createAfternoonTeaOrderTitlesPatch(editable, ['今日小食', '暖心时光'])
+
+    expect(patch?.orderResult?.titles).toEqual(['今日小食', '暖心时光'])
+    expect(patch?.orderResult?.titleCandidates).toEqual(['午后茶歇', '暖心时光', '今日小食', '本周甜品'])
+  })
+
+  it('adds a handwritten title into the candidate pool', () => {
+    const editable = conversation({
+      orderResult: {
+        titles: ['午后茶歇', '暖心时光'],
+        titleCandidates: ['午后茶歇', '暖心时光', '今日小食'],
+        items: [{ displayName: '草莓蛋糕', tags: ['草莓'] }],
+      },
+    })
+    const patch = createAfternoonTeaOrderTitlePatch(editable, 1, ' 周末甜品 ')
+
+    expect(patch?.orderResult?.titles).toEqual(['午后茶歇', '周末甜品'])
+    expect(patch?.orderResult?.titleCandidates).toEqual(['午后茶歇', '暖心时光', '今日小食', '周末甜品'])
+  })
+
+  it('starts a candidate pool from previous titles when a handwritten title is new', () => {
+    const editable = conversation({
+      orderResult: {
+        titles: ['午后茶歇', '暖心时光'],
+        items: [{ displayName: '草莓蛋糕', tags: ['草莓'] }],
+      },
+    })
+    const patch = createAfternoonTeaOrderTitlePatch(editable, 0, '本周茶歇')
+
+    expect(patch?.orderResult?.titles).toEqual(['本周茶歇', '暖心时光'])
+    expect(patch?.orderResult?.titleCandidates).toEqual(['午后茶歇', '暖心时光', '本周茶歇'])
   })
 
   it.each([
