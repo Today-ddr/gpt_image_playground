@@ -90,6 +90,7 @@ function workflowProps(overrides: Partial<WorkflowProps> = {}): WorkflowProps {
     onItemTitleRegionsChange: noop,
     onItemNameChange: noop,
     onItemTagsChange: noop,
+    onItemRemove: noop,
     onConfirmAndGenerate: noop,
     onRetry: noop,
     onTaskClick: noop,

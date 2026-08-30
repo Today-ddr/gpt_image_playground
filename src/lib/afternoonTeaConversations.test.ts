@@ -8,6 +8,7 @@ import {
   createAfternoonTeaItemTitleRegionsPatch,
   createAfternoonTeaSourceImagePatch,
   createAfternoonTeaOrderItemNamePatch,
+  createAfternoonTeaOrderItemRemovePatch,
   createAfternoonTeaOrderItemTagsPatch,
   createAfternoonTeaOrderTitlePatch,
   getAfternoonTeaConversationBatchElapsed,
@@ -376,6 +377,59 @@ describe('afternoon tea conversations', () => {
     expect(createAfternoonTeaOrderItemTagsPatch(editable, 0, ['草莓'])).toBeNull()
     expect(createAfternoonTeaOrderItemTagsPatch(editable, 1, ['奶油'])).toBeNull()
     expect(createAfternoonTeaOrderItemTagsPatch({ ...editable, batchStartedAt: 100 }, 0, ['奶油'])).toBeNull()
+  })
+
+  it('removes one order item with its title region and rebuilds prompts', () => {
+    const editable = conversation({
+      orderResult: {
+        titles: ['午后茶歇'],
+        items: [
+          { displayName: '草莓蛋糕', tags: ['草莓'] },
+          { displayName: '柠檬红茶', tags: ['柠檬'] },
+          { displayName: '提拉米苏', tags: [] },
+        ],
+      },
+      itemTitleRegions: [
+        { x: 0.1, y: 0.2, width: 0.3, height: 0.2 },
+        { x: 0.5, y: 0.4, width: 0.3, height: 0.2 },
+        { x: 0.2, y: 0.7, width: 0.3, height: 0.2 },
+      ],
+      posterItems: [{ id: 'poster-a', title: '午后茶歇', prompt: '旧名称' }],
+    })
+    const patch = createAfternoonTeaOrderItemRemovePatch(editable, 1)
+
+    expect(patch?.orderResult?.items).toEqual([
+      { displayName: '草莓蛋糕', tags: ['草莓'] },
+      { displayName: '提拉米苏', tags: [] },
+    ])
+    expect(patch?.itemTitleRegions).toEqual([
+      { x: 0.1, y: 0.2, width: 0.3, height: 0.2 },
+      { x: 0.2, y: 0.7, width: 0.3, height: 0.2 },
+    ])
+    expect(patch?.posterItems[0].prompt).not.toContain('柠檬红茶')
+    expect(patch?.posterItems[0].prompt).toContain('提拉米苏')
+  })
+
+  it('rejects removing the last order item, out-of-range indexes, and frozen batches', () => {
+    const single = conversation({
+      posterItems: [{ id: 'poster-a', title: '午后茶歇', prompt: '海报提示词' }],
+    })
+    const editable = conversation({
+      orderResult: {
+        titles: ['午后茶歇'],
+        items: [
+          { displayName: '草莓蛋糕', tags: ['草莓'] },
+          { displayName: '柠檬红茶', tags: ['柠檬'] },
+        ],
+      },
+      itemTitleRegions: createDefaultAfternoonTeaItemTitleRegions(2),
+      posterItems: [{ id: 'poster-a', title: '午后茶歇', prompt: '海报提示词' }],
+    })
+
+    expect(createAfternoonTeaOrderItemRemovePatch(single, 0)).toBeNull()
+    expect(createAfternoonTeaOrderItemRemovePatch(editable, 2)).toBeNull()
+    expect(createAfternoonTeaOrderItemRemovePatch(editable, -1)).toBeNull()
+    expect(createAfternoonTeaOrderItemRemovePatch({ ...editable, batchStartedAt: 100 }, 0)).toBeNull()
   })
 
   it('updates one trimmed poster title and rebuilds the matching prompt without changing title count', () => {

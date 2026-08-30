@@ -41,6 +41,7 @@ import {
   createAfternoonTeaItemTitleRegionsPatch,
   createAfternoonTeaSourceImagePatch,
   createAfternoonTeaOrderItemNamePatch,
+  createAfternoonTeaOrderItemRemovePatch,
   createAfternoonTeaOrderItemTagsPatch,
   createAfternoonTeaOrderTitlePatch,
   createAfternoonTeaOrderTitlesPatch,
@@ -1792,6 +1793,32 @@ export default function ToolsWorkspace() {
     state.updateAfternoonTeaConversation(conversation.id, patch)
   }
 
+  const removeOrderItem = (conversationId: string, index: number) => {
+    const state = useStore.getState()
+    if (
+      batchBusy
+      || state.activeAfternoonTeaConversationId !== conversationId
+      || state.afternoonTeaBatchOperationId
+      || batchStartingConversationIdsRef.current.has(conversationId)
+    ) return
+    const conversation = state.afternoonTeaConversations.find((item) => item.id === conversationId)
+    if (!conversation?.orderResult) return
+    const item = conversation.orderResult.items[index]
+    if (!item) return
+    setConfirmDialog({
+      title: '删除餐品',
+      message: `确定要删除餐品「${item.displayName}」吗？删除后生成海报将不再包含该餐品。`,
+      action: () => {
+        const currentState = useStore.getState()
+        const currentConversation = currentState.afternoonTeaConversations.find((candidate) => candidate.id === conversationId)
+        if (!currentConversation) return
+        const removePatch = createAfternoonTeaOrderItemRemovePatch(currentConversation, index)
+        if (!removePatch) return
+        currentState.updateAfternoonTeaConversation(conversationId, removePatch)
+      },
+    })
+  }
+
   const reparse = () => {
     coordinatorRef.current.cancelRequest()
     coordinatorRef.current.invalidateImageSelection()
@@ -1984,6 +2011,10 @@ export default function ToolsWorkspace() {
             onItemTagsChange={(index, tags) => {
               if (!activeConversation) return
               updateItemTags(activeConversation.id, index, tags)
+            }}
+            onItemRemove={(index) => {
+              if (!activeConversation) return
+              removeOrderItem(activeConversation.id, index)
             }}
             onConfirmAndGenerate={confirmAndGenerate}
             onRetry={(itemId, taskId) => void retryItem(itemId, taskId)}

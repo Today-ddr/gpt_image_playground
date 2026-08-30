@@ -14,6 +14,7 @@ import {
   MinusIcon,
   PasteIcon,
   PlusIcon,
+  TrashIcon,
 } from '../icons'
 import TaskCard from '../TaskCard'
 import { WandAnimation } from '../wand-animation-react'
@@ -177,6 +178,7 @@ type AfternoonTeaMobileWorkflowProps = {
   onItemTitleRegionsChange: (regions: AfternoonTeaTitleRegion[]) => void
   onItemNameChange: (index: number, displayName: string) => void
   onItemTagsChange: (index: number, tags: string[]) => void
+  onItemRemove: (index: number) => void
   onConfirmAndGenerate: () => void
   onRetry: (itemId: string, taskId?: string) => void
   onTaskClick: (task: TaskRecord) => void
@@ -849,7 +851,7 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
                 <div className="mb-1.5 text-xs text-gray-500 dark:text-gray-400">备选标题</div>
                 <div className="flex flex-wrap gap-2">
                   {resolveAfternoonTeaTitleCandidates(props.orderResult).map((candidate) => {
-                    const selectedTitleIndex = props.orderResult.titles.indexOf(candidate)
+                    const selectedTitleIndex = props.orderResult?.titles.indexOf(candidate) ?? -1
                     const isCurrent = selectedTitleIndex === posterTitleFocusIndex
                     const isUsedElsewhere = selectedTitleIndex >= 0 && !isCurrent
                     return (
@@ -902,7 +904,12 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
                           commitItem(index)
                         }} className="min-h-11 w-full min-w-0 rounded-md border border-blue-300 bg-white px-3 text-base text-gray-900 outline-none ring-2 ring-blue-100 dark:border-blue-500/50 dark:bg-white/[0.05] dark:text-gray-100 dark:ring-blue-500/10" aria-label={`餐品标签 ${index + 1}`} />
                       </label>
-                      <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => commitItem(index)} className="min-h-11 shrink-0 rounded-md px-3 text-sm font-medium text-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-blue-300">完成</button>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => commitItem(index)} className="min-h-11 shrink-0 rounded-md px-3 text-sm font-medium text-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-blue-300">完成</button>
+                        <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => props.onItemRemove(index)} disabled={locked || (props.orderResult?.items.length ?? 1) <= 1} title={(props.orderResult?.items.length ?? 1) <= 1 ? '至少保留一个餐品' : `删除餐品 ${item.displayName}`} className="flex h-11 w-11 shrink-0 touch-manipulation items-center justify-center rounded-md text-gray-500 transition hover:bg-red-50 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-red-500/10 dark:hover:text-red-400" aria-label={`删除餐品 ${index + 1}`}>
+                          <TrashIcon className="h-4 w-4" />
+                        </button>
+                      </div>
                     </div>
                   ) : (
                     <div className="flex min-w-0 items-center gap-2">
@@ -917,6 +924,9 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
                       </button>
                       <button type="button" onClick={() => { setPlacementSelectedIndex(index); setEditingItemName(index) }} disabled={locked} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-gray-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-50 dark:text-gray-400" aria-label={`编辑餐品与标签 ${index + 1}`}>
                         <EditIcon className="h-4 w-4" />
+                      </button>
+                      <button type="button" onClick={() => props.onItemRemove(index)} disabled={locked || (props.orderResult?.items.length ?? 1) <= 1} title={(props.orderResult?.items.length ?? 1) <= 1 ? '至少保留一个餐品' : `删除餐品 ${item.displayName}`} className="flex h-11 w-11 shrink-0 touch-manipulation items-center justify-center rounded-md text-gray-500 transition hover:bg-red-50 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-gray-400 dark:hover:bg-red-500/10 dark:hover:text-red-400" aria-label={`删除餐品 ${index + 1}`}>
+                        <TrashIcon className="h-4 w-4" />
                       </button>
                     </div>
                   )}

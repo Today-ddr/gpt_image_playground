@@ -219,6 +219,30 @@ export function createAfternoonTeaOrderItemNamePatch(
   }
 }
 
+/** 删除订单商品（识别出多余商品时移除）；至少保留一个商品，标题区域同步移除 */
+export function createAfternoonTeaOrderItemRemovePatch(
+  conversation: AfternoonTeaConversation,
+  index: number,
+): Pick<AfternoonTeaConversation, 'orderResult' | 'itemTitleRegions' | 'posterItems'> | null {
+  if (isAfternoonTeaConversationFrozen(conversation) || !conversation.orderResult) return null
+  const currentItems = conversation.orderResult.items
+  if (!Number.isInteger(index) || index < 0 || index >= currentItems.length) return null
+  if (currentItems.length <= 1) return null
+  const orderResult = {
+    ...conversation.orderResult,
+    items: currentItems.filter((_, itemIndex) => itemIndex !== index),
+  }
+  const itemTitleRegions = normalizeAfternoonTeaItemTitleRegions(
+    conversation.itemTitleRegions.filter((_, regionIndex) => regionIndex !== index),
+    orderResult.items.length,
+  )
+  return {
+    orderResult,
+    itemTitleRegions,
+    posterItems: rebuildAfternoonTeaPosterItemPrompts(orderResult, conversation.posterItems, itemTitleRegions, { resetClaims: true }),
+  }
+}
+
 export function createAfternoonTeaOrderItemTagsPatch(
   conversation: AfternoonTeaConversation,
   index: number,
