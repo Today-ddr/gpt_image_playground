@@ -720,6 +720,11 @@ export function isOpenAICompatibleProvider(settings: Partial<AppSettings> | unkn
   return provider === 'openai' || Boolean(getCustomProviderDefinition(settings, provider))
 }
 
+/** fal 没有 Codex 参数。自定义 HTTP 服务商和 OpenAI 可以保留开关。 */
+export function persistedCodexCli(settings: Partial<AppSettings> | unknown, profile: Pick<ApiProfile, 'provider' | 'codexCli'>): boolean {
+  return isOpenAICompatibleProvider(settings, profile.provider) ? profile.codexCli : false
+}
+
 export interface ImportedProviderSettings {
   customProviders: CustomProviderDefinition[]
   profiles: ApiProfile[]

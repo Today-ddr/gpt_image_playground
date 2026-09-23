@@ -21,6 +21,7 @@ import {
   isDefaultConfigOnlyEnabled,
   isAgentTextApiProfile,
   isOpenAICompatibleProvider,
+  persistedCodexCli,
   mergeImportedSettings,
   normalizeAgentMaxToolRounds,
   normalizeCustomProviderDefinition,
@@ -413,6 +414,9 @@ export default function SettingsModal() {
   const activeModelListId = `api-model-options-${activeProfile.id}`
   const activeProviderUsesApiUrl = activeProviderIsOpenAICompatible || activeProfile.provider === 'fal'
   const activeCustomProvider = draft.customProviders.find((provider) => provider.id === activeProfile.provider)
+  const customBlocksNativeTransparent = Boolean(
+    activeCustomProvider && !customProviderSupportsNativeTransparentBackground(activeCustomProvider),
+  )
   const activeProfileApiProxyEligible = isProfileApiProxyEligible(draft, activeProfile)
   const activeCustomProviderAsync = isAsyncCustomProvider(activeCustomProvider)
   const apiProxyChecked = activeProfileApiProxyEligible && (apiProxyLocked || activeProfile.apiProxy)
@@ -618,7 +622,7 @@ export default function SettingsModal() {
         understandingModel: profile.understandingModel?.trim() ?? '',
         timeout: Number(profile.timeout) || DEFAULT_SETTINGS.timeout,
         apiProxy: nextApiProxy,
-        codexCli: profile.provider === 'openai' ? profile.codexCli : false,
+        codexCli: persistedCodexCli(nextDraft, profile),
         streamImages: profile.provider === 'openai' ? profile.streamImages : false,
         streamPartialImages: profile.provider === 'openai' ? normalizeStreamPartialImages(profile.streamPartialImages) : DEFAULT_STREAM_PARTIAL_IMAGES,
       }
@@ -2037,19 +2041,19 @@ export default function SettingsModal() {
                   <span className="block text-sm text-gray-600 dark:text-gray-300">透明背景实现方式</span>
                   <div className="w-28 shrink-0">
                     <Select
-                      value={activeProfile.transparentBackgroundMethod ?? 'local'}
+                      value={customBlocksNativeTransparent ? 'local' : (activeProfile.transparentBackgroundMethod ?? 'local')}
                       onChange={(value) => updateActiveProfile({ transparentBackgroundMethod: value as 'api' | 'local' }, true)}
                       options={[
                         { label: 'API 原生', value: 'api' },
                         { label: '本地后处理', value: 'local' },
                       ]}
-                      disabled={Boolean(activeCustomProvider && !customProviderSupportsNativeTransparentBackground(activeCustomProvider))}
+                      disabled={customBlocksNativeTransparent}
                       className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-1.5 text-xs text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
                     />
                   </div>
                 </div>
                 <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
-                  {activeCustomProvider && !customProviderSupportsNativeTransparentBackground(activeCustomProvider)
+                  {customBlocksNativeTransparent
                     ? '当前自定义服务商未映射 $params.background，只能使用本地后处理。未设置的旧配置也会继续本地抠图。'
                     : 'API 原生会请求接口直接生成透明背景。未设置时仍使用本地后处理，已有海报和画廊不会突然改成透明通道。'}
                 </div>

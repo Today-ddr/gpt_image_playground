@@ -13,7 +13,9 @@ import {
   importCustomProviderSettingsFromJson,
   getImageGenerationProfiles,
   mergeImportedSettings,
+  normalizeApiProfile,
   normalizeSettings,
+  persistedCodexCli,
   resolveImageGenerationProfileIds,
   switchApiProfileProvider,
   validateApiProfile,
@@ -784,5 +786,35 @@ describe('image generation parallel profiles', () => {
     })
     expect(afterDelete.imageGenerationProfileIds).toEqual(['first'])
     expect(resolveImageGenerationProfileIds(afterDelete)).toEqual(['first'])
+  })
+})
+
+describe('upstream profile compatibility', () => {
+  const settings = normalizeSettings({
+    customProviders: [{
+      id: 'custom-a',
+      name: 'Custom',
+      submit: { path: 'images/generations' },
+    }],
+  })
+
+  it('keeps Codex enabled for OpenAI and custom providers, and clears it for fal', () => {
+    expect(persistedCodexCli(settings, { provider: 'openai', codexCli: true })).toBe(true)
+    expect(persistedCodexCli(settings, { provider: 'custom-a', codexCli: true })).toBe(true)
+    expect(persistedCodexCli(settings, { provider: 'fal', codexCli: true })).toBe(false)
+  })
+
+  it('does not invent a Responses tool model for a saved profile', () => {
+    expect(normalizeApiProfile({
+      id: 'saved',
+      provider: 'openai',
+      model: 'gpt-image-2',
+      apiMode: 'responses',
+    }).imageGenerationModel).toBe('')
+    expect(normalizeApiProfile({
+      id: 'saved',
+      provider: 'openai',
+      model: 'gpt-image-2',
+    }).model).toBe('gpt-image-2')
   })
 })

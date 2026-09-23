@@ -3497,7 +3497,14 @@ async function completeRecoveredServerTask(task: TaskRecord, job: ImageJobRecord
     size: job.actualParams?.size ?? firstParams?.size,
     n: outputIds.length,
   }
-  const revisedPromptByImage = job.revisedPrompts?.reduce<Record<string, string>>((acc, prompt, index) => {
+  const recoveryProfile = getTaskApiProfile(useStore.getState().settings, task)
+  const revisedSourcePrompt = task.transparentPrompt || task.prompt
+  const revisedPrompts = recoveryProfile?.codexCli
+    ? job.revisedPrompts?.map((prompt) => prompt == null
+      ? prompt
+      : stripInjectedCodexCliSizePrompt(prompt, revisedSourcePrompt, task.params.size))
+    : job.revisedPrompts
+  const revisedPromptByImage = revisedPrompts?.reduce<Record<string, string>>((acc, prompt, index) => {
     const imageId = outputIds[index]
     if (imageId && prompt?.trim()) acc[imageId] = prompt
     return acc
