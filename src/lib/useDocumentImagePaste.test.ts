@@ -1,11 +1,23 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { subscribeDocumentImagePaste, type DocumentImagePasteOptions } from './useDocumentImagePaste'
+import {
+  clipboardEventHasPlainText,
+  isEditableTextPasteTarget,
+  shouldDeferDocumentImagePaste,
+  subscribeDocumentImagePaste,
+  type DocumentImagePasteOptions,
+} from './useDocumentImagePaste'
 
-function createPasteEvent(items: Array<{ type: string; getAsFile: () => File | null }>) {
-  const event = new Event('paste', { cancelable: true })
+function createPasteEvent(
+  items: Array<{ type: string; getAsFile: () => File | null }>,
+  text = '',
+) {
+  const event = new Event('paste', { cancelable: true, bubbles: true })
   Object.defineProperty(event, 'clipboardData', {
-    value: { items },
+    value: {
+      items,
+      getData: (type: string) => type === 'text/plain' ? text : '',
+    },
   })
   return event
 }
@@ -105,5 +117,26 @@ describe('subscribeDocumentImagePaste', () => {
     expect(addEventListener).toHaveBeenCalledWith('paste', expect.any(Function), { capture: true })
     cleanup()
     expect(removeEventListener).toHaveBeenCalledWith('paste', expect.any(Function), { capture: true })
+  })
+
+  it('does not steal mixed text and image pastes from a menu textarea', () => {
+    const event = createPasteEvent([
+      { type: 'text/plain', getAsFile: () => null },
+      imageItem().item,
+    ], '今日菜单：草莓蛋糕')
+    Object.defineProperty(event, 'target', { value: { tagName: 'TEXTAREA' } })
+
+    expect(isEditableTextPasteTarget(event.target)).toBe(true)
+    expect(clipboardEventHasPlainText(event)).toBe(true)
+    expect(shouldDeferDocumentImagePaste(event)).toBe(true)
+    expect(shouldDeferDocumentImagePaste(createPasteEvent([imageItem().item], '今日菜单：草莓蛋糕'))).toBe(false)
+  })
+
+  it('still intercepts image-only pastes even when a textarea is focused', () => {
+    const event = createPasteEvent([imageItem().item])
+    Object.defineProperty(event, 'target', { value: { tagName: 'TEXTAREA' } })
+
+    expect(clipboardEventHasPlainText(event)).toBe(false)
+    expect(shouldDeferDocumentImagePaste(event)).toBe(false)
   })
 })

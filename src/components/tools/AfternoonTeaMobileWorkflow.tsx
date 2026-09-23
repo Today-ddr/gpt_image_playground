@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent, type TouchEvent } from 'react'
 import type { AfternoonTeaOrderResult, AfternoonTeaTitleRegion, TaskRecord } from '../../types'
 import { prepareImageFile, savePreparedImageFile } from '../../lib/downloadImages'
-import { ensureImageCached, ensureImageThumbnailCached, subscribeImageThumbnail } from '../../store'
+import { canCopyImageToClipboard, copyImageSourceToClipboard, getClipboardFailureMessage } from '../../lib/clipboard'
+import { ensureImageCached, ensureImageThumbnailCached, subscribeImageThumbnail, useStore } from '../../store'
 import {
   CameraIcon,
   ChevronDownIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   CloseIcon,
+  CopyIcon,
   DownloadIcon,
   EditIcon,
   ImportIcon,
@@ -227,6 +229,29 @@ export function resolveMobileAfternoonTeaSelection(candidates: MobileAfternoonTe
   return candidates[0]?.itemId ?? null
 }
 
+/** 刚复制过当前图且后面还有已出图时，下一次动作为「复制下一张」 */
+export function resolveAfternoonTeaCopyQueue<T extends { itemId: string }>(
+  candidates: T[],
+  selectedItemId: string | null,
+  lastCopiedItemId: string | null,
+) {
+  const total = candidates.length
+  const copiedIndex = lastCopiedItemId
+    ? candidates.findIndex((candidate) => candidate.itemId === lastCopiedItemId)
+    : -1
+  const viewingCopied = lastCopiedItemId != null && selectedItemId === lastCopiedItemId
+  const nextCandidate = viewingCopied && copiedIndex >= 0 && copiedIndex < total - 1
+    ? candidates[copiedIndex + 1] ?? null
+    : null
+  return {
+    total,
+    copiedIndex,
+    copiedCount: copiedIndex >= 0 ? copiedIndex + 1 : 0,
+    nextCandidate,
+    mode: nextCandidate ? 'next' as const : 'current' as const,
+  }
+}
+
 export function canReadAfternoonTeaClipboard() {
   return typeof globalThis.isSecureContext === 'boolean'
     && globalThis.isSecureContext
@@ -409,6 +434,8 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
   const [preparingFile, setPreparingFile] = useState(candidates.length > 0)
   const [saving, setSaving] = useState(false)
   const [saveStatus, setSaveStatus] = useState('')
+  const [copying, setCopying] = useState(false)
+  const [lastCopiedItemId, setLastCopiedItemId] = useState<string | null>(null)
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({})
   const candidateKey = availableCandidates.map((candidate) => `${candidate.itemId}:${candidate.imageId}`).join('\u0001')
 
@@ -565,6 +592,7 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
     ? null
     : Math.max(0, (props.batchFinishedAt ?? now) - props.batchStartedAt)
   const currentCandidate = availableCandidates.find((candidate) => candidate.itemId === selectedItemId) ?? null
+  const copyQueue = resolveAfternoonTeaCopyQueue(availableCandidates, selectedItemId, lastCopiedItemId)
   const selectedIndex = currentCandidate
     ? availableCandidates.findIndex((candidate) => candidate.itemId === currentCandidate.itemId)
     : -1
@@ -684,6 +712,36 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
     const distance = event.changedTouches[0]?.clientX - startX
     if (Math.abs(distance) < 48) return
     moveSelection(distance > 0 ? -1 : 1)
+  }
+  const handleCopyCurrentPoster = async () => {
+    if (copying) return
+    const target = copyQueue.nextCandidate ?? currentCandidate
+    if (!target) return
+    const usingCurrentPreview = target.itemId === selectedItemId
+    if (usingCurrentPreview && !selectedImageSrc) return
+    setCopying(true)
+    try {
+      const src = usingCurrentPreview
+        ? selectedImageSrc
+        : await ensureImageCached(target.imageId)
+      if (!src) throw new Error('Image source is not available')
+      await copyImageSourceToClipboard(src)
+      if (!usingCurrentPreview) setSelectedItemId(target.itemId)
+      setLastCopiedItemId(target.itemId)
+      const nextQueue = resolveAfternoonTeaCopyQueue(availableCandidates, target.itemId, target.itemId)
+      if (nextQueue.nextCandidate) {
+        useStore.getState().showToast(`已复制 ${nextQueue.copiedCount}/${nextQueue.total}，去微信粘贴后点「复制下一张」`, 'success')
+      } else if (nextQueue.total > 1) {
+        useStore.getState().showToast(`已复制 ${nextQueue.total}/${nextQueue.total}，可直接粘贴到微信`, 'success')
+      } else {
+        useStore.getState().showToast('图片已复制，可直接粘贴到微信', 'success')
+      }
+    } catch (err) {
+      console.error(err)
+      useStore.getState().showToast(getClipboardFailureMessage('复制失败，请改用保存', err), 'error')
+    } finally {
+      setCopying(false)
+    }
   }
   const handleSave = async () => {
     if (!preparedFile || saving) return
@@ -982,6 +1040,21 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
                   </button>
                 ) : (
                   <div className="text-sm text-gray-500 dark:text-gray-400">正在载入图片...</div>
+                )}
+                {canCopyImageToClipboard() && (
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      void handleCopyCurrentPoster()
+                    }}
+                    disabled={copying || (copyQueue.mode === 'current' && !selectedImageSrc)}
+                    className="absolute right-2 top-2 z-20 flex min-h-11 items-center gap-1.5 rounded-md bg-white/95 px-3 text-sm font-medium text-gray-800 shadow-sm ring-1 ring-black/5 backdrop-blur focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-gray-900/90 dark:text-gray-100 dark:ring-white/10"
+                    aria-label={copyQueue.mode === 'next' ? '复制下一张海报图片' : '复制当前海报图片'}
+                  >
+                    <CopyIcon className="h-4 w-4" />
+                    {copying ? '复制中...' : copyQueue.mode === 'next' ? `复制下一张 ${copyQueue.copiedCount + 1}/${copyQueue.total}` : '复制图片'}
+                  </button>
                 )}
                 {availableCandidates.length > 1 && (
                   <>

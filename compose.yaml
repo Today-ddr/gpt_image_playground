@@ -25,9 +25,9 @@ services:
     environment:
       HOST: 0.0.0.0
       PORT: 80
-      ENABLE_API_PROXY: "false"
-      API_PROXY_URL: ""
-      DEFAULT_API_URL: ""
+      ENABLE_API_PROXY: ${ENABLE_API_PROXY:-true}
+      API_PROXY_URL: ${API_PROXY_URL:-}
+      DEFAULT_API_URL: ${DEFAULT_API_URL:-}
     ports:
       - "127.0.0.1:${APP_PORT:-5175}:80"
     depends_on:

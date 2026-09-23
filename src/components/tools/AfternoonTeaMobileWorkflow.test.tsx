@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { TaskRecord } from '../../types'
+import { canCopyImageToClipboard } from '../../lib/clipboard'
 import {
   AfternoonTeaMobileWorkflow,
   clampGenerateSplitLeftPercent,
@@ -9,6 +10,7 @@ import {
   canReadAfternoonTeaClipboard,
   readAfternoonTeaClipboardText,
   readGenerateSplitLeftPercent,
+  resolveAfternoonTeaCopyQueue,
   resolveMobileAfternoonTeaSelection,
   writeGenerateSplitLeftPercent,
 } from './AfternoonTeaMobileWorkflow'
@@ -433,6 +435,26 @@ describe('AfternoonTeaMobileWorkflow', () => {
     expect(html).not.toContain('aria-label="移除餐品图片"')
   })
 
+  it('keeps the menu textarea pasteable on a fresh input conversation', () => {
+    const html = renderWorkflow({
+      orderResult: null,
+      analysisStatus: 'idle',
+      batchStartedAt: null,
+      batchFinishedAt: null,
+      locked: false,
+      busy: false,
+      imageLoading: false,
+      imageDataUrl: '',
+      userPrompt: '',
+      itemTitleRegions: [],
+    })
+    const menuInputIndex = html.indexOf('aria-label="菜单输入"')
+    const menuInputTag = html.slice(html.lastIndexOf('<textarea', menuInputIndex), html.indexOf('>', menuInputIndex) + 1)
+
+    expect(menuInputIndex).toBeGreaterThan(-1)
+    expect(menuInputTag).not.toMatch(/(?:^|\s)disabled(?:="[^"]*")?(?=[\s>])/)
+  })
+
   it('keeps image pickers available while analysis is running', () => {
     const html = renderWorkflow({
       orderResult: null,
@@ -451,7 +473,7 @@ describe('AfternoonTeaMobileWorkflow', () => {
     expect(imageArea).not.toContain('pointer-events-none')
     const menuInputIndex = html.indexOf('aria-label="菜单输入"')
     const menuInputTag = html.slice(html.lastIndexOf('<textarea', menuInputIndex), html.indexOf('>', menuInputIndex) + 1)
-    expect(menuInputTag).toContain('disabled')
+    expect(menuInputTag).toMatch(/(?:^|\s)disabled(?:="[^"]*")?(?=[\s>])/)
   })
 
   it('shows item tags inline and exposes one editor for both name and tags', () => {
@@ -667,6 +689,166 @@ describe('AfternoonTeaMobileWorkflow', () => {
 
     expect(html).toContain('准备图片...')
     expect(html).toContain('aria-label="保存当前海报图片"')
+  })
+
+  it('shows copy on the current poster while the batch is still generating', () => {
+    vi.stubGlobal('isSecureContext', true)
+    vi.stubGlobal('ClipboardItem', class ClipboardItem {})
+    vi.stubGlobal('navigator', { clipboard: { write: vi.fn(), readText: vi.fn() } })
+    expect(canCopyImageToClipboard()).toBe(true)
+
+    const doneTask = task('task-done', 'done', ['image-a'])
+    const html = renderWorkflow({
+      items: [
+        { id: 'poster-a', title: '午后茶歇', prompt: 'prompt A', status: 'done', task: doneTask },
+        { id: 'poster-b', title: '暖心时光', prompt: 'prompt B', status: 'running', task: task('task-b', 'running') },
+      ],
+      batchStartedAt: 10,
+      batchFinishedAt: null,
+    })
+
+    expect(html).toContain('aria-label="复制当前海报图片"')
+    expect(html).toContain('>复制图片<')
+    expect(html).toContain('aria-label="当前海报"')
+    expect(html).not.toContain('aria-label="保存当前海报图片"')
+  })
+
+  it('keeps copy after the batch finishes and does not nest it inside the detail button', () => {
+    vi.stubGlobal('isSecureContext', true)
+    vi.stubGlobal('ClipboardItem', class ClipboardItem {})
+    vi.stubGlobal('navigator', { clipboard: { write: vi.fn(), readText: vi.fn() } })
+
+    const doneTask = task('task-done', 'done', ['image-a'])
+    const html = renderWorkflow({
+      items: [{ id: 'poster-a', title: '午后茶歇', prompt: 'prompt A', status: 'done', task: doneTask }],
+      batchStartedAt: 10,
+      batchFinishedAt: 20,
+    })
+
+    expect(html).toContain('aria-label="复制当前海报图片"')
+    expect(html).toContain('aria-label="保存当前海报图片"')
+    expect(html).toContain('aria-label="当前海报"')
+    expect(html).toContain('aria-label="选择海报 午后茶歇"')
+  })
+
+  it('hides copy when the clipboard image API is unavailable', () => {
+    vi.stubGlobal('isSecureContext', false)
+    vi.stubGlobal('navigator', { clipboard: { readText: vi.fn() } })
+    expect(canCopyImageToClipboard()).toBe(false)
+
+    const doneTask = task('task-done', 'done', ['image-a'])
+    const html = renderWorkflow({
+      items: [{ id: 'poster-a', title: '午后茶歇', prompt: 'prompt A', status: 'done', task: doneTask }],
+      batchStartedAt: 10,
+      batchFinishedAt: 20,
+    })
+
+    expect(html).not.toContain('aria-label="复制当前海报图片"')
+    expect(html).toContain('aria-label="保存当前海报图片"')
+  })
+
+  it('copies the cached original and tells the user to paste into wechat', () => {
+    const copyStart = mobileWorkflowSource.indexOf('const handleCopyCurrentPoster')
+    expect(copyStart).toBeGreaterThan(0)
+    const copySource = mobileWorkflowSource.slice(copyStart, mobileWorkflowSource.indexOf('const handleSave', copyStart))
+
+    expect(copySource).toContain('copyImageSourceToClipboard(src)')
+    expect(copySource).toContain('selectedImageSrc')
+    expect(copySource).toContain("showToast('图片已复制，可直接粘贴到微信', 'success')")
+    expect(copySource).toContain("getClipboardFailureMessage('复制失败，请改用保存', err)")
+    expect(copySource).not.toContain('thumbnails[')
+    expect(mobileWorkflowSource).toContain('event.stopPropagation()')
+    expect(mobileWorkflowSource).toContain("useStore.getState().showToast")
+
+    const previewStart = mobileWorkflowSource.indexOf('aria-label="当前海报"')
+    const previewSource = mobileWorkflowSource.slice(
+      previewStart,
+      mobileWorkflowSource.indexOf('{availableCandidates.length > 1 && (', previewStart),
+    )
+    const detailIndex = previewSource.indexOf('aria-label={`查看 ${currentCandidate.title} 详情`}')
+    const copyIndex = previewSource.indexOf('复制当前海报图片')
+    const detailButtonClose = previewSource.indexOf('</button>', detailIndex)
+    expect(detailIndex).toBeGreaterThan(0)
+    expect(copyIndex).toBeGreaterThan(detailButtonClose)
+  })
+
+  it('keeps the first copy action on the current poster when several are ready', () => {
+    vi.stubGlobal('isSecureContext', true)
+    vi.stubGlobal('ClipboardItem', class ClipboardItem {})
+    vi.stubGlobal('navigator', { clipboard: { write: vi.fn(), readText: vi.fn() } })
+
+    const html = renderWorkflow({
+      items: [
+        { id: 'poster-a', title: '午后茶歇', prompt: 'prompt A', status: 'done', task: task('task-a', 'done', ['image-a']) },
+        { id: 'poster-b', title: '暖心时光', prompt: 'prompt B', status: 'done', task: task('task-b', 'done', ['image-b']) },
+      ],
+      batchStartedAt: 10,
+      batchFinishedAt: 20,
+    })
+
+    expect(html).toContain('aria-label="复制当前海报图片"')
+    expect(html).toContain('>复制图片<')
+    expect(html).not.toContain('复制下一张')
+  })
+
+  it('copies the next poster original and tells the user to paste then continue', () => {
+    const copyStart = mobileWorkflowSource.indexOf('const handleCopyCurrentPoster')
+    expect(copyStart).toBeGreaterThan(0)
+    const copySource = mobileWorkflowSource.slice(copyStart, mobileWorkflowSource.indexOf('const handleSave', copyStart))
+
+    expect(copySource).toContain('copyQueue.nextCandidate ?? currentCandidate')
+    expect(copySource).toContain('ensureImageCached(target.imageId)')
+    expect(copySource).toContain('copyImageSourceToClipboard(src)')
+    expect(copySource).toContain('setSelectedItemId(target.itemId)')
+    expect(copySource).toContain('setLastCopiedItemId(target.itemId)')
+    expect(copySource).toContain('去微信粘贴后点「复制下一张」')
+    expect(copySource).not.toContain('thumbnails[')
+    expect(mobileWorkflowSource).toContain('复制下一张海报图片')
+    expect(mobileWorkflowSource).toContain('复制下一张 ${copyQueue.copiedCount + 1}/${copyQueue.total}')
+  })
+})
+
+describe('afternoon tea copy queue', () => {
+  const posters = [
+    { itemId: 'poster-a' },
+    { itemId: 'poster-b' },
+    { itemId: 'poster-c' },
+  ]
+
+  it('starts on the current poster and only offers next after that poster was copied', () => {
+    expect(resolveAfternoonTeaCopyQueue(posters, 'poster-a', null)).toMatchObject({
+      mode: 'current',
+      nextCandidate: null,
+      copiedCount: 0,
+      total: 3,
+    })
+    expect(resolveAfternoonTeaCopyQueue(posters, 'poster-a', 'poster-a')).toMatchObject({
+      mode: 'next',
+      nextCandidate: { itemId: 'poster-b' },
+      copiedCount: 1,
+      total: 3,
+    })
+  })
+
+  it('cancels next-copy when the user leaves the copied poster', () => {
+    expect(resolveAfternoonTeaCopyQueue(posters, 'poster-b', 'poster-a')).toMatchObject({
+      mode: 'current',
+      nextCandidate: null,
+    })
+  })
+
+  it('ends the queue on the last generated poster and on a single image', () => {
+    expect(resolveAfternoonTeaCopyQueue(posters, 'poster-c', 'poster-c')).toMatchObject({
+      mode: 'current',
+      nextCandidate: null,
+      copiedCount: 3,
+    })
+    expect(resolveAfternoonTeaCopyQueue(posters.slice(0, 1), 'poster-a', 'poster-a')).toMatchObject({
+      mode: 'current',
+      nextCandidate: null,
+      copiedCount: 1,
+      total: 1,
+    })
   })
 })
 

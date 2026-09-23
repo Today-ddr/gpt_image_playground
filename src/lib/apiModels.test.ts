@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createDefaultOpenAIProfile } from './apiProfiles'
 import { fetchApiModels } from './apiModels'
+import { API_PROXY_TARGET_HEADER } from './devProxy'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -43,9 +44,18 @@ describe('fetchApiModels', () => {
     vi.stubEnv('VITE_API_PROXY_AVAILABLE', 'true')
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: [] }), { status: 200 })))
 
-    await fetchApiModels(createDefaultOpenAIProfile({ apiKey: 'test-key', apiProxy: true }))
+    await fetchApiModels(createDefaultOpenAIProfile({
+      apiKey: 'test-key',
+      apiProxy: true,
+      baseUrl: 'https://apiiiii.tooday.pw/',
+    }))
 
-    expect(fetch).toHaveBeenCalledWith('/api-proxy/models', expect.anything())
+    expect(fetch).toHaveBeenCalledWith('/api-proxy/models', expect.objectContaining({
+      headers: {
+        Authorization: 'Bearer test-key',
+        [API_PROXY_TARGET_HEADER]: 'https://apiiiii.tooday.pw/v1',
+      },
+    }))
   })
 
   it('does not expose an API key from an HTTP error response', async () => {

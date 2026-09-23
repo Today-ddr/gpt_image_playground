@@ -13,11 +13,15 @@ describe('settings content', () => {
     expect(settingsModal).toContain('获取模型列表')
     expect(settingsModal).toContain("activeProfile.apiMode === 'images'")
   })
-})
+
+  it('keeps the settings API URL when the Docker API proxy is not locked', () => {
+    expect(settingsModal).toContain('仍使用上方填写的 API URL')
+    expect(settingsModal).toContain('仍使用此处填写的 API URL')
+  })
 
   it('exposes multi-profile image generation parallel selection', () => {
     expect(settingsModal).toContain('生图将同时请求')
     expect(settingsModal).toContain('toggleImageGenerationProfile')
     expect(settingsModal).toContain('参与生图并行')
   })
-
+})

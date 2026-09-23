@@ -9,14 +9,47 @@ export interface DevProxyConfig {
 }
 
 const DEFAULT_PROXY_PREFIX = '/api-proxy'
+export const API_PROXY_TARGET_HEADER = 'X-Api-Proxy-Target'
+
+function hostDefaultsToHttp(hostname: string): boolean {
+  const normalizedHostname = hostname.trim().toLowerCase().replace(/^\[/, '').replace(/\]$/, '')
+  if (
+    normalizedHostname === 'localhost'
+    || normalizedHostname === '::1'
+    || normalizedHostname === '0.0.0.0'
+    || normalizedHostname.endsWith('.localhost')
+  ) {
+    return true
+  }
+
+  const ipv4Match = normalizedHostname.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
+  if (!ipv4Match) return false
+
+  const octets = ipv4Match.slice(1).map(Number)
+  if (octets.some((octet) => octet > 255)) return false
+
+  const [firstOctet, secondOctet] = octets
+  return firstOctet === 10
+    || firstOctet === 127
+    || firstOctet === 0
+    || (firstOctet === 192 && secondOctet === 168)
+    || (firstOctet === 172 && secondOctet >= 16 && secondOctet <= 31)
+    || (firstOctet === 169 && secondOctet === 254)
+}
+
+function withInferredProtocol(input: string): string {
+  if (/^[a-zA-Z][a-zA-Z\d+.-]*:\/\//.test(input)) return input
+
+  const hostname = input.split('/')[0]?.split(':')[0] ?? input
+  const protocol = hostDefaultsToHttp(hostname) ? 'http' : 'https'
+  return `${protocol}://${input}`
+}
 
 export function normalizeBaseUrl(baseUrl: string): string {
   const trimmed = baseUrl.trim()
   if (!trimmed) return ''
 
-  const input = /^[a-zA-Z][a-zA-Z\d+.-]*:\/\//.test(trimmed)
-    ? trimmed
-    : `https://${trimmed}`
+  const input = withInferredProtocol(trimmed)
 
   try {
     const url = new URL(input)
@@ -96,4 +129,39 @@ export function isApiProxyLocked(proxyConfig: DevProxyConfig | null = readClient
 
 export function shouldUseApiProxy(apiProxy: boolean, proxyConfig: DevProxyConfig | null = readClientDevProxyConfig()): boolean {
   return isApiProxyAvailable(proxyConfig) && (apiProxy || isApiProxyLocked(proxyConfig))
+}
+
+export function resolveApiProxyUpstream(headerValue: unknown, fallbackTarget = ''): string {
+  const rawHeader = Array.isArray(headerValue) ? headerValue[0] : headerValue
+  if (typeof rawHeader === 'string') {
+    const normalizedHeader = rawHeader.trim().replace(/\/+$/, '')
+    if (/^https?:\/\//i.test(normalizedHeader)) return normalizedHeader
+  }
+
+  return fallbackTarget.trim().replace(/\/+$/, '')
+}
+
+export function resolveApiProxyTargetBase(baseUrl: string): string {
+  const normalizedBaseUrl = normalizeBaseUrl(baseUrl)
+  if (!normalizedBaseUrl) return ''
+  if (normalizedBaseUrl.endsWith('/v1')) return normalizedBaseUrl
+  return `${normalizedBaseUrl}/v1`
+}
+
+export function withApiProxyHeaders(
+  profile: { baseUrl: string; apiProxy: boolean },
+  headers: Record<string, string> = {},
+  proxyConfig: DevProxyConfig | null = readClientDevProxyConfig(),
+): Record<string, string> {
+  if (!shouldUseApiProxy(profile.apiProxy, proxyConfig) || isApiProxyLocked(proxyConfig)) {
+    return { ...headers }
+  }
+
+  const target = resolveApiProxyTargetBase(profile.baseUrl)
+  if (!target) return { ...headers }
+
+  return {
+    ...headers,
+    [API_PROXY_TARGET_HEADER]: target,
+  }
 }

@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { readFileSync } from 'fs'
-import { normalizeDevProxyConfig } from './src/lib/devProxy'
+import { normalizeDevProxyConfig, resolveApiProxyUpstream } from './src/lib/devProxy'
 
 const pkg = JSON.parse(readFileSync('./package.json', 'utf-8'))
 
@@ -38,6 +38,10 @@ export default defineConfig(({ command }) => {
                 target: devProxyConfig.target,
                 changeOrigin: devProxyConfig.changeOrigin,
                 secure: devProxyConfig.secure,
+                router: (req) => resolveApiProxyUpstream(
+                  req.headers['x-api-proxy-target'],
+                  devProxyConfig.target,
+                ),
                 rewrite: (path) =>
                   path.replace(
                     new RegExp(`^${devProxyConfig.prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),

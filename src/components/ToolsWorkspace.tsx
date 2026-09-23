@@ -56,6 +56,7 @@ import { ConversationHistoryPopover, type ConversationHistoryItem } from './Conv
 import {
   AfternoonTeaMobileWorkflow,
 } from './tools/AfternoonTeaMobileWorkflow'
+import { AfternoonTeaNoticeWorkflow } from './tools/AfternoonTeaNoticeWorkflow'
 import {
   getAfternoonTeaPosterErrorMessage,
   type AfternoonTeaPosterViewItem,
@@ -64,6 +65,45 @@ import { AfternoonTeaItemPlacement } from './tools/AfternoonTeaTitlePlacement'
 
 export const MAX_DISH_IMAGE_BYTES = 20 * 1024 * 1024
 type ToolTaskExecutionMode = 'browser' | 'server'
+
+export const TOOL_ITEMS = [
+  { id: 'dish-analysis', label: '餐品解析' },
+  { id: 'afternoon-tea-notice', label: '下午茶通知' },
+] as const
+
+export type ToolsWorkspaceToolId = typeof TOOL_ITEMS[number]['id']
+
+export const DEFAULT_TOOLS_WORKSPACE_TOOL_ID: ToolsWorkspaceToolId = 'dish-analysis'
+export const ACTIVE_TOOL_STORAGE_KEY = 'gpt-image-playground.tools.active-tool'
+
+export function isToolsWorkspaceToolId(value: string): value is ToolsWorkspaceToolId {
+  return TOOL_ITEMS.some((tool) => tool.id === value)
+}
+
+export function readActiveToolsWorkspaceToolId(
+  storage: Pick<Storage, 'getItem'> | null = typeof window === 'undefined' ? null : window.localStorage,
+): ToolsWorkspaceToolId {
+  if (!storage) return DEFAULT_TOOLS_WORKSPACE_TOOL_ID
+  try {
+    const raw = storage.getItem(ACTIVE_TOOL_STORAGE_KEY)
+    if (raw && isToolsWorkspaceToolId(raw)) return raw
+  } catch {
+    // localStorage 不可用时回退到默认工具
+  }
+  return DEFAULT_TOOLS_WORKSPACE_TOOL_ID
+}
+
+export function writeActiveToolsWorkspaceToolId(
+  toolId: ToolsWorkspaceToolId,
+  storage: Pick<Storage, 'setItem'> | null = typeof window === 'undefined' ? null : window.localStorage,
+) {
+  if (!storage) return
+  try {
+    storage.setItem(ACTIVE_TOOL_STORAGE_KEY, toolId)
+  } catch {
+    // ignore quota / private mode failures
+  }
+}
 
 export function normalizeDishTitleCount(value: number) {
   if (!Number.isFinite(value)) return DEFAULT_DISH_TITLE_COUNT
@@ -223,6 +263,39 @@ export function getAfternoonTeaHistoryDeletePreview(conversation: AfternoonTeaCo
 export function isAfternoonTeaConversationBusy(conversation: AfternoonTeaConversation, tasks: TaskRecord[]) {
   return (conversation.batchStartedAt != null && conversation.batchFinishedAt == null)
     || tasks.some((task) => task.afternoonTeaBatchId === conversation.id && task.status === 'running')
+}
+
+// 批次占用只锁正在生成的那条会话。否则生成完点「新建对话」后，菜单输入会被全局 batchBusy 禁用到刷新为止。
+export function resolveAfternoonTeaBusyConversationId(
+  runtimeBatchId?: string | null,
+  startingConversationIds: Iterable<string> = [],
+) {
+  if (runtimeBatchId) return runtimeBatchId
+  for (const id of startingConversationIds) return id
+  return null
+}
+
+export function isAfternoonTeaWorkspaceBusy(options: {
+  conversation: { id: string } | null
+  batchBusy: boolean
+  busyConversationId: string | null
+  loading: boolean
+  loadingConversationId: string | null
+}) {
+  if (!options.conversation) return options.batchBusy || options.loading
+  if (options.batchBusy && options.busyConversationId === options.conversation.id) return true
+  if (options.loading && options.loadingConversationId === options.conversation.id) return true
+  return false
+}
+
+export function isAfternoonTeaWorkspaceInputLocked(options: {
+  conversation: Pick<AfternoonTeaConversation, 'id' | 'batchStartedAt' | 'batchFinishedAt'> | null
+  batchBusy: boolean
+  busyConversationId: string | null
+}) {
+  if (isAfternoonTeaConversationFrozen(options.conversation)) return true
+  if (!options.conversation) return options.batchBusy
+  return options.batchBusy && options.busyConversationId === options.conversation.id
 }
 
 type AfternoonTeaConversationPatch = Partial<Omit<AfternoonTeaConversation, 'id' | 'createdAt' | 'updatedAt'>>
@@ -1035,9 +1108,26 @@ export default function ToolsWorkspace() {
   const [analysisRun, setAnalysisRun] = useState<DishAnalysisRun | null>(null)
   const [analysisNow, setAnalysisNow] = useState(Date.now())
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [activeToolId, setActiveToolId] = useState<ToolsWorkspaceToolId>(readActiveToolsWorkspaceToolId)
   const batchItems = activeConversation?.posterItems ?? []
   const viewItems = deriveAfternoonTeaPosterViewItems(batchItems, tasks)
   const batchBusy = Boolean(afternoonTeaBatchOperationId) || batchRunning || retrying
+  const busyConversationId = resolveAfternoonTeaBusyConversationId(
+    batchRuntimeRef.current?.batchId,
+    batchStartingConversationIdsRef.current,
+  )
+  const conversationBusy = isAfternoonTeaWorkspaceBusy({
+    conversation: activeConversation,
+    batchBusy,
+    busyConversationId,
+    loading,
+    loadingConversationId: analysisRun?.conversationId ?? null,
+  })
+  const conversationLocked = isAfternoonTeaWorkspaceInputLocked({
+    conversation: activeConversation,
+    batchBusy,
+    busyConversationId,
+  })
   const analysisViewState = deriveDishAnalysisViewState(activeConversation, analysisRun, analysisNow)
   const retryDisabled = !imageDataUrl || isAfternoonTeaRetryDisabled(batchBusy, activeConversation, settings, tasks)
   const batchCallbacks = createAfternoonTeaBatchCallbacks(useStore.getState)
@@ -1055,6 +1145,12 @@ export default function ToolsWorkspace() {
     editOutputs,
     removeTask,
   })
+
+  const selectTool = (toolId: ToolsWorkspaceToolId) => {
+    setActiveToolId(toolId)
+    writeActiveToolsWorkspaceToolId(toolId)
+    if (toolId !== 'dish-analysis') setHistoryOpen(false)
+  }
 
   const restoreConversation = async (conversationId: string) => {
     coordinatorRef.current.cancelRequest()
@@ -1357,7 +1453,7 @@ export default function ToolsWorkspace() {
   }
 
   const submit = async () => {
-    if (batchBusy) return
+    if (conversationBusy) return
     const conversation = ensureEditableConversation()
     if (!conversation) return
     const conversationId = conversation.id
@@ -1909,7 +2005,7 @@ export default function ToolsWorkspace() {
     if (!file) return false
     void handleImageChange(file)
     return true
-  }, imageLoading || batchBusy || Boolean(confirmDialog))
+  }, imageLoading || conversationBusy || Boolean(confirmDialog) || activeToolId !== 'dish-analysis')
 
   return (
     <main className="safe-area-x mx-auto max-w-[100rem] pb-[calc(6.5rem+env(safe-area-inset-bottom))] sm:pb-12">
@@ -1917,10 +2013,27 @@ export default function ToolsWorkspace() {
         <nav className="sticky top-[calc(var(--safe-area-top,0px)+3.5rem)] z-30 flex h-12 items-center border-b border-gray-200 bg-white/90 backdrop-blur dark:border-white/[0.08] dark:bg-gray-950/90 sm:static sm:block sm:h-auto sm:border-b-0 sm:border-r sm:bg-transparent sm:py-6 sm:backdrop-blur-none dark:sm:bg-transparent" aria-label="工具列表">
           <div className="hidden text-xs font-medium text-gray-400 sm:block sm:px-3">工具</div>
           <div className="relative flex min-w-0 flex-1 items-center px-1 sm:mx-3 sm:mt-2 sm:block sm:px-0">
-            <div aria-current="page" className="min-w-0 flex-1 truncate py-1.5 text-left text-sm font-semibold text-gray-900 dark:text-gray-100 sm:w-full sm:whitespace-nowrap sm:border-l-2 sm:border-blue-500 sm:bg-blue-50/70 sm:px-3 sm:py-2 sm:pr-[68px] sm:text-sm sm:font-medium sm:text-blue-700 sm:dark:bg-blue-500/10 sm:dark:text-blue-300">
-              餐品解析
+            <div className="flex min-w-0 flex-1 items-center overflow-x-auto sm:block sm:overflow-visible">
+              {TOOL_ITEMS.map((tool) => {
+                const selected = activeToolId === tool.id
+                const overlayHistory = tool.id === 'dish-analysis' && selected
+                return (
+                  <button
+                    key={tool.id}
+                    type="button"
+                    aria-current={selected ? 'page' : undefined}
+                    onClick={() => selectTool(tool.id)}
+                    className={`min-w-0 shrink-0 truncate px-3 py-1.5 text-left text-sm sm:mt-1 sm:w-full sm:whitespace-nowrap sm:border-l-2 sm:px-3 sm:py-2 sm:text-sm sm:font-medium sm:first:mt-0 ${selected
+                      ? `font-semibold text-gray-900 dark:text-gray-100 sm:border-blue-500 sm:bg-blue-50/70 sm:text-blue-700 sm:dark:bg-blue-500/10 sm:dark:text-blue-300 ${overlayHistory ? 'sm:pr-[68px]' : ''}`
+                      : 'font-medium text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200 sm:border-transparent sm:hover:bg-gray-50 dark:sm:hover:bg-white/[0.04]'}`}
+                  >
+                    {tool.label}
+                  </button>
+                )
+              })}
             </div>
-            <div className="relative z-10 ml-auto flex shrink-0 items-center gap-0 sm:absolute sm:right-1 sm:top-1/2 sm:ml-0 sm:-translate-y-1/2">
+            {activeToolId === 'dish-analysis' && (
+            <div className="relative z-10 ml-auto flex shrink-0 items-center gap-0 sm:absolute sm:right-1 sm:top-5 sm:ml-0 sm:-translate-y-1/2">
               <button
                 ref={historyButtonRef}
                 type="button"
@@ -1958,9 +2071,14 @@ export default function ToolsWorkspace() {
                 />
               )}
             </div>
+            )}
           </div>
         </nav>
         <div className="min-w-0 overflow-x-hidden">
+          {activeToolId === 'afternoon-tea-notice' && (
+            <AfternoonTeaNoticeWorkflow configured={Boolean(analysisProfile)} />
+          )}
+          {activeToolId === 'dish-analysis' && (
           <AfternoonTeaMobileWorkflow
             key={activeConversation?.id ?? 'no-afternoon-tea-conversation'}
             configured={Boolean(analysisProfile)}
@@ -1979,9 +2097,9 @@ export default function ToolsWorkspace() {
             analysisElapsed={analysisViewState.elapsed}
             batchStartedAt={activeConversation?.batchStartedAt ?? null}
             batchFinishedAt={activeConversation?.batchFinishedAt ?? null}
-            busy={batchBusy || loading}
+            busy={conversationBusy}
             retryDisabled={retryDisabled}
-            locked={batchBusy || isAfternoonTeaConversationFrozen(activeConversation)}
+            locked={conversationLocked}
             onImageChange={(file) => void handleImageChange(file)}
             onRemoveImage={removeImage}
             onUserPromptChange={(value) => updateUserPrompt(activeConversation?.id ?? null, value)}
@@ -2023,6 +2141,7 @@ export default function ToolsWorkspace() {
             onTaskReuse={taskActions.onReuse}
             onTaskEditOutputs={taskActions.onEditOutputs}
           />
+          )}
         </div>
       </div>
     </main>

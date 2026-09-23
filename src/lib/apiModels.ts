@@ -1,5 +1,5 @@
 import type { ApiProfile } from '../types'
-import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy } from './devProxy'
+import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy, withApiProxyHeaders } from './devProxy'
 
 class ApiModelsError extends Error {}
 
@@ -14,7 +14,9 @@ export async function fetchApiModels(profile: ApiProfile): Promise<string[]> {
 
   try {
     const response = await fetch(buildApiUrl(profile.baseUrl, 'models', proxyConfig, useApiProxy), {
-      headers: { Authorization: `Bearer ${profile.apiKey.trim()}` },
+      headers: withApiProxyHeaders(profile, {
+        Authorization: `Bearer ${profile.apiKey.trim()}`,
+      }, proxyConfig),
       signal: controller.signal,
     })
     if (!response.ok) throw new ApiModelsError(`获取模型列表失败：HTTP ${response.status}`)

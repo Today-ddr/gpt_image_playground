@@ -28,7 +28,7 @@ export async function copyImageSourceToClipboard(src: string | Promise<string | 
 }
 
 export function canCopyImageToClipboard() {
-  return window.isSecureContext && Boolean(navigator.clipboard?.write) && typeof ClipboardItem !== 'undefined'
+  return Boolean(globalThis.isSecureContext) && Boolean(globalThis.navigator?.clipboard?.write) && typeof ClipboardItem !== 'undefined'
 }
 
 export function getClipboardFailureMessage(fallback: string, err: unknown) {

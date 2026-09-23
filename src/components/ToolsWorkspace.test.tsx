@@ -453,6 +453,65 @@ describe('dish analysis coordination', () => {
     expect(workspaceSource).toContain('resolveAfternoonTeaEntryConversationId')
   })
 
+  it('does not lock a new conversation while another conversation still holds the batch', () => {
+    const resolveBusyId = helper('resolveAfternoonTeaBusyConversationId') as (
+      runtimeBatchId?: string | null,
+      startingConversationIds?: Iterable<string>,
+    ) => string | null
+    const isBusy = helper('isAfternoonTeaWorkspaceBusy') as (options: {
+      conversation: { id: string } | null
+      batchBusy: boolean
+      busyConversationId: string | null
+      loading: boolean
+      loadingConversationId: string | null
+    }) => boolean
+    const isLocked = helper('isAfternoonTeaWorkspaceInputLocked') as (options: {
+      conversation: AfternoonTeaConversation | null
+      batchBusy: boolean
+      busyConversationId: string | null
+    }) => boolean
+    const generating = afternoonTeaConversation({ id: 'generating', batchStartedAt: 10, batchFinishedAt: null })
+    const fresh = afternoonTeaConversation({
+      id: 'fresh',
+      sourceImageId: null,
+      sourceImageName: '',
+      orderText: '',
+      orderResult: null,
+      posterItems: [],
+      batchStartedAt: null,
+      batchFinishedAt: null,
+    })
+
+    expect(resolveBusyId).toBeTypeOf('function')
+    expect(isBusy).toBeTypeOf('function')
+    expect(isLocked).toBeTypeOf('function')
+    expect(resolveBusyId('runtime-batch', ['starting'])).toBe('runtime-batch')
+    expect(resolveBusyId(null, ['starting'])).toBe('starting')
+    expect(resolveBusyId(null, [])).toBeNull()
+    expect(isLocked({ conversation: generating, batchBusy: true, busyConversationId: 'generating' })).toBe(true)
+    expect(isBusy({
+      conversation: generating,
+      batchBusy: true,
+      busyConversationId: 'generating',
+      loading: false,
+      loadingConversationId: null,
+    })).toBe(true)
+    expect(isLocked({ conversation: fresh, batchBusy: true, busyConversationId: 'generating' })).toBe(false)
+    expect(isBusy({
+      conversation: fresh,
+      batchBusy: true,
+      busyConversationId: 'generating',
+      loading: true,
+      loadingConversationId: 'generating',
+    })).toBe(false)
+    expect(isLocked({ conversation: fresh, batchBusy: true, busyConversationId: null })).toBe(false)
+    expect(workspaceSource).toContain('resolveAfternoonTeaBusyConversationId(')
+    expect(workspaceSource).toContain('isAfternoonTeaWorkspaceBusy({')
+    expect(workspaceSource).toContain('isAfternoonTeaWorkspaceInputLocked({')
+    expect(workspaceSource).toContain('busy={conversationBusy}')
+    expect(workspaceSource).toContain('locked={conversationLocked}')
+  })
+
   it('derives status only from the active conversation run', () => {
     const deriveViewState = helper('deriveDishAnalysisViewState')
     const conversation = afternoonTeaConversation({ analysisElapsed: 65_000 })
@@ -579,7 +638,7 @@ describe('dish analysis coordination', () => {
     expect(workspaceSource).toContain('mountedRef.current && useStore.getState().activeAfternoonTeaConversationId === conversationId')
     expect(workspaceSource).toContain('batchId: conversationId')
     expect(workspaceSource).toContain('updateAfternoonTeaConversation(conversationId')
-    expect(workspaceSource).toContain('busy={batchBusy || loading}')
+    expect(workspaceSource).toContain('busy={conversationBusy}')
   })
 
   it('commits product placement and names only for the active editable conversation', () => {
@@ -971,16 +1030,22 @@ describe('dish analysis coordination', () => {
       workspaceSource.indexOf('</nav>'),
     )
 
-    expect(navSource).toMatch(
-      /<div className="[^"]*relative[^"]*">[\s\S]*?<div[^>]*aria-current="page"[^>]*>[\s\S]*?餐品解析/,
-    )
+    expect(workspaceSource).toContain("id: 'dish-analysis'")
+    expect(workspaceSource).toContain("id: 'afternoon-tea-notice'")
+    expect(workspaceSource).toContain("label: '餐品解析'")
+    expect(workspaceSource).toContain("label: '下午茶通知'")
+    expect(navSource).toContain('{tool.label}')
+    expect(navSource).toContain("activeToolId === 'dish-analysis'")
+    expect(navSource).toContain('overflow-x-auto')
+    expect(navSource).toContain("aria-current={selected ? 'page' : undefined}")
+    expect(navSource).toContain('sm:border-l-2')
+    expect(navSource).toContain('sm:border-blue-500')
     expect(navSource).toMatch(
       /<div className="[^"]*absolute[^"]*right-[^"]*">[\s\S]*?<MessageCircleIcon[\s\S]*?<EditIcon/,
     )
     expect(navSource).toContain('hidden text-xs font-medium text-gray-400 sm:block')
     expect(navSource).toContain('flex h-12 items-center')
     expect(navSource).toContain('sm:block sm:h-auto')
-    expect(navSource).toContain('aria-current="page"')
     expect(navSource.match(/className="[^"]*h-11 w-11[^"]*sm:h-9 sm:w-8[^"]*"/g)).toHaveLength(2)
     expect(navSource).toContain('aria-expanded={historyOpen}')
     expect(navSource).toContain('className="relative z-10')
@@ -1007,6 +1072,33 @@ describe('dish analysis coordination', () => {
     expect(workspaceSource).toContain('const retryDisabled = !imageDataUrl ||')
   })
 
+  it('only shows history actions on dish analysis and mounts the notice tool separately', () => {
+    expect(workspaceSource).toContain('{activeToolId === \'dish-analysis\' && (')
+    expect(workspaceSource).toContain('<AfternoonTeaNoticeWorkflow configured={Boolean(analysisProfile)} />')
+    expect(workspaceSource).toContain("activeToolId === 'afternoon-tea-notice'")
+    expect(workspaceSource).toContain('writeActiveToolsWorkspaceToolId(toolId)')
+    expect(workspaceSource).toContain("if (toolId !== 'dish-analysis') setHistoryOpen(false)")
+    expect(workspaceSource).toContain("activeToolId !== 'dish-analysis'")
+  })
+
+  it('persists the active tool id and ignores unknown values', () => {
+    const storage = {
+      values: {} as Record<string, string>,
+      getItem(key: string) {
+        return Object.prototype.hasOwnProperty.call(this.values, key) ? this.values[key] : null
+      },
+      setItem(key: string, value: string) {
+        this.values[key] = value
+      },
+    }
+
+    expect(workspaceHelpers.readActiveToolsWorkspaceToolId(storage)).toBe('dish-analysis')
+    workspaceHelpers.writeActiveToolsWorkspaceToolId('afternoon-tea-notice', storage)
+    expect(workspaceHelpers.readActiveToolsWorkspaceToolId(storage)).toBe('afternoon-tea-notice')
+    expect(workspaceHelpers.readActiveToolsWorkspaceToolId({ getItem: () => 'unknown' })).toBe('dish-analysis')
+    expect(workspaceHelpers.readActiveToolsWorkspaceToolId(null)).toBe('dish-analysis')
+  })
+
   it('keeps parsed results when a source image is attached later', () => {
     const handleStart = workspaceSource.indexOf('const handleImageChange = async')
     const handleSource = workspaceSource.slice(handleStart, workspaceSource.indexOf('const removeImage ='))
@@ -1030,7 +1122,7 @@ describe('dish analysis coordination', () => {
     expect(submitSource).not.toContain('beginImageSelection()')
     expect(submitSource).not.toContain('isCurrentImageSelection')
     expect(submitSource).toContain('latestSourceImageId')
-    expect(pasteSource).toContain('imageLoading || batchBusy || Boolean(confirmDialog)')
+    expect(pasteSource).toContain('imageLoading || conversationBusy || Boolean(confirmDialog)')
     expect(pasteSource).not.toContain('imageLoading || loading ||')
     expect(workspaceSource).toContain('keepParsedResult: true')
   })
