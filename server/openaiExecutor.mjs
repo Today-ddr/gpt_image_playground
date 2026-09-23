@@ -15,6 +15,7 @@ function normalizeBaseUrl(baseUrl) {
   if (!trimmed) return ''
   const input = /^[a-zA-Z][a-zA-Z\d+.-]*:\/\//.test(trimmed) ? trimmed : `https://${trimmed}`
   const url = new URL(input)
+  if (trimmed.endsWith('/')) return `${url.origin}${url.pathname.replace(/\/+$/, '/')}`
   const segments = url.pathname.split('/').filter(Boolean)
   const v1Index = segments.indexOf('v1')
   const normalized = v1Index >= 0 ? segments.slice(0, v1Index + 1) : segments.length ? [...segments, 'v1'] : []
@@ -22,16 +23,26 @@ function normalizeBaseUrl(baseUrl) {
 }
 
 function buildApiUrl(baseUrl, path) {
-  const base = normalizeBaseUrl(baseUrl)
+  const trimmed = String(baseUrl ?? '').trim()
+  const base = normalizeBaseUrl(trimmed)
   const endpoint = path.replace(/^\/+/, '')
+  if (trimmed.endsWith('/')) return `${base.replace(/\/+$/, '')}/${endpoint}`
   return base.endsWith('/v1') ? `${base}/${endpoint}` : `${base}/v1/${endpoint}`
+}
+
+function prependCodexCliSizePrompt(prompt, size) {
+  if (size === 'auto') return prompt
+  const trimmed = String(prompt).trimStart()
+  const hint = `Generate at ${size} resolution.`
+  if (trimmed.startsWith(hint)) return trimmed
+  return `${hint} ${trimmed}`
 }
 
 function pickActualParams(source) {
   if (!source || typeof source !== 'object') return undefined
   const result = {}
   if (typeof source.size === 'string') result.size = source.size
-  if (['auto', 'low', 'medium', 'high'].includes(source.quality)) result.quality = source.quality
+  if (['auto', 'low', 'medium', 'high', 'xhigh', 'max'].includes(source.quality)) result.quality = source.quality
   if (['png', 'jpeg', 'webp'].includes(source.output_format)) result.output_format = source.output_format
   if (typeof source.output_compression === 'number') result.output_compression = source.output_compression
   if (['auto', 'low'].includes(source.moderation)) result.moderation = source.moderation
@@ -199,16 +210,20 @@ function createResponsesInput(submission) {
 
 function createResponsesTool(submission) {
   const params = submission.params
+  const profile = submission.profile
   const tool = {
     type: 'image_generation',
     action: submission.inputImageDataUrls.length ? 'edit' : 'generate',
-    size: params.size,
     output_format: params.output_format,
     moderation: params.moderation,
   }
-  if (!submission.profile.codexCli) tool.quality = params.quality
+  const imageModel = profile.apiMode === 'responses' ? String(profile.imageGenerationModel ?? '').trim() : ''
+  if (imageModel) tool.model = imageModel
+  if (!profile.codexCli) tool.size = params.size
+  if (!profile.codexCli) tool.quality = params.quality
+  if (submission.nativeTransparentBackground) tool.background = 'transparent'
   if (params.output_format !== 'png' && params.output_compression != null) tool.output_compression = params.output_compression
-  if (submission.profile.streamImages) tool.partial_images = submission.profile.streamPartialImages ?? 2
+  if (profile.streamImages) tool.partial_images = profile.streamPartialImages ?? 2
   if (submission.maskDataUrl) tool.input_image_mask = { image_url: submission.maskDataUrl }
   return tool
 }
@@ -220,9 +235,12 @@ async function executeSingleImagesRequest(submission, fetchImpl) {
   const fallbackMime = MIME_BY_FORMAT[params.output_format] ?? 'image/png'
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), Math.max(1, profile.timeout) * 1000)
-  const guardedPrompt = profile.codexCli && !submission.allowPromptRewrite && !submission.sendPromptAsIs
-    ? `${PROMPT_REWRITE_GUARD_PREFIX}\n${submission.prompt}`
+  const sizePrompt = profile.codexCli && !submission.sendPromptAsIs
+    ? prependCodexCliSizePrompt(submission.prompt, params.size)
     : submission.prompt
+  const guardedPrompt = profile.codexCli && !submission.allowPromptRewrite && !submission.sendPromptAsIs
+    ? `${PROMPT_REWRITE_GUARD_PREFIX}\n${sizePrompt}`
+    : sizePrompt
 
   try {
     let body
@@ -231,9 +249,10 @@ async function executeSingleImagesRequest(submission, fetchImpl) {
       body = new FormData()
       body.append('model', profile.model)
       body.append('prompt', guardedPrompt)
-      body.append('size', params.size)
+      if (!profile.codexCli) body.append('size', params.size)
       body.append('output_format', params.output_format)
       body.append('moderation', params.moderation)
+      if (submission.nativeTransparentBackground) body.append('background', 'transparent')
       if (!profile.codexCli) body.append('quality', params.quality)
       if (params.output_format !== 'png' && params.output_compression != null) body.append('output_compression', String(params.output_compression))
       if (params.n > 1) body.append('n', String(params.n))
@@ -251,10 +270,11 @@ async function executeSingleImagesRequest(submission, fetchImpl) {
       body = {
         model: profile.model,
         prompt: guardedPrompt,
-        size: params.size,
         output_format: params.output_format,
         moderation: params.moderation,
       }
+      if (submission.nativeTransparentBackground) body.background = 'transparent'
+      if (!profile.codexCli) body.size = params.size
       if (!profile.codexCli) body.quality = params.quality
       if (params.output_format !== 'png' && params.output_compression != null) body.output_compression = params.output_compression
       if (params.n > 1) body.n = params.n
@@ -290,6 +310,7 @@ async function executeSingleResponsesRequest(submission, fetchImpl) {
       input: createResponsesInput(submission),
       tools: [createResponsesTool(submission)],
       tool_choice: 'required',
+      ...(profile.reasoningEffort ? { reasoning: { effort: profile.reasoningEffort } } : {}),
       ...(profile.streamImages ? { stream: true } : {}),
     }
     const response = await fetchImpl(buildApiUrl(profile.baseUrl, 'responses'), {

@@ -3,6 +3,7 @@ import { DEFAULT_PARAMS } from '../types'
 import { DEFAULT_SETTINGS } from './apiProfiles'
 import { callImageApi } from './api'
 import { API_PROXY_TARGET_HEADER } from './devProxy'
+import { IMAGE_TOOL_DROPPED_HINT } from './imageApiShared'
 
 describe('callImageApi', () => {
   afterEach(() => {
@@ -354,6 +355,94 @@ describe('callImageApi', () => {
       },
       revisedPrompts: [undefined],
     })
+  })
+
+  it('resolves a streamed completed image returned as a URL', async () => {
+    const imageUrl = 'https://example.com/generated.png'
+    const streamBody = [
+      'event: image_generation.completed',
+      `data: {"type":"image_generation.completed","url":"${imageUrl}"}`,
+      '',
+      'data: [DONE]',
+      '',
+    ].join('\n')
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(streamBody, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      }))
+      .mockResolvedValueOnce(new Response(new Blob(['image'], { type: 'image/png' }), {
+        status: 200,
+        headers: { 'Content-Type': 'image/png' },
+      }))
+
+    const result = await callImageApi({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        apiKey: 'test-key',
+        streamImages: true,
+        profiles: DEFAULT_SETTINGS.profiles.map((profile) => ({
+          ...profile,
+          apiKey: 'test-key',
+          streamImages: true,
+        })),
+      },
+      prompt: 'prompt',
+      params: { ...DEFAULT_PARAMS },
+      inputImageDataUrls: [],
+    })
+
+    expect(fetchMock.mock.calls[1][0]).toBe(imageUrl)
+    expect(result.images).toEqual(['data:image/png;base64,aW1hZ2U='])
+    expect(result.rawImageUrls).toEqual([imageUrl])
+  })
+
+  it('sends a Responses image tool model only when one is configured', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      output: [{ type: 'image_generation_call', result: 'aW1hZ2U=' }],
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+
+    await callImageApi({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        apiKey: 'test-key',
+        apiMode: 'responses',
+        profiles: DEFAULT_SETTINGS.profiles.map((profile) => ({
+          ...profile,
+          apiKey: 'test-key',
+          apiMode: 'responses' as const,
+          model: 'text-model',
+          imageGenerationModel: 'gpt-image-2.5-flare',
+        })),
+      },
+      prompt: 'prompt',
+      params: { ...DEFAULT_PARAMS, quality: 'xhigh' },
+      inputImageDataUrls: [],
+    })
+
+    const body = JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body))
+    expect(body.tools[0].model).toBe('gpt-image-2.5-flare')
+    expect(body.tools[0].quality).toBe('xhigh')
+    expect(body.reasoning).toBeUndefined()
+  })
+
+  it('explains when a relay drops the image generation tool', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      error: { message: "Tool choice 'required' must be specified with 'tools' parameter." },
+    }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+
+    await expect(callImageApi({
+      settings: { ...DEFAULT_SETTINGS, apiKey: 'test-key', apiMode: 'responses' },
+      prompt: 'prompt',
+      params: { ...DEFAULT_PARAMS },
+      inputImageDataUrls: [],
+    })).rejects.toThrow(IMAGE_TOOL_DROPPED_HINT)
   })
 
   it('parses Images API stream result events with data b64_json', async () => {

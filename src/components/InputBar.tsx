@@ -5,7 +5,10 @@ import { DEFAULT_PARAMS, type TaskRecord } from '../types'
 import { getActiveApiProfile, getAgentImageApiProfile, normalizeSettings } from '../lib/apiProfiles'
 import { DEFAULT_FAL_IMAGE_SIZE, getChangedParams, getOutputImageLimitForSettings, normalizeParamsForSettings } from '../lib/paramCompatibility'
 import { getAtImageQuery, getImageMentionLabel, getPromptIndexFromVisibleIndex, getPromptMentionParts, getSelectedImageMentionLabel, getSelectedTextMentionLabel, imageMentionMatches, insertImageMentionAtVisibleRange, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, stripImageMentionMarkers } from '../lib/promptImageMentions'
-import { normalizeImageSize } from '../lib/size'
+import { isImeEnter } from '../lib/imeEnter'
+import { getImageGenerationModel, isGptImage25Model } from '../lib/imageModels'
+import { normalizeCodexCliImageSize, normalizeImageSize } from '../lib/size'
+import { effectiveTransparentBackgroundMethod } from '../lib/transparentBackground'
 import { createMaskPreviewDataUrl } from '../lib/canvasImage'
 import { getSafeBoundingClientRect } from '../lib/domRect'
 import { collectAgentRoundOutputImageSlots } from '../lib/agentImageReferences'
@@ -770,7 +773,10 @@ export default function InputBar() {
   const agentAutoImageCount = appMode === 'agent'
   const moderationDisabled = isFalProvider
   const transparentOutputAvailable = appMode === 'gallery'
-  const showTransparentOutputControl = transparentOutputAvailable && params.output_format === 'png'
+  const nativeTransparent = effectiveTransparentBackgroundMethod(activeProfile, effectiveSettings) === 'api'
+  const showTransparentOutputControl = transparentOutputAvailable && (
+    params.output_format === 'png' || (nativeTransparent && params.output_format === 'webp')
+  )
   const transparentOutputEnabled = transparentOutputAvailable && showTransparentOutputControl && params.transparent_output
   const compressionDisabled = params.output_format === 'png' || isFalProvider
   const outputImageLimit = getOutputImageLimitForSettings(effectiveSettings)
@@ -785,19 +791,28 @@ export default function InputBar() {
     : `OpenAI 最大请求数量为 ${outputImageLimit}`
   const displaySize = isFalTextToImage && params.size === 'auto'
     ? DEFAULT_FAL_IMAGE_SIZE
-    : normalizeImageSize(params.size) || DEFAULT_PARAMS.size
+    : (activeProfile.codexCli ? normalizeCodexCliImageSize(params.size) : normalizeImageSize(params.size)) || DEFAULT_PARAMS.size
+  const imageModel = getImageGenerationModel(activeProfile)
+  const gptImage25Qualities = isGptImage25Model(isFalProvider ? activeProfile.model : imageModel)
+    ? [
+        { label: 'xhigh', value: 'xhigh' },
+        { label: 'max', value: 'max' },
+      ]
+    : []
 
   const qualityOptions = isFalProvider
     ? [
         { label: 'low', value: 'low' },
         { label: 'medium', value: 'medium' },
         { label: 'high', value: 'high' },
+        ...gptImage25Qualities,
       ]
     : [
         { label: 'auto', value: 'auto' },
         { label: 'low', value: 'low' },
         { label: 'medium', value: 'medium' },
         { label: 'high', value: 'high' },
+        ...gptImage25Qualities,
       ]
   const atImageLimit = inputImages.length >= API_MAX_IMAGES
   const uploadImageTooltipText = atImageLimit ? `参考图数量已达上限（${API_MAX_IMAGES} 张），无法继续添加` : '上传图片'
@@ -1233,7 +1248,14 @@ export default function InputBar() {
     }
   }
 
+  const isComposingRef = useRef(false)
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (isImeEnter(
+      { key: e.key, isComposing: e.nativeEvent.isComposing, keyCode: e.nativeEvent.keyCode },
+      isComposingRef.current,
+    )) return
+
     if (showAtImageMenu) {
       if (e.key === 'ArrowDown') {
         e.preventDefault()
@@ -1955,6 +1977,7 @@ export default function InputBar() {
           onSelect={(size) => setParams({ size })}
           onClose={() => setShowSizePicker(false)}
           allowAuto={!isFalTextToImage}
+          codexCli={activeProfile.codexCli}
         />
       )}
 
@@ -2069,6 +2092,8 @@ export default function InputBar() {
                 setAtImageMenuDismissed(false)
               }}
               onKeyDown={handleKeyDown}
+              onCompositionStart={() => { isComposingRef.current = true }}
+              onCompositionEnd={() => { isComposingRef.current = false }}
               onPaste={handlePromptPaste}
               onCopy={handlePromptCopy}
               onClick={(e) => {

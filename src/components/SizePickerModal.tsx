@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { calculateImageSize, normalizeImageSize, parseRatio, type SizeTier } from '../lib/size'
+import { calculateImageSize, normalizeCodexCliImageSize, normalizeImageSize, parseRatio, type SizeTier } from '../lib/size'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import ViewportTooltip from './ViewportTooltip'
 
@@ -21,6 +21,7 @@ interface Props {
   onSelect: (size: string) => void
   onClose: () => void
   allowAuto?: boolean
+  codexCli?: boolean
 }
 
 type Mode = 'auto' | 'ratio' | 'resolution'
@@ -43,7 +44,7 @@ function findPresetForSize(size: string) {
   return null
 }
 
-export default function SizePickerModal({ currentSize, onSelect, onClose, allowAuto = true }: Props) {
+export default function SizePickerModal({ currentSize, onSelect, onClose, allowAuto = true, codexCli = false }: Props) {
   usePreventBackgroundScroll(true)
 
   const modalRef = useRef<HTMLDivElement>(null)
@@ -78,7 +79,8 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
   })
 
   // Ratio mode state
-  const [tier, setTier] = useState<SizeTier>(currentPreset?.tier ?? '1K')
+  const availableTiers = codexCli ? TIERS.filter((item) => item === '1K') : TIERS
+  const [tier, setTier] = useState<SizeTier>(codexCli ? '1K' : currentPreset?.tier ?? '1K')
   const [ratio, setRatio] = useState(currentPreset?.ratio ?? (allowAuto ? '1:1' : '4:3'))
   const [customRatio, setCustomRatio] = useState('16:9')
 
@@ -114,13 +116,13 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
       const w = parseInt(customW, 10)
       const h = parseInt(customH, 10)
       if (Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0) {
-        return normalizeImageSize(`${w}x${h}`)
+        return (codexCli ? normalizeCodexCliImageSize : normalizeImageSize)(`${w}x${h}`)
       }
       return ''
     }
     
     return ''
-  }, [mode, tier, activeRatio, customW, customH])
+  }, [mode, tier, activeRatio, customW, customH, codexCli])
 
   const isClamped = useMemo(() => {
     if (!previewSize || previewSize === 'auto') return false
@@ -242,7 +244,7 @@ export default function SizePickerModal({ currentSize, onSelect, onClose, allowA
                 <section>
                   <div className="mb-2 text-xs font-medium text-gray-400 dark:text-gray-500">基准分辨率</div>
                   <div className="grid grid-cols-3 gap-2">
-                    {TIERS.map((item) => (
+                    {availableTiers.map((item) => (
                       <button key={item} className={buttonClass(tier === item)} onClick={() => setTier(item)}>
                         {item}
                       </button>

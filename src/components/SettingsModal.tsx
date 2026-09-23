@@ -4,6 +4,8 @@ import { normalizeBaseUrl } from '../lib/api'
 import { hasActiveDataOperations } from '../lib/dataOperations'
 import { isApiProxyAvailable, isApiProxyLocked, readClientDevProxyConfig } from '../lib/devProxy'
 import { useStore, exportData, importData, clearData, type SettingsTab } from '../store'
+import { REASONING_EFFORT_VALUES, type ReasoningEffort } from '../types'
+import { customProviderSupportsNativeTransparentBackground } from '../lib/customProviderCapabilities'
 import {
   createDefaultOpenAIProfile,
   DEFAULT_FAL_BASE_URL,
@@ -231,7 +233,7 @@ const CUSTOM_PROVIDER_LLM_PROMPT = `# 角色
 2. 如果当前环境支持读取链接，主动读取；否则要求用户粘贴文档内容。
 3. 在未获得文档前不要猜测，不要生成占位配置。
 4. 从文档中判断提交接口、图生图接口、异步任务查询接口、状态值、结果图片路径。
-5. 如果文档中明确了默认模型 ID 或 API Base URL，在 profiles 中填入；如果未明确模型 ID，model 使用 "gpt-image-2"；如果未明确 API Base URL，baseUrl 留空，由用户稍后填写。
+5. 如果文档中明确了默认模型 ID 或 API Base URL，在 profiles 中填入；如果未明确模型 ID，model 使用 "gpt-image-2.5-sunburst"；如果未明确 API Base URL，baseUrl 留空，由用户稍后填写。
 6. 输出最终 JSON；不要索要 API Key。
 
 # 输出结构
@@ -287,7 +289,7 @@ multipart files 示例：
 - name：配置名称，方便用户识别。
 - provider：对应 customProviders 中某个元素的 id。
 - baseUrl：API Base URL。如果文档明确给出，填入完整基础地址；否则留空字符串 ""。
-- model：模型 ID。如果 API 文档明确了默认模型，填入该值；否则使用 "gpt-image-2"。
+- model：模型 ID。如果 API 文档明确了默认模型，填入该值；否则使用 "gpt-image-2.5-sunburst"。
 - apiMode：固定为 "images"。
 - apiProxy：可选。仅同步自定义服务商可以设为 true，用于配合部署端 API 代理隐藏真实上游地址；包含 taskIdPath 或 poll 的异步任务配置不要开启，应用不支持异步自定义服务商走代理。
 
@@ -1936,6 +1938,47 @@ export default function SettingsModal() {
                 </label>
               )}
 
+              {activeProfile.provider === 'openai' && activeProfile.apiMode === 'responses' && (
+                <label className="block">
+                  <span className="mb-1.5 block text-sm text-gray-600 dark:text-gray-300">图像生成模型</span>
+                  <input
+                    value={activeProfile.imageGenerationModel ?? ''}
+                    onChange={(e) => updateActiveProfile({ imageGenerationModel: e.target.value })}
+                    onBlur={(e) => commitActiveProfilePatch({ imageGenerationModel: e.target.value })}
+                    type="text"
+                    placeholder={DEFAULT_IMAGES_MODEL}
+                    className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                  />
+                  <div data-selectable-text className="mt-1.5 text-xs text-gray-500 dark:text-gray-500">
+                    Responses API 的 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">image_generation</code> 工具需要使用 GPT Image 模型，例如 <code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">{DEFAULT_IMAGES_MODEL}</code>。
+                    留空时不发送工具模型 ID。
+                    支持通过查询参数覆盖：<code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">?imageGenerationModel=</code>。
+                  </div>
+                </label>
+              )}
+
+              {activeProfile.provider === 'openai' && (activeProfile.apiMode ?? DEFAULT_SETTINGS.apiMode) === 'responses' && (
+                <div className="block">
+                  <div className="mb-1.5 flex items-center justify-between gap-3">
+                    <span className="block text-sm text-gray-600 dark:text-gray-300">推理强度</span>
+                    <div className="w-28 shrink-0">
+                      <Select
+                        value={activeProfile.reasoningEffort ?? ''}
+                        onChange={(value) => updateActiveProfile({ reasoningEffort: value ? value as ReasoningEffort : undefined }, true)}
+                        options={[
+                          { label: '默认', value: '' },
+                          ...REASONING_EFFORT_VALUES.map((value) => ({ label: value, value })),
+                        ]}
+                        className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-1.5 text-xs text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                      />
+                    </div>
+                  </div>
+                  <div data-selectable-text className="mt-1.5 text-xs text-gray-500 dark:text-gray-500">
+                    用于指导模型思考深度。缺省不发送该字段，午后茶海报也不会带上。并非所有模型都支持全部档位。支持通过查询参数覆盖：<code className="rounded bg-gray-100 px-1 py-0.5 dark:bg-white/[0.06]">?reasoningEffort=high</code>。
+                  </div>
+                </div>
+              )}
+
               {activeModelOptions.length > 0 && (
                 <datalist id={activeModelListId}>
                   {activeModelOptions.map((model) => <option key={model} value={model} />)}
@@ -1988,7 +2031,31 @@ export default function SettingsModal() {
                 </div>
               )}
 
-              {/* 9. 返回 Base64 图片数据 */}
+              {/* 9. 透明背景实现方式 */}
+              <div className="block">
+                <div className="mb-1.5 flex items-center justify-between gap-3">
+                  <span className="block text-sm text-gray-600 dark:text-gray-300">透明背景实现方式</span>
+                  <div className="w-28 shrink-0">
+                    <Select
+                      value={activeProfile.transparentBackgroundMethod ?? 'local'}
+                      onChange={(value) => updateActiveProfile({ transparentBackgroundMethod: value as 'api' | 'local' }, true)}
+                      options={[
+                        { label: 'API 原生', value: 'api' },
+                        { label: '本地后处理', value: 'local' },
+                      ]}
+                      disabled={Boolean(activeCustomProvider && !customProviderSupportsNativeTransparentBackground(activeCustomProvider))}
+                      className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-1.5 text-xs text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                    />
+                  </div>
+                </div>
+                <div data-selectable-text className="text-xs text-gray-500 dark:text-gray-500">
+                  {activeCustomProvider && !customProviderSupportsNativeTransparentBackground(activeCustomProvider)
+                    ? '当前自定义服务商未映射 $params.background，只能使用本地后处理。未设置的旧配置也会继续本地抠图。'
+                    : 'API 原生会请求接口直接生成透明背景。未设置时仍使用本地后处理，已有海报和画廊不会突然改成透明通道。'}
+                </div>
+              </div>
+
+              {/* 10. 返回 Base64 图片数据 */}
               {activeProviderIsOpenAICompatible && (
                 <div className="block">
                   <div className="mb-1.5 flex items-center justify-between">
@@ -2011,7 +2078,7 @@ export default function SettingsModal() {
               )}
 
               {/* 10. Codex CLI 兼容模式 */}
-              {activeProfile.provider === 'openai' && (
+              {activeProviderIsOpenAICompatible && (
                 <div className="block">
                   <div className="mb-1.5 flex items-center justify-between">
                     <span className="block text-sm text-gray-600 dark:text-gray-300">Codex CLI 兼容模式</span>

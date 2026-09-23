@@ -1,10 +1,13 @@
 import { DEFAULT_STREAM_PARTIAL_IMAGES, type ApiProfile, type CustomProviderDefinition, type CustomProviderPollMapping, type CustomProviderResultMapping, type CustomProviderSubmitMapping, type ImageApiResponse, type ImageResponseItem, type ResponsesApiResponse, type ResponsesOutputItem, type TaskParams } from '../types'
 import { dataUrlToBlob, imageDataUrlToPngBlob, maskDataUrlToPngBlob } from './canvasImage'
 import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy, withApiProxyHeaders } from './devProxy'
+import { getImageGenerationModel } from './imageModels'
+import { prependCodexCliSizePrompt } from './size'
 import {
   assertImageInputPayloadSize,
   assertMaskEditFileSize,
   appendStreamingFormatHint,
+  maybeAppendImageToolDroppedHint,
   maybeAppendStreamingHint,
   type CallApiOptions,
   type CallApiResult,
@@ -190,13 +193,19 @@ function createResponsesImageTool(
   isEdit: boolean,
   profile: ApiProfile,
   maskDataUrl?: string,
+  nativeTransparentBackground?: boolean,
 ): Record<string, unknown> {
   const tool: Record<string, unknown> = {
     type: 'image_generation',
     action: isEdit ? 'edit' : 'generate',
-    size: params.size,
     output_format: params.output_format,
     moderation: params.moderation,
+  }
+  const imageModel = getImageGenerationModel(profile)
+  if (imageModel && profile.apiMode === 'responses') tool.model = imageModel
+
+  if (!profile.codexCli) {
+    tool.size = params.size
   }
 
   if (profile.streamImages) {
@@ -205,6 +214,10 @@ function createResponsesImageTool(
 
   if (!profile.codexCli) {
     tool.quality = params.quality
+  }
+
+  if (nativeTransparentBackground) {
+    tool.background = 'transparent'
   }
 
   if (params.output_format !== 'png' && params.output_compression != null) {
@@ -345,6 +358,7 @@ async function parseImagesApiResponse(payload: ImageApiResponse, mime: string, s
 function eventToImageResponseItem(event: Record<string, unknown>): ImageResponseItem {
   return {
     b64_json: getStringValue(event, 'b64_json'),
+    url: getStringValue(event, 'url'),
     revised_prompt: getStringValue(event, 'revised_prompt'),
     size: getStringValue(event, 'size'),
     quality: getStringValue(event, 'quality'),
@@ -358,6 +372,7 @@ async function parseImagesApiStreamResponse(
   response: Response,
   mime: string,
   onPartialImage?: CallApiOptions['onPartialImage'],
+  signal?: AbortSignal,
 ): Promise<CallApiResult> {
   const completedItems: ImageResponseItem[] = []
   let resultPayload: ImageApiResponse | null = null
@@ -394,10 +409,24 @@ async function parseImagesApiStreamResponse(
     throw new Error('流式接口未返回最终图片数据')
   }
 
-  const images = completedItems
-    .map((item) => item.b64_json)
-    .filter((b64): b64 is string => Boolean(b64))
-    .map((b64) => normalizeBase64Image(b64, mime))
+  const images: string[] = []
+  const rawImageUrls = completedItems.map((item) => item.url).filter(isHttpUrl)
+  try {
+    for (const item of completedItems) {
+      if (item.b64_json) {
+        images.push(normalizeBase64Image(item.b64_json, mime))
+        continue
+      }
+      if (isHttpUrl(item.url) || isDataUrl(item.url)) {
+        images.push(await fetchImageUrlAsDataUrl(item.url, mime, signal))
+      }
+    }
+  } catch (err) {
+    if (rawImageUrls.length > 0 && err instanceof Error) {
+      ;(err as Error & { rawImageUrls?: string[] }).rawImageUrls = rawImageUrls
+    }
+    throw err
+  }
   if (!images.length) throw new Error('流式接口未返回可用图片数据')
 
   const actualParamsList = completedItems.map((item) => mergeActualParams(pickActualParams(item)))
@@ -410,6 +439,7 @@ async function parseImagesApiStreamResponse(
     actualParams,
     actualParamsList,
     revisedPrompts: completedItems.map((item) => item.revised_prompt),
+    ...(rawImageUrls.length ? { rawImageUrls } : {}),
   }
 }
 
@@ -552,9 +582,12 @@ async function callImagesApiConcurrent(opts: CallApiOptions, profile: ApiProfile
 
 async function callImagesApiSingle(opts: CallApiOptions, profile: ApiProfile): Promise<CallApiResult> {
   const { prompt: originalPrompt, params, inputImageDataUrls } = opts
-  const prompt = profile.codexCli && !opts.settings.allowPromptRewrite && !opts.sendPromptAsIs
-    ? `${PROMPT_REWRITE_GUARD_PREFIX}\n${originalPrompt}`
+  const sizePrompt = profile.codexCli && !opts.sendPromptAsIs && !opts.skipCodexCliSizePrompt
+    ? prependCodexCliSizePrompt(originalPrompt, params.size)
     : originalPrompt
+  const prompt = profile.codexCli && !opts.settings.allowPromptRewrite && !opts.sendPromptAsIs
+    ? `${PROMPT_REWRITE_GUARD_PREFIX}\n${sizePrompt}`
+    : sizePrompt
   const isEdit = inputImageDataUrls.length > 0
   const mime = MIME_MAP[params.output_format] || 'image/png'
   const proxyConfig = readClientDevProxyConfig()
@@ -572,9 +605,10 @@ async function callImagesApiSingle(opts: CallApiOptions, profile: ApiProfile): P
       const formData = new FormData()
       formData.append('model', profile.model)
       formData.append('prompt', prompt)
-      formData.append('size', params.size)
+      if (!profile.codexCli) formData.append('size', params.size)
       formData.append('output_format', params.output_format)
       formData.append('moderation', params.moderation)
+      if (opts.nativeTransparentBackground) formData.append('background', 'transparent')
 
       if (!profile.codexCli) {
         formData.append('quality', params.quality)
@@ -633,10 +667,12 @@ async function callImagesApiSingle(opts: CallApiOptions, profile: ApiProfile): P
       const body: Record<string, unknown> = {
         model: profile.model,
         prompt,
-        size: params.size,
         output_format: params.output_format,
         moderation: params.moderation,
       }
+
+      if (opts.nativeTransparentBackground) body.background = 'transparent'
+      if (!profile.codexCli) body.size = params.size
 
       if (!profile.codexCli) {
         body.quality = params.quality
@@ -670,11 +706,11 @@ async function callImagesApiSingle(opts: CallApiOptions, profile: ApiProfile): P
 
     if (!response.ok) {
       const errorMessage = await getApiErrorMessage(response)
-      throw new Error(maybeAppendStreamingHint(errorMessage, response.status, profile.streamImages))
+      throw new Error(maybeAppendStreamingHint(maybeAppendImageToolDroppedHint(errorMessage), response.status, profile.streamImages))
     }
 
     if (profile.streamImages && isEventStreamResponse(response)) {
-      return parseImagesApiStreamResponse(response, mime, opts.onPartialImage)
+      return parseImagesApiStreamResponse(response, mime, opts.onPartialImage, controller.signal)
     }
 
     return parseImagesApiResponse(await response.json() as ImageApiResponse, mime, controller.signal)
@@ -738,10 +774,21 @@ function resolveTemplateValue(value: unknown, context: Record<string, unknown>):
 }
 
 function createCustomProviderContext(opts: CallApiOptions, profile: ApiProfile) {
+  const sizePrompt = profile.codexCli && !opts.sendPromptAsIs && !opts.skipCodexCliSizePrompt
+    ? prependCodexCliSizePrompt(opts.prompt, opts.params.size)
+    : opts.prompt
+  const prompt = profile.codexCli && !opts.settings.allowPromptRewrite && !opts.sendPromptAsIs
+    ? `${PROMPT_REWRITE_GUARD_PREFIX}\n${sizePrompt}`
+    : sizePrompt
+  const params = {
+    ...opts.params,
+    ...(profile.codexCli ? { size: undefined, quality: undefined } : {}),
+    ...(opts.nativeTransparentBackground ? { background: 'transparent' } : {}),
+  }
   return {
     profile,
-    prompt: opts.prompt,
-    params: opts.params,
+    prompt,
+    params,
     inputImages: {
       dataUrls: opts.inputImageDataUrls.length ? opts.inputImageDataUrls : undefined,
       count: opts.inputImageDataUrls.length,
@@ -1036,7 +1083,10 @@ async function callResponsesImageApi(opts: CallApiOptions, profile: ApiProfile):
 }
 
 async function callResponsesImageApiSingle(opts: CallApiOptions, profile: ApiProfile): Promise<CallApiResult> {
-  const { prompt, params, inputImageDataUrls } = opts
+  const { prompt: originalPrompt, params, inputImageDataUrls } = opts
+  const prompt = profile.codexCli && !opts.sendPromptAsIs && !opts.skipCodexCliSizePrompt
+    ? prependCodexCliSizePrompt(originalPrompt, params.size)
+    : originalPrompt
   const mime = MIME_MAP[params.output_format] || 'image/png'
   const proxyConfig = readClientDevProxyConfig()
   const useApiProxy = shouldUseApiProxy(profile.apiProxy, proxyConfig)
@@ -1057,9 +1107,10 @@ async function callResponsesImageApiSingle(opts: CallApiOptions, profile: ApiPro
     const body: Record<string, unknown> = {
       model: profile.model,
       input: createResponsesInput(prompt, inputImageDataUrls, !opts.settings.allowPromptRewrite && !opts.sendPromptAsIs),
-      tools: [createResponsesImageTool(params, inputImageDataUrls.length > 0, profile, opts.maskDataUrl)],
+      tools: [createResponsesImageTool(params, inputImageDataUrls.length > 0, profile, opts.maskDataUrl, opts.nativeTransparentBackground)],
       tool_choice: 'required',
     }
+    if (profile.reasoningEffort) body.reasoning = { effort: profile.reasoningEffort }
     if (profile.streamImages) {
       body.stream = true
     }
@@ -1077,7 +1128,7 @@ async function callResponsesImageApiSingle(opts: CallApiOptions, profile: ApiPro
 
     if (!response.ok) {
       const errorMessage = await getApiErrorMessage(response)
-      throw new Error(maybeAppendStreamingHint(errorMessage, response.status, profile.streamImages))
+      throw new Error(maybeAppendStreamingHint(maybeAppendImageToolDroppedHint(errorMessage), response.status, profile.streamImages))
     }
 
     if (profile.streamImages && isEventStreamResponse(response)) {

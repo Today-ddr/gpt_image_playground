@@ -29,8 +29,8 @@ export function buildTransparentPrompt(prompt: string) {
 export function getTransparentRequestParams(params: TaskParams): TaskParams {
   return {
     ...params,
-    output_format: 'png',
-    output_compression: null,
+    output_format: params.output_format === 'webp' ? 'webp' : 'png',
+    output_compression: params.output_format === 'webp' ? params.output_compression : null,
     transparent_output: true,
   }
 }

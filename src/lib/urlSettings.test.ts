@@ -168,7 +168,7 @@ describe('URL settings params', () => {
     expect(activeProfile).toMatchObject({
       name: 'URL Profile',
       provider: 'openai',
-      baseUrl: 'https://api.example.com/v1',
+      baseUrl: 'https://api.example.com/v1/',
       apiKey: 'test-key',
     })
   })
@@ -196,7 +196,7 @@ describe('URL settings params', () => {
     expect(next.activeProfileId).not.toBe(existingProfile.id)
     expect(activeProfile).toMatchObject({
       provider: 'openai',
-      baseUrl: 'https://api.example.com/v1',
+      baseUrl: 'https://api.example.com/v1/',
       apiKey: 'test-key',
       codexCli: true,
     })
@@ -226,7 +226,7 @@ describe('URL settings params', () => {
     expect(next.activeProfileId).not.toBe(existingProfile.id)
     expect(activeProfile).toMatchObject({
       provider: 'openai',
-      baseUrl: 'https://api.example.com/v1',
+      baseUrl: 'https://api.example.com/v1/',
       apiKey: 'test-key',
       streamImages: true,
       streamPartialImages: 3,

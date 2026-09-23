@@ -50,4 +50,33 @@ describe('parameter compatibility', () => {
     expect(normalizeParamsForSettings({ ...DEFAULT_PARAMS, size: 'auto' }, settings).size).toBe('1360x1024')
     expect(normalizeParamsForSettings({ ...DEFAULT_PARAMS, size: 'auto' }, settings, { hasInputImages: true }).size).toBe('auto')
   })
+
+  it('drops xhigh and max unless the image model is GPT Image 2.5', () => {
+    const legacy = createDefaultOpenAIProfile({ apiKey: 'test-key', model: 'gpt-image-2', imageGenerationModel: '' })
+    const legacySettings = normalizeSettings({
+      ...DEFAULT_SETTINGS,
+      profiles: [legacy],
+      activeProfileId: legacy.id,
+    })
+    const next = createDefaultOpenAIProfile({ apiKey: 'test-key', model: 'gpt-image-2.5-flare' })
+    const nextSettings = normalizeSettings({
+      ...DEFAULT_SETTINGS,
+      profiles: [next],
+      activeProfileId: next.id,
+    })
+
+    expect(normalizeParamsForSettings({ ...DEFAULT_PARAMS, quality: 'xhigh' }, legacySettings).quality).toBe('high')
+    expect(normalizeParamsForSettings({ ...DEFAULT_PARAMS, quality: 'max' }, nextSettings).quality).toBe('max')
+  })
+
+  it('keeps a saved gpt-image-2 model when normalizing settings', () => {
+    const profile = createDefaultOpenAIProfile({ id: 'saved', apiKey: 'test-key', model: 'gpt-image-2', imageGenerationModel: '' })
+    const settings = normalizeSettings({
+      ...DEFAULT_SETTINGS,
+      profiles: [profile],
+      activeProfileId: profile.id,
+    })
+    expect(settings.profiles[0].model).toBe('gpt-image-2')
+    expect(settings.model).toBe('gpt-image-2')
+  })
 })

@@ -1169,6 +1169,26 @@ describe('persisted afternoon tea poster tasks', () => {
     expect(callImageApi).not.toHaveBeenCalled()
   })
 
+  it('rejects Codex CLI profiles before creating an afternoon tea poster', async () => {
+    const profile = createDefaultOpenAIProfile({
+      id: 'codex-openai-profile',
+      name: 'Codex 配置',
+      baseUrl: 'https://snapshot.example.com/v1',
+      apiKey: 'snapshot-secret',
+      model: 'snapshot-image-model',
+      apiProxy: false,
+      codexCli: true,
+    })
+    const onTaskCreated = vi.fn()
+
+    await expect(submitAfternoonTeaPosterTask(afternoonTeaOptions(afternoonTeaSettings(profile), { onTaskCreated })))
+      .rejects.toThrow('Codex CLI')
+
+    expect(useStore.getState().tasks).toEqual([])
+    expect(onTaskCreated).not.toHaveBeenCalled()
+    expect(callImageApi).not.toHaveBeenCalled()
+  })
+
   it('rejects a non-OpenAI active profile before creating a task', async () => {
     const profile = createDefaultFalProfile({
       id: 'fal-profile',
@@ -1799,7 +1819,7 @@ describe('mask draft lifecycle in store actions', () => {
 
   it('supports transparent background post-processing for fal gallery tasks', async () => {
     const { callImageApi } = await import('./lib/api')
-    const falProfile = createDefaultFalProfile({ id: 'fal-profile', apiKey: 'fal-key' })
+    const falProfile = createDefaultFalProfile({ id: 'fal-profile', apiKey: 'fal-key', transparentBackgroundMethod: 'local' })
     vi.mocked(callImageApi).mockClear()
     vi.mocked(removeKeyedBackgroundFromDataUrl).mockClear()
     vi.mocked(callImageApi).mockResolvedValueOnce({
@@ -3930,6 +3950,7 @@ describe('agent draft lifecycle', () => {
     })
 
     useStore.getState().setAppMode('tools')
+    expect(useStore.getState().appMode).toBe('tools')
 
     const state = useStore.getState()
     expect(state.appMode).toBe('tools')

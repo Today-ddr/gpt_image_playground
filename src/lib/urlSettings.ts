@@ -1,4 +1,5 @@
-import type { ApiMode, ApiProfile, AppMode, AppSettings, CustomProviderDefinition } from '../types'
+import type { ApiMode, ApiProfile, AppMode, AppSettings, CustomProviderDefinition, ReasoningEffort } from '../types'
+import { REASONING_EFFORT_VALUES } from '../types'
 import { normalizeBaseUrl } from './devProxy'
 import {
   createDefaultOpenAIProfile,
@@ -11,7 +12,7 @@ import {
   normalizeStreamPartialImages,
 } from './apiProfiles'
 
-const URL_SETTING_KEYS = ['settings', 'apiUrl', 'apiKey', 'codexCli', 'apiMode', 'model', 'understandingModel', 'profileName', 'streamImages', 'streamPartialImages']
+const URL_SETTING_KEYS = ['settings', 'apiUrl', 'apiKey', 'codexCli', 'apiMode', 'model', 'imageGenerationModel', 'understandingModel', 'reasoningEffort', 'transparentBackgroundMethod', 'profileName', 'streamImages', 'streamPartialImages']
 const APP_MODE_URL_KEY = 'appMode'
 export const STATION_SHARE_URL_MAX_LENGTH = 2000
 
@@ -52,11 +53,14 @@ function getProfileDedupKey(profile: Pick<AppSettings['profiles'][number], 'prov
   ])
 }
 
-export function setOpenAIProfileImportUrlParams(searchParams: URLSearchParams, profile: Pick<ApiProfile, 'apiMode' | 'model' | 'understandingModel'>) {
+export function setOpenAIProfileImportUrlParams(searchParams: URLSearchParams, profile: Pick<ApiProfile, 'apiMode' | 'model' | 'understandingModel' | 'imageGenerationModel' | 'reasoningEffort' | 'transparentBackgroundMethod'>) {
   searchParams.set('apiMode', profile.apiMode)
   searchParams.set('model', profile.model.trim())
   if (profile.understandingModel?.trim()) searchParams.set('understandingModel', profile.understandingModel.trim())
   else searchParams.delete('understandingModel')
+  if (profile.imageGenerationModel?.trim()) searchParams.set('imageGenerationModel', profile.imageGenerationModel.trim())
+  if (profile.reasoningEffort) searchParams.set('reasoningEffort', profile.reasoningEffort)
+  if (profile.transparentBackgroundMethod) searchParams.set('transparentBackgroundMethod', profile.transparentBackgroundMethod)
 }
 
 function createUrlProfileId(usedIds: Set<string>) {
@@ -268,6 +272,16 @@ function buildDefaultConfigOnlySettingsFromUrlParams(currentSettings: Partial<Ap
     if (codexCliParam !== null) patch.codexCli = codexCliParam.trim().toLowerCase() === 'true'
     if (streamImagesParam !== null) patch.streamImages = streamImagesParam.trim().toLowerCase() === 'true'
     if (streamPartialImagesParam !== null) patch.streamPartialImages = normalizeStreamPartialImages(streamPartialImagesParam)
+    const imageGenerationModelParam = searchParams.get('imageGenerationModel')
+    const reasoningEffortParam = searchParams.get('reasoningEffort')
+    const transparentBackgroundMethodParam = searchParams.get('transparentBackgroundMethod')
+    if (imageGenerationModelParam !== null) patch.imageGenerationModel = imageGenerationModelParam.trim()
+    if (reasoningEffortParam && REASONING_EFFORT_VALUES.includes(reasoningEffortParam as ReasoningEffort)) {
+      patch.reasoningEffort = reasoningEffortParam as ReasoningEffort
+    }
+    if (transparentBackgroundMethodParam === 'api' || transparentBackgroundMethodParam === 'local') {
+      patch.transparentBackgroundMethod = transparentBackgroundMethodParam
+    }
   }
 
   if (Object.keys(patch).length === 0) return {}
@@ -302,9 +316,12 @@ export function buildSettingsFromUrlParams(currentSettings: Partial<AppSettings>
   const profileName = profileNameParam?.trim() ?? ''
   const streamImagesParam = searchParams.get('streamImages')
   const streamPartialImagesParam = searchParams.get('streamPartialImages')
+  const imageGenerationModelParam = searchParams.get('imageGenerationModel')
+  const reasoningEffortParam = searchParams.get('reasoningEffort')
+  const transparentBackgroundMethodParam = searchParams.get('transparentBackgroundMethod')
   const apiMode: ApiMode | undefined = apiModeParam === 'images' || apiModeParam === 'responses' ? apiModeParam : undefined
 
-  const hasLegacyOpenAIParams = apiUrlParam !== null || apiKeyParam !== null || codexCliParam !== null || apiMode !== undefined || modelParam !== null || understandingModelParam !== null || profileNameParam !== null || streamImagesParam !== null || streamPartialImagesParam !== null
+  const hasLegacyOpenAIParams = apiUrlParam !== null || apiKeyParam !== null || codexCliParam !== null || apiMode !== undefined || modelParam !== null || understandingModelParam !== null || profileNameParam !== null || streamImagesParam !== null || streamPartialImagesParam !== null || imageGenerationModelParam !== null || reasoningEffortParam !== null || transparentBackgroundMethodParam !== null
   const settings = importedSettings == null
     ? normalizeSettings(currentSettings)
     : activateFirstImportedProfile(mergeImportedSettings(currentSettings, importedSettings), importedSettings)
@@ -325,6 +342,13 @@ export function buildSettingsFromUrlParams(currentSettings: Partial<AppSettings>
     if (codexCliParam !== null) profile.codexCli = codexCliParam.trim().toLowerCase() === 'true'
     if (streamImagesParam !== null) profile.streamImages = streamImagesParam.trim().toLowerCase() === 'true'
     if (streamPartialImagesParam !== null) profile.streamPartialImages = normalizeStreamPartialImages(streamPartialImagesParam)
+    if (imageGenerationModelParam !== null) profile.imageGenerationModel = imageGenerationModelParam.trim()
+    if (reasoningEffortParam && REASONING_EFFORT_VALUES.includes(reasoningEffortParam as ReasoningEffort)) {
+      profile.reasoningEffort = reasoningEffortParam as ReasoningEffort
+    }
+    if (transparentBackgroundMethodParam === 'api' || transparentBackgroundMethodParam === 'local') {
+      profile.transparentBackgroundMethod = transparentBackgroundMethodParam
+    }
 
     const existingProfile = settings.profiles.find((item) =>
       getProfileDedupKey(item) === getProfileDedupKey(profile) &&

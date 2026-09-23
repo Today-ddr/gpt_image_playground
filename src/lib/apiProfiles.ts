@@ -12,9 +12,11 @@ import type {
   CustomProviderResultMapping,
   CustomProviderSubmitMapping,
   CustomProviderTemplate,
+  ReasoningEffort,
   ReferenceImageEditAction,
+  TransparentBackgroundMethod,
 } from '../types'
-import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, DEFAULT_ZIP_DOWNLOAD_ROUTES, ZIP_DOWNLOAD_ROUTE_VALUES } from '../types'
+import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, DEFAULT_ZIP_DOWNLOAD_ROUTES, REASONING_EFFORT_VALUES, ZIP_DOWNLOAD_ROUTE_VALUES } from '../types'
 import { shouldUseApiProxy } from './devProxy'
 import { normalizeStreamPartialImages, parseDefaultApiUrl } from './defaultApiUrl'
 import { readRuntimeEnv } from './runtimeEnv'
@@ -29,7 +31,7 @@ const DEFAULT_API_URL_PATCH = isImportableConfigUrl(RAW_DEFAULT_API_URL)
   ? null
   : parseDefaultApiUrl(RAW_DEFAULT_API_URL || (DOCKER_DEPLOYMENT && DEFAULT_OPENAI_API_PROXY ? '' : OPENAI_DEFAULT_BASE_URL))
 const DEFAULT_BASE_URL = DEFAULT_API_URL_PATCH?.baseUrl ?? ''
-export const DEFAULT_IMAGES_MODEL = 'gpt-image-2'
+export const DEFAULT_IMAGES_MODEL = 'gpt-image-2.5-sunburst'
 export const DEFAULT_RESPONSES_MODEL = 'gpt-5.5'
 export const DEFAULT_FAL_BASE_URL = 'https://fal.run'
 export const DEFAULT_FAL_MODEL = 'openai/gpt-image-2'
@@ -69,6 +71,16 @@ function getDefaultStreamImages(provider: ApiProvider, apiMode: ApiMode): boolea
 }
 
 export { normalizeStreamPartialImages } from './defaultApiUrl'
+
+export function normalizeReasoningEffort(value: unknown, fallback?: ReasoningEffort): ReasoningEffort | undefined {
+  return typeof value === 'string' && REASONING_EFFORT_VALUES.includes(value as ReasoningEffort)
+    ? value as ReasoningEffort
+    : fallback
+}
+
+function readTransparentBackgroundMethod(value: unknown): TransparentBackgroundMethod | undefined {
+  return value === 'api' || value === 'local' ? value : undefined
+}
 
 export function normalizeAgentMaxToolRounds(value: unknown, fallback: number | undefined = DEFAULT_AGENT_MAX_TOOL_ROUNDS): number {
   const fallbackValue = fallback ?? DEFAULT_AGENT_MAX_TOOL_ROUNDS
@@ -326,8 +338,10 @@ export function createDefaultOpenAIProfile(overrides: Partial<ApiProfile> = {}):
     baseUrl: DEFAULT_BASE_URL,
     apiKey: DEFAULT_API_URL_PATCH?.apiKey ?? '',
     model: DEFAULT_API_URL_PATCH?.model ?? DEFAULT_IMAGES_MODEL,
+    imageGenerationModel: DEFAULT_API_URL_PATCH?.imageGenerationModel ?? DEFAULT_IMAGES_MODEL,
     understandingModel: DEFAULT_API_URL_PATCH?.understandingModel ?? '',
     timeout: DEFAULT_API_TIMEOUT,
+    reasoningEffort: DEFAULT_API_URL_PATCH?.reasoningEffort,
     codexCli: DEFAULT_API_URL_PATCH?.codexCli ?? false,
     apiProxy: DEFAULT_OPENAI_API_PROXY,
     streamPartialImages: DEFAULT_API_URL_PATCH?.streamPartialImages ?? DEFAULT_STREAM_PARTIAL_IMAGES,
@@ -348,6 +362,7 @@ export function createDefaultFalProfile(overrides: Partial<ApiProfile> = {}): Ap
     timeout: DEFAULT_API_TIMEOUT,
     apiMode: 'images',
     codexCli: false,
+    transparentBackgroundMethod: 'api',
     apiProxy: false,
     streamImages: false,
     streamPartialImages: DEFAULT_STREAM_PARTIAL_IMAGES,
@@ -361,13 +376,16 @@ export function switchApiProfileProvider(profile: ApiProfile, provider: ApiProvi
     [profile.provider]: {
       baseUrl: profile.baseUrl,
       model: profile.model,
+      imageGenerationModel: profile.imageGenerationModel,
       understandingModel: profile.understandingModel,
       apiMode: profile.apiMode,
+      reasoningEffort: profile.reasoningEffort,
       codexCli: profile.codexCli,
       apiProxy: profile.apiProxy,
       responseFormatB64Json: profile.responseFormatB64Json,
       streamImages: profile.streamImages,
       streamPartialImages: profile.streamPartialImages,
+      transparentBackgroundMethod: profile.transparentBackgroundMethod,
     },
   }
   const savedDraft = providerDrafts[provider]
@@ -378,9 +396,12 @@ export function switchApiProfileProvider(profile: ApiProfile, provider: ApiProvi
       provider,
       baseUrl: savedDraft?.baseUrl ?? DEFAULT_FAL_BASE_URL,
       model: savedDraft?.model ?? DEFAULT_FAL_MODEL,
+      imageGenerationModel: savedDraft?.imageGenerationModel,
       understandingModel: savedDraft?.understandingModel ?? '',
       apiMode: 'images',
+      reasoningEffort: savedDraft?.reasoningEffort,
       codexCli: false,
+      transparentBackgroundMethod: savedDraft?.transparentBackgroundMethod ?? 'api',
       apiProxy: false,
       responseFormatB64Json: savedDraft?.responseFormatB64Json,
       streamImages: false,
@@ -396,9 +417,12 @@ export function switchApiProfileProvider(profile: ApiProfile, provider: ApiProvi
       provider: customProvider.id,
       baseUrl: savedDraft?.baseUrl ?? (shouldUseOpenAIDefaults ? DEFAULT_BASE_URL : profile.baseUrl || DEFAULT_BASE_URL),
       model: savedDraft?.model ?? (shouldUseOpenAIDefaults ? DEFAULT_IMAGES_MODEL : profile.model || DEFAULT_IMAGES_MODEL),
+      imageGenerationModel: savedDraft?.imageGenerationModel,
       understandingModel: savedDraft?.understandingModel ?? '',
       apiMode: 'images',
-      codexCli: false,
+      reasoningEffort: savedDraft?.reasoningEffort,
+      codexCli: savedDraft?.codexCli ?? false,
+      transparentBackgroundMethod: savedDraft?.transparentBackgroundMethod,
       apiProxy: false,
       responseFormatB64Json: savedDraft?.responseFormatB64Json,
       streamImages: false,
@@ -420,9 +444,12 @@ export function switchApiProfileProvider(profile: ApiProfile, provider: ApiProvi
     provider,
     baseUrl: savedDraft?.baseUrl ?? DEFAULT_BASE_URL,
     model: savedDraft?.model ?? DEFAULT_IMAGES_MODEL,
+    imageGenerationModel: savedDraft?.imageGenerationModel ?? profile.imageGenerationModel,
     understandingModel: savedDraft?.understandingModel ?? '',
     apiMode: nextApiMode,
+    reasoningEffort: savedDraft?.reasoningEffort ?? profile.reasoningEffort,
     codexCli: savedDraft?.codexCli ?? profile.codexCli,
+    transparentBackgroundMethod: savedDraft?.transparentBackgroundMethod ?? profile.transparentBackgroundMethod,
     apiProxy: savedDraft?.apiProxy ?? DEFAULT_OPENAI_API_PROXY,
     responseFormatB64Json: savedDraft?.responseFormatB64Json,
     streamImages: nextStreamImages,
@@ -446,9 +473,12 @@ function normalizeProviderDraft(input: unknown, provider: ApiProvider, customPro
       ? baseUrl?.trim().replace(/\/+$/, '') || DEFAULT_FAL_BASE_URL
       : baseUrl,
     model,
+    imageGenerationModel: typeof input.imageGenerationModel === 'string' ? input.imageGenerationModel.trim() : undefined,
     understandingModel,
     apiMode,
+    reasoningEffort: normalizeReasoningEffort(input.reasoningEffort),
     codexCli: typeof input.codexCli === 'boolean' ? input.codexCli : fallback.codexCli,
+    transparentBackgroundMethod: readTransparentBackgroundMethod(input.transparentBackgroundMethod),
     apiProxy: typeof input.apiProxy === 'boolean' ? input.apiProxy : fallback.apiProxy,
     responseFormatB64Json: input.responseFormatB64Json === true ? true : undefined,
     streamImages: typeof input.streamImages === 'boolean' ? input.streamImages : fallback.streamImages,
@@ -486,10 +516,13 @@ export function normalizeApiProfile(input: unknown, fallback?: Partial<ApiProfil
     baseUrl: provider === 'fal' ? rawBaseUrl.trim().replace(/\/+$/, '') || DEFAULT_FAL_BASE_URL : rawBaseUrl,
     apiKey: typeof record.apiKey === 'string' ? record.apiKey : defaults.apiKey,
     model: typeof record.model === 'string' && record.model.trim() ? record.model : defaults.model,
+    imageGenerationModel: typeof record.imageGenerationModel === 'string' ? record.imageGenerationModel.trim() : '',
     understandingModel: typeof record.understandingModel === 'string' ? record.understandingModel.trim() : defaults.understandingModel ?? '',
     timeout: typeof record.timeout === 'number' && Number.isFinite(record.timeout) ? record.timeout : defaults.timeout,
     apiMode,
+    reasoningEffort: normalizeReasoningEffort(record.reasoningEffort),
     codexCli: Boolean(record.codexCli),
+    transparentBackgroundMethod: readTransparentBackgroundMethod(record.transparentBackgroundMethod),
     apiProxy: typeof record.apiProxy === 'boolean' ? record.apiProxy : defaults.apiProxy,
     responseFormatB64Json: record.responseFormatB64Json === true ? true : undefined,
     streamImages,

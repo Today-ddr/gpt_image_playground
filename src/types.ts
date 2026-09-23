@@ -2,6 +2,10 @@
 
 export type ApiMode = 'images' | 'responses'
 export type AppMode = 'tools' | 'gallery' | 'agent'
+export const REASONING_EFFORT_VALUES = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
+export type ReasoningEffort = typeof REASONING_EFFORT_VALUES[number]
+export type ImageQuality = 'auto' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+export type TransparentBackgroundMethod = 'api' | 'local'
 export type AgentApiConfigMode = 'off' | 'native' | 'hybrid'
 export type ReferenceImageEditAction = 'ask' | 'replace-reference' | 'add-mask'
 export const ZIP_DOWNLOAD_ROUTE_VALUES = [
@@ -74,15 +78,21 @@ export interface ApiProfile {
   baseUrl: string
   apiKey: string
   model: string
+  /** Responses 图像工具模型。缺省或空白时不发送工具模型 ID。 */
+  imageGenerationModel?: string
   understandingModel?: string
   timeout: number
   apiMode: ApiMode
+  /** 缺省时请求体不带 reasoning。 */
+  reasoningEffort?: ReasoningEffort
   codexCli: boolean
   apiProxy: boolean
   responseFormatB64Json?: boolean
   streamImages?: boolean
   streamPartialImages?: number
-  providerDrafts?: Partial<Record<ApiProvider, Partial<Pick<ApiProfile, 'baseUrl' | 'model' | 'understandingModel' | 'apiMode' | 'codexCli' | 'apiProxy' | 'responseFormatB64Json' | 'streamImages' | 'streamPartialImages'>>>>
+  /** 缺省按本地抠图。只有显式写成 api 才走接口原生透明背景。 */
+  transparentBackgroundMethod?: TransparentBackgroundMethod
+  providerDrafts?: Partial<Record<ApiProvider, Partial<Pick<ApiProfile, 'baseUrl' | 'model' | 'imageGenerationModel' | 'understandingModel' | 'apiMode' | 'reasoningEffort' | 'codexCli' | 'apiProxy' | 'responseFormatB64Json' | 'streamImages' | 'streamPartialImages' | 'transparentBackgroundMethod'>>>>
 }
 
 export interface AppSettings {
@@ -127,7 +137,7 @@ export interface AppSettings {
 
 export interface TaskParams {
   size: string
-  quality: 'auto' | 'low' | 'medium' | 'high'
+  quality: ImageQuality
   output_format: 'png' | 'jpeg' | 'webp'
   output_compression: number | null
   moderation: 'auto' | 'low'

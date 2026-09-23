@@ -44,7 +44,14 @@ describe('buildApiUrl', () => {
 
 describe('normalizeBaseUrl', () => {
   it('defaults public hosts without a scheme to https', () => {
-    expect(normalizeBaseUrl('apiiiii.tooday.pw/')).toBe('https://apiiiii.tooday.pw')
+    expect(normalizeBaseUrl('apiiiii.tooday.pw')).toBe('https://apiiiii.tooday.pw')
+  })
+
+  it('keeps a trailing slash instead of appending /v1', () => {
+    expect(normalizeBaseUrl('https://api.example.com/custom/')).toBe('https://api.example.com/custom/')
+    expect(buildApiUrl('https://api.example.com/custom/', 'images/generations', null, false)).toBe(
+      'https://api.example.com/custom/images/generations',
+    )
   })
 
   it('defaults private LAN addresses without a scheme to http', () => {
@@ -54,7 +61,12 @@ describe('normalizeBaseUrl', () => {
 
 describe('resolveApiProxyTargetBase', () => {
   it('adds /v1 when the settings URL is only an origin', () => {
-    expect(resolveApiProxyTargetBase('https://apiiiii.tooday.pw/')).toBe('https://apiiiii.tooday.pw/v1')
+    expect(resolveApiProxyTargetBase('https://apiiiii.tooday.pw')).toBe('https://apiiiii.tooday.pw/v1')
+  })
+
+  it('does not add /v1 when the settings URL ends with a slash', () => {
+    expect(resolveApiProxyTargetBase('https://apiiiii.tooday.pw/')).toBe('https://apiiiii.tooday.pw')
+    expect(resolveApiProxyTargetBase('https://api.example.com/custom/')).toBe('https://api.example.com/custom')
   })
 
   it('keeps an explicit /v1 prefix', () => {
@@ -85,7 +97,7 @@ describe('withApiProxyHeaders', () => {
       apiProxy: true,
     }, { Authorization: 'Bearer test-key' })).toEqual({
       Authorization: 'Bearer test-key',
-      [API_PROXY_TARGET_HEADER]: 'https://apiiiii.tooday.pw/v1',
+      [API_PROXY_TARGET_HEADER]: 'https://apiiiii.tooday.pw',
     })
   })
 

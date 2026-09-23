@@ -8,6 +8,7 @@ export interface ImageJobSubmission {
   maskDataUrl?: string
   sendPromptAsIs?: boolean
   allowPromptRewrite?: boolean
+  nativeTransparentBackground?: boolean
 }
 
 export type ImageJobStatus = 'running' | 'done' | 'error' | 'interrupted'

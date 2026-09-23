@@ -53,7 +53,7 @@ describe('fetchApiModels', () => {
     expect(fetch).toHaveBeenCalledWith('/api-proxy/models', expect.objectContaining({
       headers: {
         Authorization: 'Bearer test-key',
-        [API_PROXY_TARGET_HEADER]: 'https://apiiiii.tooday.pw/v1',
+        [API_PROXY_TARGET_HEADER]: 'https://apiiiii.tooday.pw',
       },
     }))
   })

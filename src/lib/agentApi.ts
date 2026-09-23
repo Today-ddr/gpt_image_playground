@@ -1,6 +1,7 @@
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, type ApiProfile, type AppSettings, type ResponsesApiResponse, type ResponsesOutputItem, type TaskParams } from '../types'
 import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy, withApiProxyHeaders } from './devProxy'
-import { appendStreamingFormatHint, maybeAppendStreamingHint, getApiErrorMessage, MIME_MAP, normalizeBase64Image, pickActualParams } from './imageApiShared'
+import { appendStreamingFormatHint, maybeAppendImageToolDroppedHint, maybeAppendStreamingHint, getApiErrorMessage, MIME_MAP, normalizeBase64Image, pickActualParams } from './imageApiShared'
+import { getImageGenerationModel } from './imageModels'
 
 export interface AgentApiResultImage {
   toolCallId?: string
@@ -104,12 +105,13 @@ function createImageTool(params: TaskParams, profile: ApiProfile, maskDataUrl?: 
   const tool: Record<string, unknown> = {
     type: 'image_generation',
     action: 'auto',
-    size: params.size,
     output_format: params.output_format,
     moderation: params.moderation,
   }
-
-  tool.quality = params.quality
+  const imageModel = getImageGenerationModel(profile)
+  if (imageModel && profile.apiMode === 'responses') tool.model = imageModel
+  if (!profile.codexCli) tool.size = params.size
+  if (!profile.codexCli) tool.quality = params.quality
 
   if (params.output_format !== 'png' && params.output_compression != null) {
     tool.output_compression = params.output_compression
@@ -718,6 +720,7 @@ export async function callAgentResponsesApi(opts: {
       input,
       tools: createAgentTools(params, profile, settings, maskDataUrl),
     }
+    if (profile.reasoningEffort) body.reasoning = { effort: profile.reasoningEffort }
     if (profile.streamImages) {
       body.stream = true
     }
@@ -732,7 +735,7 @@ export async function callAgentResponsesApi(opts: {
 
     if (!response.ok) {
       const errorMessage = await getApiErrorMessage(response)
-      throw new Error(maybeAppendStreamingHint(errorMessage, response.status, profile.streamImages))
+      throw new Error(maybeAppendStreamingHint(maybeAppendImageToolDroppedHint(errorMessage), response.status, profile.streamImages))
     }
 
     if (profile.streamImages && isEventStreamResponse(response)) {
@@ -871,10 +874,14 @@ export async function callBatchImageSingle(opts: {
     const tool: Record<string, unknown> = {
       type: 'image_generation',
       action: referenceImageDataUrls.length > 0 ? 'auto' : 'generate',
-      size: params.size,
       output_format: params.output_format,
       moderation: params.moderation,
-      quality: params.quality,
+    }
+    const imageModel = getImageGenerationModel(profile)
+    if (imageModel && profile.apiMode === 'responses') tool.model = imageModel
+    if (!profile.codexCli) {
+      tool.size = params.size
+      tool.quality = params.quality
     }
     if (params.output_format !== 'png' && params.output_compression != null) {
       tool.output_compression = params.output_compression
@@ -889,6 +896,7 @@ export async function callBatchImageSingle(opts: {
       tools: [tool],
       tool_choice: 'required',
     }
+    if (profile.reasoningEffort) body.reasoning = { effort: profile.reasoningEffort }
     if (profile.streamImages) {
       body.stream = true
     }
@@ -903,7 +911,7 @@ export async function callBatchImageSingle(opts: {
 
     if (!response.ok) {
       const errorMsg = await getApiErrorMessage(response)
-      return { batchItemId, image: null, error: maybeAppendStreamingHint(errorMsg, response.status, profile.streamImages) }
+      return { batchItemId, image: null, error: maybeAppendStreamingHint(maybeAppendImageToolDroppedHint(errorMsg), response.status, profile.streamImages) }
     }
 
     // Handle streaming

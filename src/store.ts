@@ -57,6 +57,8 @@ import { getCustomQueuedImageResult } from './lib/openaiCompatibleImageApi'
 import { validateMaskMatchesImage } from './lib/canvasImage'
 import { orderInputImagesForMask } from './lib/mask'
 import { getChangedParams, normalizeParamsForSettings } from './lib/paramCompatibility'
+import { stripInjectedCodexCliSizePrompt } from './lib/size'
+import { effectiveTransparentBackgroundMethod } from './lib/transparentBackground'
 import { createTransparentOutputMeta, getTransparentRequestParams, removeKeyedBackgroundFromDataUrl } from './lib/transparentImage'
 import { blobToDataUrl, fileToDataUrl } from './lib/dataUrl'
 import { hasActiveDataOperations } from './lib/dataOperations'
@@ -2772,9 +2774,12 @@ export async function submitTask(options: {
   // 用第一个有效配置规范化 UI 参数（多配置各自再 normalize 一次）
   const primaryRequestSettings = createSettingsForApiProfile(normalizedSettings, validProfiles[0])
   const primaryNormalizedParams = normalizeParamsForSettings(params, primaryRequestSettings, { hasInputImages: orderedInputImages.length > 0 })
+  const primaryNativeTransparent = effectiveTransparentBackgroundMethod(validProfiles[0], primaryRequestSettings) === 'api'
+  const primaryTransparentFormat = primaryNormalizedParams.output_format === 'png'
+    || (primaryNativeTransparent && primaryNormalizedParams.output_format === 'webp')
   const primaryParamPatch = getChangedParams(params, {
     ...primaryNormalizedParams,
-    transparent_output: primaryNormalizedParams.output_format === 'png' && primaryNormalizedParams.transparent_output
+    transparent_output: primaryTransparentFormat && primaryNormalizedParams.transparent_output
       ? true
       : false,
   })
@@ -2789,11 +2794,14 @@ export async function submitTask(options: {
   for (const profile of validProfiles) {
     const requestSettings = createSettingsForApiProfile(normalizedSettings, profile)
     const normalizedParams = normalizeParamsForSettings(params, requestSettings, { hasInputImages: orderedInputImages.length > 0 })
-    const shouldUseTransparentOutput = normalizedParams.output_format === 'png' && normalizedParams.transparent_output
+    const nativeTransparent = effectiveTransparentBackgroundMethod(profile, requestSettings) === 'api'
+    const transparentFormat = normalizedParams.output_format === 'png'
+      || (nativeTransparent && normalizedParams.output_format === 'webp')
+    const shouldUseTransparentOutput = transparentFormat && normalizedParams.transparent_output
     const taskParams = shouldUseTransparentOutput
       ? getTransparentRequestParams(normalizedParams)
       : { ...normalizedParams, transparent_output: false }
-    const transparentMeta = taskParams.transparent_output
+    const transparentMeta = taskParams.transparent_output && !nativeTransparent
       ? createTransparentOutputMeta(prompt.trim())
       : null
     const executionMode: TaskExecutionMode = profile.provider === 'openai'
@@ -2934,6 +2942,9 @@ export async function submitAfternoonTeaPosterTask({
     ?? normalizedSettings.profiles.find((item) => item.id === profile.id)
     ?? profile
   )
+  if (validProfiles.some((profile) => profile.codexCli)) {
+    throw new Error('Codex CLI 兼容模式不能提交下午茶海报。请关闭对应配置的 Codex CLI 兼容模式后再试，海报提示词和尺寸会保持原样。')
+  }
 
   const selectedExecutionMode = executionMode ?? 'browser'
   const generationGroupId = existingGenerationGroupId
@@ -4767,6 +4778,7 @@ async function executeAgentRound(
       const result = await callImageApi({
         settings: imageRequestSettings,
         prompt: replaceImageMentionsForApi(opts.prompt, opts.referenceImageDataUrls.length),
+        skipCodexCliSizePrompt: true,
         params: opts.taskParams,
         inputImageDataUrls: opts.referenceImageDataUrls,
         onPartialImage: opts.onPartialImage
@@ -5426,6 +5438,7 @@ async function executeTask(taskId: string, settingsOverride?: AppSettings) {
         prompt: replaceImageMentionsForApi(requestPrompt, inputDataUrls.length),
         sendPromptAsIs: Boolean(task.afternoonTeaBatchId),
         allowPromptRewrite: requestSettings.allowPromptRewrite,
+        nativeTransparentBackground: task.params.transparent_output && !task.transparentOutput,
         params: task.params,
         inputImageDataUrls: inputDataUrls,
         maskDataUrl,
@@ -5438,6 +5451,7 @@ async function executeTask(taskId: string, settingsOverride?: AppSettings) {
       settings: requestSettings,
       prompt: replaceImageMentionsForApi(requestPrompt, inputDataUrls.length),
       sendPromptAsIs: Boolean(task.afternoonTeaBatchId),
+      nativeTransparentBackground: task.params.transparent_output && !task.transparentOutput,
       params: task.params,
       inputImageDataUrls: inputDataUrls,
       maskDataUrl,
@@ -5486,17 +5500,22 @@ async function executeTask(taskId: string, settingsOverride?: AppSettings) {
         n: outputIds.length,
       }
     })()
+    const revisedPromptsForStorage = activeProfile.codexCli
+      ? result.revisedPrompts?.map((revisedPrompt) => revisedPrompt == null
+        ? revisedPrompt
+        : stripInjectedCodexCliSizePrompt(revisedPrompt, requestPrompt, task.params.size))
+      : result.revisedPrompts
     const shouldStoreRevisedPrompts = taskProvider !== 'fal' && !isAsyncCustomTask
     const actualParamsByImage = mapActualParamsByImage(outputIds, actualParamsList)
-    const revisedPromptByImage = shouldStoreRevisedPrompts ? result.revisedPrompts?.reduce<Record<string, string>>((acc, revisedPrompt, index) => {
+    const revisedPromptByImage = shouldStoreRevisedPrompts ? revisedPromptsForStorage?.reduce<Record<string, string>>((acc, revisedPrompt, index) => {
       const imgId = outputIds[index]
       if (imgId && revisedPrompt && revisedPrompt.trim()) acc[imgId] = revisedPrompt
       return acc
     }, {}) : undefined
-    const promptWasRevised = shouldStoreRevisedPrompts && result.revisedPrompts?.some(
+    const promptWasRevised = shouldStoreRevisedPrompts && revisedPromptsForStorage?.some(
       (revisedPrompt) => revisedPrompt?.trim() && revisedPrompt.trim() !== requestPrompt.trim(),
     )
-    const hasRevisedPromptValue = shouldStoreRevisedPrompts && result.revisedPrompts?.some((revisedPrompt) => revisedPrompt?.trim())
+    const hasRevisedPromptValue = shouldStoreRevisedPrompts && revisedPromptsForStorage?.some((revisedPrompt) => revisedPrompt?.trim())
     if (!task.afternoonTeaBatchId && taskProvider === 'openai' && activeProfile.apiMode === 'responses' && !activeProfile.codexCli) {
       if (promptWasRevised) {
         showCodexCliPrompt()
