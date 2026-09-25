@@ -205,6 +205,14 @@ export interface AfternoonTeaConversation {
   posterItems: AfternoonTeaPosterBatchItem[]
   batchStartedAt: number | null
   batchFinishedAt: number | null
+  /** 下午茶通知补充信息，例如汉堡包、霸王茶姬 */
+  noticeSupplement: string
+  noticeCards: Array<{ style: string; text: string }>
+  noticeStatus: 'idle' | 'success' | 'error' | 'cancelled'
+  noticeError: string
+  noticeElapsed: number | null
+  noticeChannel: string
+  noticeModel: string
 }
 
 // ===== 输入图片（UI 层面） =====

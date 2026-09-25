@@ -27,6 +27,8 @@ function formProps(overrides: Partial<AfternoonTeaNoticeFormViewProps> = {}): Af
     error: '',
     clipboardAvailable: true,
     clipboardError: '',
+    sourceChannel: '',
+    sourceModel: '',
     onMenuTextChange: noop,
     onBrandChange: noop,
     onSystemPromptChange: noop,
@@ -58,12 +60,16 @@ describe('AfternoonTeaNoticeFormView', () => {
   it('keeps brand optional and disables generate without a menu', () => {
     const html = renderForm({ menuText: '  ', brand: '' })
 
-    expect(html).toContain('品牌（选填）')
-    expect(html).toContain('例如：捏捏虎、麦当劳')
+    expect(html).toContain('补充信息')
+    expect(html).toContain('例如：汉堡包、奶茶、霸王茶姬')
+    expect(html).not.toContain('品牌（选填）')
     expect(html).toContain('今日菜单')
     expect(html).toContain('粘贴')
     expect(html).toContain('高级设置')
-    expect(html).toContain(`每次随机 ${AFTERNOON_TEA_NOTICE_RESULT_COUNT} 种`)
+    expect(html).toContain('左上蛋黄肉+芝士肉+虾仁肉+牛肉小饼')
+    expect(html).toContain('套餐A：东坡淋汁豆腐+现磨原味豆浆')
+    expect(html).toContain(`每次 ${AFTERNOON_TEA_NOTICE_RESULT_COUNT} 张`)
+    expect(html).toContain(`生成后给出 ${AFTERNOON_TEA_NOTICE_RESULT_COUNT} 张菜单卡，菜品相同，开场和收尾不同`)
     expect(buttonMarkup(html, '生成通知')).toContain('disabled=""')
   })
 
@@ -91,7 +97,7 @@ describe('AfternoonTeaNoticeFormView', () => {
     expect(html).toContain('简洁清新')
     expect(html).toContain('aria-label="复制可爱活泼通知"')
     expect(html).toContain('aria-label="复制清单安利通知"')
-    expect(html).toContain(`本次 ${notices.length} 种`)
+    expect(html).toContain(`本次 ${notices.length} 张`)
     expect(html).toContain('grid-cols-2')
     expect(html).toContain('rounded-full')
     expect(buttonMarkup(html, '再生成')).not.toContain('disabled=""')
@@ -104,13 +110,25 @@ describe('AfternoonTeaNoticeFormView', () => {
 
     expect(buttonMarkup(html, '取消生成')).not.toContain('disabled=""')
     expect(html).toContain('正在生成通知')
-    expect(html).toContain(`正在随机生成 ${AFTERNOON_TEA_NOTICE_RESULT_COUNT} 种风格`)
+    expect(html).toContain(`正在生成 ${AFTERNOON_TEA_NOTICE_RESULT_COUNT} 张菜单卡`)
   })
 
-  it('picks a fresh style set on each generate request', () => {
-    expect(noticeWorkflowSource).toContain('pickAfternoonTeaNoticeStyles(notices.map((notice) => notice.style))')
-    expect(noticeWorkflowSource).toContain('buildAfternoonTeaNoticeUserPrompt(menuText, brand, requestedStyles)')
-    expect(noticeWorkflowSource).toContain('parseAfternoonTeaNoticeResultForStyles(raw, requestedStyles)')
+  it('shows the channel and model used for this notice under the status', () => {
+    const html = renderForm({
+      status: 'running',
+      sourceChannel: '测试渠道',
+      sourceModel: 'gpt-4.1-mini',
+    })
+
+    expect(html).toContain('aria-label="通知渠道和模型"')
+    expect(html).toContain('渠道 测试渠道 · 模型 gpt-4.1-mini')
+    expect(renderForm({ status: 'idle' })).not.toContain('通知渠道和模型')
+  })
+
+  it('generates through the shared notice module', () => {
+    expect(noticeWorkflowSource).toContain('runAfternoonTeaNotice({')
+    expect(noticeWorkflowSource).toContain('supplement: brand')
+    expect(noticeWorkflowSource).not.toContain('pickAfternoonTeaNoticeStyles')
   })
 
   it('copies the card text through the provided handler', () => {

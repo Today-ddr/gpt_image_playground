@@ -22,12 +22,16 @@ import {
   type AfternoonTeaPosterSourceSize,
 } from '../lib/afternoonTeaBatch'
 import { parseAfternoonTeaOrderResult } from '../lib/afternoonTeaOrder'
+import { mergeSegmentedDishAnalysis, segmentAfternoonTeaMenu } from '../lib/afternoonTeaMenu'
 import { buildAfternoonTeaPosterPrompts } from '../lib/afternoonTeaPosterPromptBuilder'
 import {
   normalizeAfternoonTeaItemTitleRegions,
   resolveAfternoonTeaItemTitleRegionsForImage,
 } from '../lib/afternoonTeaTitlePlacement'
 import { analyzeDish } from '../lib/dishAnalysisApi'
+import { readAfternoonTeaNoticeSystemPrompt, type AfternoonTeaNotice, type AfternoonTeaNoticeStatus } from '../lib/afternoonTeaNotice'
+import { AfternoonTeaNoticeRunCoordinator, runAfternoonTeaNotice } from '../lib/afternoonTeaNoticeRun'
+import { copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 import { storeImage } from '../lib/db'
 import {
   buildDishAnalysisSystemPrompt,
@@ -132,6 +136,30 @@ export function getDishAnalysisProfile(settings: AppSettings): ApiProfile | null
 }
 
 export type DishAnalysisStatus = 'idle' | 'running' | 'success' | 'error' | 'cancelled'
+
+function savedAfternoonTeaNoticeJob(conversation: AfternoonTeaConversation | null | undefined): AfternoonTeaNoticeJob | undefined {
+  if (!conversation) return undefined
+  if (conversation.noticeStatus === 'idle' && conversation.noticeCards.length === 0) return undefined
+  return {
+    status: conversation.noticeStatus === 'idle' ? 'success' : conversation.noticeStatus,
+    startedAt: 0,
+    finishedAt: conversation.noticeElapsed,
+    notices: conversation.noticeCards,
+    error: conversation.noticeError,
+    sourceChannel: conversation.noticeChannel,
+    sourceModel: conversation.noticeModel,
+  }
+}
+
+type AfternoonTeaNoticeJob = {
+  status: AfternoonTeaNoticeStatus
+  startedAt: number
+  finishedAt: number | null
+  notices: AfternoonTeaNotice[]
+  error: string
+  sourceChannel: string
+  sourceModel: string
+}
 
 export type DishAnalysisRun = {
   conversationId: string
@@ -1083,6 +1111,7 @@ export default function ToolsWorkspace() {
   const analysisProfile = getDishAnalysisProfile(settings)
   const activeConversation = afternoonTeaConversations.find((conversation) => conversation.id === activeAfternoonTeaConversationId) ?? null
   const coordinatorRef = useRef(new DishAnalysisCoordinator())
+  const noticeCoordinatorRef = useRef(new AfternoonTeaNoticeRunCoordinator())
   const mountedRef = useRef(true)
   const defaultSystemPromptRef = useRef(DEFAULT_DISH_SYSTEM_PROMPT)
   const cachedSourceImageRef = useRef<{ dataUrl: string; id: string } | null>(null)
@@ -1107,6 +1136,9 @@ export default function ToolsWorkspace() {
   const [loading, setLoading] = useState(false)
   const [analysisRun, setAnalysisRun] = useState<DishAnalysisRun | null>(null)
   const [analysisNow, setAnalysisNow] = useState(Date.now())
+  const [noticeJobs, setNoticeJobs] = useState<Record<string, AfternoonTeaNoticeJob>>({})
+  const [noticeSupplements, setNoticeSupplements] = useState<Record<string, string>>({})
+  const [noticeNow, setNoticeNow] = useState(Date.now())
   const [historyOpen, setHistoryOpen] = useState(false)
   const [activeToolId, setActiveToolId] = useState<ToolsWorkspaceToolId>(readActiveToolsWorkspaceToolId)
   const batchItems = activeConversation?.posterItems ?? []
@@ -1129,6 +1161,15 @@ export default function ToolsWorkspace() {
     busyConversationId,
   })
   const analysisViewState = deriveDishAnalysisViewState(activeConversation, analysisRun, analysisNow)
+  const noticeJob = (activeConversation ? noticeJobs[activeConversation.id] : undefined)
+    ?? savedAfternoonTeaNoticeJob(activeConversation)
+  const noticeElapsed = noticeJob == null
+    ? null
+    : noticeJob.status === 'running'
+      ? Math.max(0, noticeNow - noticeJob.startedAt)
+      : noticeJob.finishedAt == null
+        ? null
+        : Math.max(0, noticeJob.finishedAt - noticeJob.startedAt)
   const retryDisabled = !imageDataUrl || isAfternoonTeaRetryDisabled(batchBusy, activeConversation, settings, tasks)
   const batchCallbacks = createAfternoonTeaBatchCallbacks(useStore.getState)
   const historyItems: ConversationHistoryItem[] = afternoonTeaConversations.map((conversation) => ({
@@ -1202,27 +1243,36 @@ export default function ToolsWorkspace() {
 
   const createEditableConversationFrom = (
     conversation: AfternoonTeaConversation,
-    options?: { keepParsedResult?: boolean },
+    options?: { keepParsedResult?: boolean; clearSourceImage?: boolean },
   ) => {
     const conversationId = createAfternoonTeaConversation()
     const keepParsedResult = Boolean(options?.keepParsedResult && conversation.orderResult)
+    const clearSourceImage = Boolean(options?.clearSourceImage)
+    const orderResult = keepParsedResult ? conversation.orderResult : null
+    const itemTitleRegions = clearSourceImage ? [] : conversation.itemTitleRegions
     updateAfternoonTeaConversation(conversationId, {
-      sourceImageId: conversation.sourceImageId,
-      sourceImageName: conversation.sourceImageName,
+      sourceImageId: clearSourceImage ? null : conversation.sourceImageId,
+      sourceImageName: clearSourceImage ? '' : conversation.sourceImageName,
       orderText: conversation.orderText,
-      titleCount: conversation.titleCount,
-      itemTitleRegions: conversation.itemTitleRegions,
+      titleCount: orderResult?.titles.length ?? conversation.titleCount,
+      itemTitleRegions,
       systemPrompt: conversation.systemPrompt,
       analysisSystemPromptSnapshot: keepParsedResult ? conversation.analysisSystemPromptSnapshot : null,
       analysisUserPromptSnapshot: keepParsedResult ? conversation.analysisUserPromptSnapshot : null,
       analysisElapsed: keepParsedResult ? conversation.analysisElapsed : null,
-      orderResult: keepParsedResult ? conversation.orderResult : null,
-      posterItems: keepParsedResult
-        ? conversation.posterItems.map((item) => ({
-          id: item.id,
-          title: item.title,
-          prompt: item.prompt,
-        }))
+      orderResult,
+      posterItems: orderResult
+        ? (clearSourceImage
+          ? buildAfternoonTeaPosterPrompts(orderResult, itemTitleRegions).map((item, index) => ({
+            id: conversation.posterItems[index]?.id ?? `${conversationId}-${index}`,
+            title: item.title,
+            prompt: item.prompt,
+          }))
+          : conversation.posterItems.map((item) => ({
+            id: item.id,
+            title: item.title,
+            prompt: item.prompt,
+          })))
         : [],
       batchStartedAt: null,
       batchFinishedAt: null,
@@ -1334,10 +1384,18 @@ export default function ToolsWorkspace() {
   }, [analysisRun?.conversationId, analysisRun?.startedAt, analysisRun?.status])
 
   useEffect(() => {
+    if (noticeJob?.status !== 'running') return
+    setNoticeNow(Date.now())
+    const timer = window.setInterval(() => setNoticeNow(Date.now()), 1_000)
+    return () => window.clearInterval(timer)
+  }, [activeConversation?.id, noticeJob?.status, noticeJob?.startedAt])
+
+  useEffect(() => {
     mountedRef.current = true
     return () => {
       mountedRef.current = false
       coordinatorRef.current.dispose()
+      noticeCoordinatorRef.current.dispose()
       const runtimes = new Set(batchRuntimesRef.current.values())
       for (const runtime of runtimes) disposeAfternoonTeaBatchRuntime(runtime, useStore.getState)
       batchRuntimesRef.current.clear()
@@ -1421,7 +1479,14 @@ export default function ToolsWorkspace() {
       }
 
       const previousSourceImageId = latestConversation.sourceImageId
-      const sourceImagePatch = createAfternoonTeaSourceImagePatch(latestConversation, image.id, file.name)
+      let imageAspectRatio: number | undefined
+      try {
+        const sourceSize = await readAfternoonTeaPosterSourceSize(image.dataUrl)
+        if (sourceSize.height > 0) imageAspectRatio = sourceSize.width / sourceSize.height
+      } catch {
+        imageAspectRatio = undefined
+      }
+      const sourceImagePatch = createAfternoonTeaSourceImagePatch(latestConversation, image.id, file.name, imageAspectRatio)
       if (sourceImagePatch) updateAfternoonTeaConversation(conversationId, sourceImagePatch)
       if (previousSourceImageId && previousSourceImageId !== image.id) {
         void deleteImageIfUnreferenced(previousSourceImageId)
@@ -1452,6 +1517,82 @@ export default function ToolsWorkspace() {
     if (previousSourceImageId) void deleteImageIfUnreferenced(previousSourceImageId)
   }
 
+  const startAfternoonTeaNotice = (conversationId: string, menuText: string, supplement: string, profile: ApiProfile) => {
+    const controller = noticeCoordinatorRef.current.begin(conversationId)
+    const startedAt = Date.now()
+    setNoticeJobs((current) => ({
+      ...current,
+      [conversationId]: {
+        status: 'running',
+        startedAt,
+        finishedAt: null,
+        notices: [],
+        error: '',
+        sourceChannel: profile.name.trim(),
+        sourceModel: profile.understandingModel?.trim() ?? '',
+      },
+    }))
+    void runAfternoonTeaNotice({
+      menuText,
+      supplement,
+      systemPrompt: readAfternoonTeaNoticeSystemPrompt(),
+      profile,
+      signal: controller.signal,
+    }).then((result) => {
+      if (!mountedRef.current || !noticeCoordinatorRef.current.isCurrent(conversationId, controller)) return
+      const job: AfternoonTeaNoticeJob = {
+        status: 'success',
+        startedAt,
+        finishedAt: startedAt + result.elapsed,
+        notices: result.notices,
+        error: '',
+        sourceChannel: result.sourceChannel,
+        sourceModel: result.sourceModel,
+      }
+      setNoticeJobs((current) => ({ ...current, [conversationId]: job }))
+      updateAfternoonTeaConversation(conversationId, {
+        noticeCards: job.notices,
+        noticeStatus: 'success',
+        noticeError: '',
+        noticeElapsed: result.elapsed,
+        noticeChannel: job.sourceChannel,
+        noticeModel: job.sourceModel,
+      })
+    }).catch((err: unknown) => {
+      if (!mountedRef.current || !noticeCoordinatorRef.current.isCurrent(conversationId, controller)) return
+      const message = err instanceof Error ? err.message.trim() : ''
+      const cancelled = controller.signal.aborted || message.includes('已取消')
+      const finishedAt = Date.now()
+      const job: AfternoonTeaNoticeJob = {
+        status: cancelled ? 'cancelled' : 'error',
+        startedAt,
+        finishedAt,
+        notices: [],
+        error: cancelled ? '' : (message || '下午茶通知生成失败'),
+        sourceChannel: profile.name.trim(),
+        sourceModel: profile.understandingModel?.trim() ?? '',
+      }
+      setNoticeJobs((current) => ({
+        ...current,
+        [conversationId]: {
+          ...job,
+          notices: current[conversationId]?.notices ?? [],
+        },
+      }))
+      if (!cancelled) {
+        updateAfternoonTeaConversation(conversationId, {
+          noticeStatus: 'error',
+          noticeError: job.error,
+          noticeElapsed: Math.max(0, finishedAt - startedAt),
+          noticeChannel: job.sourceChannel,
+          noticeModel: job.sourceModel,
+        })
+      }
+    }).finally(() => {
+      noticeCoordinatorRef.current.finish(conversationId, controller)
+    })
+  }
+
   const submit = async () => {
     if (conversationBusy) return
     const conversation = ensureEditableConversation()
@@ -1477,8 +1618,15 @@ export default function ToolsWorkspace() {
     const requestUserPrompt = userPrompt
     const requestSystemPrompt = systemPrompt
     const requestTitleCount = titleCount
-    const analysisSystemPromptSnapshot = buildDishAnalysisSystemPrompt(requestSystemPrompt, requestTitleCount)
-    const analysisUserPromptSnapshot = buildDishAnalysisUserPrompt(requestUserPrompt, requestTitleCount)
+    const segments = segmentAfternoonTeaMenu(requestUserPrompt)
+    const analysisSystemPromptSnapshot = buildDishAnalysisSystemPrompt(requestSystemPrompt, requestTitleCount, {
+      lockItems: Boolean(segments),
+    })
+    const analysisUserPromptSnapshot = buildDishAnalysisUserPrompt(
+      requestUserPrompt,
+      requestTitleCount,
+      segments?.map((segment) => segment.displayName),
+    )
     const isCurrentAnalysisRequest = () => {
       const activeAfternoonTeaConversationId = useStore.getState().activeAfternoonTeaConversationId
       return coordinatorRef.current.isCurrentRequest(request)
@@ -1489,22 +1637,44 @@ export default function ToolsWorkspace() {
     try {
       validateDishAnalysisInput(requestUserPrompt)
       if (!analysisProfile) throw new Error('请先在 API 配置中选择 OpenAI 配置，并填写语义理解/多模态模型 ID')
+      // 通知单独发请求。解析失败、取消都不会停掉它，它失败也不会改解析结果。
+      startAfternoonTeaNotice(conversationId, requestUserPrompt, noticeSupplements[conversationId] ?? '', analysisProfile)
       const raw = await analyzeDish({
         profile: analysisProfile,
         userPrompt: analysisUserPromptSnapshot,
         systemPrompt: analysisSystemPromptSnapshot,
         signal: request.signal,
       })
-      const result = parseAfternoonTeaOrderResult(raw, requestTitleCount)
+      const parsed = parseAfternoonTeaOrderResult(raw, requestTitleCount)
       if (!isCurrentAnalysisRequest()) return
       const latestConversation = useStore.getState().afternoonTeaConversations.find((item) => item.id === conversationId)
       if (!latestConversation) return
+      const result = segments
+        ? mergeSegmentedDishAnalysis({
+          segments,
+          model: parsed,
+          current: null,
+          preliminaryItems: null,
+          titleCount: requestTitleCount,
+          titlesCustomized: false,
+        })
+        : parsed
       const latestSourceImageId = latestConversation.sourceImageId
+      let imageAspectRatio: number | undefined
+      if (requestImageDataUrl) {
+        try {
+          const sourceSize = await readAfternoonTeaPosterSourceSize(requestImageDataUrl)
+          if (sourceSize.height > 0) imageAspectRatio = sourceSize.width / sourceSize.height
+        } catch {
+          imageAspectRatio = undefined
+        }
+      }
       const itemTitleRegions = resolveAfternoonTeaItemTitleRegionsForImage(
         requestSourceImageId,
         latestSourceImageId,
         requestItemTitleRegions,
         result.items.length,
+        imageAspectRatio,
       )
       const itemSeed = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
       const posterItems = buildAfternoonTeaPosterPrompts(result, itemTitleRegions).map((item, idx) => ({
@@ -1540,7 +1710,7 @@ export default function ToolsWorkspace() {
         sourceImageId,
         sourceImageName: latestConversation.sourceImageName || requestImageName,
         orderText: requestUserPrompt,
-        titleCount: requestTitleCount,
+        titleCount: result.titles.length,
         itemTitleRegions,
         systemPrompt: requestSystemPrompt,
         analysisSystemPromptSnapshot,
@@ -1954,6 +2124,24 @@ export default function ToolsWorkspace() {
     void startBatch()
   }
 
+  const continueWithNewImage = () => {
+    const conversation = useStore.getState().afternoonTeaConversations.find((item) => item.id === useStore.getState().activeAfternoonTeaConversationId)
+    if (!conversation?.orderResult) return
+    const created = createEditableConversationFrom(conversation, { keepParsedResult: true, clearSourceImage: true })
+    if (!created) return
+    setUserPrompt(created.orderText)
+    setTitleCount(created.titleCount)
+    setSystemPrompt(created.systemPrompt || defaultSystemPromptRef.current)
+    cachedSourceImageRef.current = null
+    setImageDataUrl('')
+    setImageName('')
+    setImageLoading(false)
+    setImageMissing(false)
+    setError('')
+    setBatchPageError('')
+    setAnalysisRun(null)
+  }
+
   const handleNewConversation = () => {
     const conversationId = createAfternoonTeaConversation()
     initializeNewConversationPrompt(conversationId)
@@ -2095,6 +2283,28 @@ export default function ToolsWorkspace() {
             pageError={batchPageError}
             analysisStatus={analysisViewState.status}
             analysisElapsed={analysisViewState.elapsed}
+            analysisChannel={analysisProfile?.name.trim() ?? ''}
+            analysisModel={analysisProfile?.understandingModel?.trim() ?? ''}
+            noticeSupplement={activeConversation ? (noticeSupplements[activeConversation.id] ?? activeConversation.noticeSupplement) : ''}
+            onNoticeSupplementChange={(value) => {
+              const conversationId = activeConversation?.id
+              if (!conversationId) return
+              setNoticeSupplements((current) => ({ ...current, [conversationId]: value }))
+              updateAfternoonTeaConversation(conversationId, { noticeSupplement: value })
+            }}
+            noticeStatus={noticeJob?.status ?? 'idle'}
+            notices={noticeJob?.notices ?? []}
+            noticeError={noticeJob?.error ?? ''}
+            noticeElapsed={noticeElapsed}
+            noticeChannel={noticeJob?.sourceChannel ?? ''}
+            noticeModel={noticeJob?.sourceModel ?? ''}
+            onCopyNotice={(text) => {
+              void copyTextToClipboard(text).then(() => {
+                showToast('已复制', 'success')
+              }).catch((err: unknown) => {
+                showToast(getClipboardFailureMessage('复制失败', err), 'error')
+              })
+            }}
             batchStartedAt={activeConversation?.batchStartedAt ?? null}
             batchFinishedAt={activeConversation?.batchFinishedAt ?? null}
             busy={conversationBusy}
@@ -2110,6 +2320,7 @@ export default function ToolsWorkspace() {
             onCancel={cancelAnalysis}
             onClear={clear}
             onReparse={reparse}
+            onContinueWithNewImage={continueWithNewImage}
             onPosterTitleChange={(index, title) => {
               if (!activeConversation) return
               updatePosterTitle(activeConversation.id, index, title)

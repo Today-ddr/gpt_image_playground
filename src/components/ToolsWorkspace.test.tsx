@@ -36,7 +36,10 @@ function afternoonTeaConversation(overrides: Partial<AfternoonTeaConversation> =
     analysisElapsed: null,
     orderResult: { titles: ['海报'], items: [{ displayName: '蛋糕', tags: [] }] },
     posterItems: [{ id: 'poster-a', title: '海报', prompt: 'prompt' }],
-    batchStartedAt: null, batchFinishedAt: null, ...overrides,
+    batchStartedAt: null, batchFinishedAt: null,
+    noticeSupplement: '', noticeCards: [], noticeStatus: 'idle', noticeError: '',
+    noticeElapsed: null, noticeChannel: '', noticeModel: '',
+    ...overrides,
   }
 }
 
@@ -565,11 +568,18 @@ describe('dish analysis coordination', () => {
     expect(workspaceSource).not.toContain('imageDataUrl: requestImageDataUrl,')
     expect(workspaceSource.indexOf('validateDishAnalysisInput(requestUserPrompt)'))
       .toBeLessThan(workspaceSource.indexOf('await analyzeDish({'))
+    expect(workspaceSource).toContain('startAfternoonTeaNotice(conversationId, requestUserPrompt, noticeSupplements[conversationId] ?? \'\', analysisProfile)')
+    expect(workspaceSource).not.toContain('await runAfternoonTeaNotice(')
+    expect(workspaceSource).toContain('noticeCards: job.notices')
+    expect(workspaceSource.indexOf('startAfternoonTeaNotice(conversationId, requestUserPrompt, noticeSupplements[conversationId] ?? \'\', analysisProfile)'))
+      .toBeLessThan(workspaceSource.indexOf('await analyzeDish({'))
   })
 
   it('builds both dynamic prompts with the same state title count before submitting', () => {
-    expect(workspaceSource).toContain('const analysisSystemPromptSnapshot = buildDishAnalysisSystemPrompt(requestSystemPrompt, requestTitleCount)')
-    expect(workspaceSource).toContain('const analysisUserPromptSnapshot = buildDishAnalysisUserPrompt(requestUserPrompt, requestTitleCount)')
+    expect(workspaceSource).toContain('buildDishAnalysisSystemPrompt(requestSystemPrompt, requestTitleCount, {')
+    expect(workspaceSource).toContain('lockItems: Boolean(segments)')
+    expect(workspaceSource).toContain('buildDishAnalysisUserPrompt(')
+    expect(workspaceSource).toContain('requestTitleCount,')
     expect(workspaceSource).toContain('parseAfternoonTeaOrderResult(raw, requestTitleCount)')
   })
 
@@ -1114,7 +1124,7 @@ describe('dish analysis coordination', () => {
     expect(handleSource).not.toContain('cancelRequest')
     expect(handleSource).toContain('ensureImageEditableConversation()')
     expect(handleSource).not.toContain('ensureEditableConversation()')
-    expect(handleSource).toContain('createAfternoonTeaSourceImagePatch(latestConversation, image.id, file.name)')
+    expect(handleSource).toContain('createAfternoonTeaSourceImagePatch(latestConversation, image.id, file.name, imageAspectRatio)')
     expect(removeSource).not.toContain('resetParsedResult')
     expect(removeSource).not.toContain('cancelRequest')
     expect(removeSource).toContain('ensureImageEditableConversation()')

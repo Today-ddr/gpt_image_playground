@@ -22,6 +22,8 @@ import TaskCard from '../TaskCard'
 import { WandAnimation } from '../wand-animation-react'
 import type { AfternoonTeaPosterViewItem } from './AfternoonTeaPosterStep'
 import { AfternoonTeaItemPlacement } from './AfternoonTeaTitlePlacement'
+import { AfternoonTeaNoticePanel } from './AfternoonTeaNoticePanel'
+import type { AfternoonTeaNotice, AfternoonTeaNoticeStatus } from '../../lib/afternoonTeaNotice'
 import { resolveAfternoonTeaPlacementSelection } from '../../lib/afternoonTeaTitlePlacement'
 import { resolveAfternoonTeaTitleCandidates } from '../../lib/dishAnalysisPrompts'
 
@@ -160,6 +162,17 @@ type AfternoonTeaMobileWorkflowProps = {
   pageError: string
   analysisStatus: MobileAfternoonTeaPhaseState['analysisStatus']
   analysisElapsed: number | null
+  analysisChannel?: string
+  analysisModel?: string
+  noticeSupplement?: string
+  onNoticeSupplementChange?: (value: string) => void
+  noticeStatus?: AfternoonTeaNoticeStatus
+  notices?: AfternoonTeaNotice[]
+  noticeError?: string
+  noticeElapsed?: number | null
+  noticeChannel?: string
+  noticeModel?: string
+  onCopyNotice?: (text: string) => void
   batchStartedAt: number | null
   batchFinishedAt: number | null
   busy: boolean
@@ -175,6 +188,7 @@ type AfternoonTeaMobileWorkflowProps = {
   onCancel: () => void
   onClear: () => void
   onReparse: () => void
+  onContinueWithNewImage: () => void
   onPosterTitleChange: (index: number, title: string) => void
   onPosterTitlesChange: (titles: string[]) => void
   onItemTitleRegionsChange: (regions: AfternoonTeaTitleRegion[]) => void
@@ -284,6 +298,15 @@ export function createAfternoonTeaClipboardCoordinator() {
   }
 }
 
+export function formatAfternoonTeaAnalysisSource(channel: string, model: string) {
+  const parts = []
+  const trimmedChannel = channel.trim()
+  const trimmedModel = model.trim()
+  if (trimmedChannel) parts.push(`渠道 ${trimmedChannel}`)
+  if (trimmedModel) parts.push(`模型 ${trimmedModel}`)
+  return parts.join(' · ')
+}
+
 function formatElapsed(value: number | null) {
   if (value == null) return '--:--'
   const seconds = Math.floor(Math.max(0, value) / 1_000)
@@ -354,6 +377,7 @@ function AfternoonTeaSourceImagePickers(props: {
 }
 
 export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProps) {
+  const analysisSource = formatAfternoonTeaAnalysisSource(props.analysisChannel ?? '', props.analysisModel ?? '')
   const phase = deriveMobileAfternoonTeaPhase({
     orderResult: props.orderResult,
     analysisStatus: props.analysisStatus,
@@ -758,6 +782,20 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
     }
   }
 
+  const noticeStatus = props.noticeStatus ?? 'idle'
+  const noticeCards = props.notices ?? []
+  const showNotice = noticeStatus !== 'idle' || noticeCards.length > 0 || Boolean(props.noticeError)
+  const noticePanel = (
+    <AfternoonTeaNoticePanel
+      status={noticeStatus}
+      notices={noticeCards}
+      error={props.noticeError ?? ''}
+      elapsed={props.noticeElapsed ?? null}
+      channel={props.noticeChannel ?? ''}
+      model={props.noticeModel ?? ''}
+      onCopy={props.onCopyNotice ?? (() => {})}
+    />
+  )
   const stepIndex = phase === 'input' || phase === 'analyzing' ? 0 : phase === 'review' ? 1 : phase === 'generating' ? 2 : 3
   const steps = ['素材', '审查', '生成', '保存']
 
@@ -816,6 +854,19 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
               {clipboardError && <div role="alert" className="mt-2 text-sm text-amber-700 dark:text-amber-300">{clipboardError}</div>}
             </section>
 
+            <section aria-label="补充信息">
+              <h2 className="mb-2 text-sm font-semibold text-gray-900 dark:text-gray-100">补充信息</h2>
+              <input
+                type="text"
+                value={props.noticeSupplement ?? ''}
+                onChange={(event) => props.onNoticeSupplementChange?.(event.target.value)}
+                disabled={locked}
+                placeholder="例如：汉堡包、奶茶、霸王茶姬"
+                className="min-h-11 w-full rounded-md border border-gray-200 bg-white px-3 text-base text-gray-900 outline-none placeholder:text-gray-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:opacity-60 dark:border-white/[0.1] dark:bg-white/[0.03] dark:text-gray-100 dark:placeholder:text-gray-500 dark:focus:ring-blue-500/10"
+                aria-label="补充信息"
+              />
+            </section>
+
             <section aria-label="海报数量">
               <div className="mb-2 text-sm font-semibold text-gray-900 dark:text-gray-100">海报数量</div>
               <div className="grid h-12 grid-cols-[48px_1fr_48px] overflow-hidden rounded-md border border-gray-200 bg-white dark:border-white/[0.1] dark:bg-white/[0.03] sm:max-w-56">
@@ -844,11 +895,17 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
             </details>
 
             {props.error && <div role="alert" className="rounded-md border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-600 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300">{props.error}</div>}
-            <div className="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400" aria-live="polite">
-              <span>{phase === 'analyzing' ? '正在解析菜单' : '等待解析'}</span>
-              <span className="tabular-nums">耗时 {formatElapsed(props.analysisElapsed)}</span>
+            <div className="flex items-start justify-between gap-3 text-xs text-gray-500 dark:text-gray-400" aria-live="polite">
+              <div className="min-w-0">
+                <div>{phase === 'analyzing' ? '正在解析菜单' : '等待解析'}</div>
+                {phase === 'analyzing' && analysisSource && (
+                  <div className="mt-1 break-all text-gray-700 dark:text-gray-200" aria-label="解析渠道和模型">{analysisSource}</div>
+                )}
+              </div>
+              <span className="shrink-0 tabular-nums">耗时 {formatElapsed(props.analysisElapsed)}</span>
             </div>
           </div>
+          {showNotice && <div className="lg:col-span-2">{noticePanel}</div>}
         </div>
       )}
 
@@ -867,7 +924,12 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
               </div>
             </div>
             <AfternoonTeaItemPlacement imageSrc={props.imageDataUrl} items={props.orderResult.items} regions={props.itemTitleRegions} locked={locked} selectedIndex={placementSelectedIndex} onSelectedIndexChange={setPlacementSelectedIndex} onChange={props.onItemTitleRegionsChange} />
-            {!props.imageDataUrl && (
+            {props.imageDataUrl ? (
+              <div className="mt-2">
+                <div className="mb-1 text-xs text-gray-500 dark:text-gray-400">更换图片，商品和标题会保留</div>
+                <AfternoonTeaSourceImagePickers disabled={locked} onImageChange={props.onImageChange} />
+              </div>
+            ) : (
               <>
                 <AfternoonTeaSourceImagePickers disabled={imageLocked} onImageChange={props.onImageChange} />
                 <div className="mt-2 text-center text-xs text-gray-400">也可以 Ctrl/⌘ + V 粘贴，单张最大 20 MiB</div>
@@ -1007,6 +1069,7 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
 
             {(reviewError || props.pageError) && <div role="alert" className="rounded-md border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-600 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300">{reviewError || props.pageError}</div>}
             <div className="sr-only" aria-live="polite">审查 {props.orderResult.titles.length} 个海报标题和 {props.orderResult.items.length} 个餐品</div>
+            {showNotice && <div className="lg:col-span-2">{noticePanel}</div>}
           </div>
         </div>
       )}
@@ -1222,7 +1285,7 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
         </div>
       )}
 
-      {(phase !== 'results' || availableCandidates.length > 0) && <div className="fixed inset-x-0 bottom-0 z-30 border-t border-gray-200 bg-white/95 px-3 pt-2.5 pb-[calc(0.65rem+env(safe-area-inset-bottom))] shadow-[0_-8px_24px_rgba(0,0,0,0.06)] backdrop-blur dark:border-white/[0.08] dark:bg-gray-950/95 dark:shadow-[0_-8px_24px_rgba(0,0,0,0.35)] sm:px-6 lg:static lg:inset-auto lg:col-start-2 lg:row-start-1 lg:mx-0 lg:mb-4 lg:mt-0 lg:flex lg:justify-end lg:border-t-0 lg:bg-transparent lg:px-0 lg:py-0 lg:shadow-none lg:backdrop-blur-none dark:lg:bg-transparent" aria-label="工作流主操作">
+      {(phase !== 'results' || availableCandidates.length > 0 || Boolean(props.orderResult)) && <div className="fixed inset-x-0 bottom-0 z-30 border-t border-gray-200 bg-white/95 px-3 pt-2.5 pb-[calc(0.65rem+env(safe-area-inset-bottom))] shadow-[0_-8px_24px_rgba(0,0,0,0.06)] backdrop-blur dark:border-white/[0.08] dark:bg-gray-950/95 dark:shadow-[0_-8px_24px_rgba(0,0,0,0.35)] sm:px-6 lg:static lg:inset-auto lg:col-start-2 lg:row-start-1 lg:mx-0 lg:mb-4 lg:mt-0 lg:flex lg:justify-end lg:border-t-0 lg:bg-transparent lg:px-0 lg:py-0 lg:shadow-none lg:backdrop-blur-none dark:lg:bg-transparent" aria-label="工作流主操作">
         {phase === 'input' && (
           <button type="button" onClick={() => {
             clipboardCoordinator.invalidate()
@@ -1244,11 +1307,16 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
             <WandAnimation size={28} className="dark:invert" />
           </button>
         )}
-        {phase === 'results' && availableCandidates.length > 0 && (
-          <button type="button" onClick={() => void handleSave()} disabled={!preparedFile || preparingFile || saving} className="flex min-h-12 w-full touch-manipulation items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 text-base font-semibold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 active:scale-[0.99] lg:w-auto lg:min-w-56 lg:rounded-md" aria-label="保存当前海报图片">
-            <DownloadIcon className="h-5 w-5" />
-            {preparingFile ? '准备图片...' : saving ? '正在打开...' : '打开系统保存'}
-          </button>
+        {phase === 'results' && (
+          <div className="flex w-full flex-col gap-2 lg:w-auto">
+            {availableCandidates.length > 0 && (
+              <button type="button" onClick={() => void handleSave()} disabled={!preparedFile || preparingFile || saving} className="flex min-h-12 w-full touch-manipulation items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 text-base font-semibold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 active:scale-[0.99] lg:min-w-56 lg:rounded-md" aria-label="保存当前海报图片">
+                <DownloadIcon className="h-5 w-5" />
+                {preparingFile ? '准备图片...' : saving ? '正在打开...' : '打开系统保存'}
+              </button>
+            )}
+            <button type="button" onClick={props.onContinueWithNewImage} disabled={!props.orderResult} className="min-h-12 w-full touch-manipulation rounded-xl border border-gray-300 bg-white px-4 text-base font-semibold text-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-50 active:scale-[0.99] dark:border-white/[0.12] dark:bg-white/[0.04] dark:text-gray-100 lg:min-w-56 lg:rounded-md" aria-label="换图再出一批">换图再出一批</button>
+          </div>
         )}
       </div>}
     </div>

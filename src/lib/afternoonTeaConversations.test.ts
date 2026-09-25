@@ -66,6 +66,13 @@ function conversation(patch: Partial<AfternoonTeaConversation> = {}): AfternoonT
     posterItems: patch.posterItems ?? [{ id: 'poster-a', title: '午后茶歇', prompt: '海报提示词', taskId: 'task-a' }],
     batchStartedAt: patch.batchStartedAt ?? null,
     batchFinishedAt: patch.batchFinishedAt ?? null,
+    noticeSupplement: patch.noticeSupplement ?? '',
+    noticeCards: patch.noticeCards ?? [],
+    noticeStatus: patch.noticeStatus ?? 'idle',
+    noticeError: patch.noticeError ?? '',
+    noticeElapsed: patch.noticeElapsed ?? null,
+    noticeChannel: patch.noticeChannel ?? '',
+    noticeModel: patch.noticeModel ?? '',
   }
 }
 
@@ -147,6 +154,13 @@ describe('afternoon tea conversations', () => {
       posterItems: [{ id: 'poster-a', title: '午后茶歇', prompt: '海报提示词', setupError: '创建失败' }],
       batchStartedAt: 200,
       batchFinishedAt: null,
+      noticeSupplement: '',
+      noticeCards: [],
+      noticeStatus: 'idle',
+      noticeError: '',
+      noticeElapsed: null,
+      noticeChannel: '',
+      noticeModel: '',
     })
   })
 
@@ -181,9 +195,38 @@ describe('afternoon tea conversations', () => {
       ],
       batchStartedAt: 200,
       batchFinishedAt: 450,
+      noticeSupplement: '',
+      noticeCards: [],
+      noticeStatus: 'idle',
+      noticeError: '',
+      noticeElapsed: null,
+      noticeChannel: '',
+      noticeModel: '',
     }
 
     expect(normalizeAfternoonTeaConversations([valid], 999)).toEqual([valid])
+  })
+
+  it('keeps saved afternoon tea notice cards', () => {
+    const [normalized] = normalizeAfternoonTeaConversations([{
+      id: 'conversation-notice',
+      noticeSupplement: '汉堡包',
+      noticeCards: [
+        { style: ' 补给开场 ', text: ' 今日汉堡到了 ' },
+        { style: '', text: '丢掉' },
+      ],
+      noticeStatus: 'success',
+      noticeElapsed: 4_000,
+      noticeChannel: '测试渠道',
+      noticeModel: 'gpt-4.1-mini',
+    }], 999)
+
+    expect(normalized.noticeSupplement).toBe('汉堡包')
+    expect(normalized.noticeCards).toEqual([{ style: '补给开场', text: '今日汉堡到了' }])
+    expect(normalized.noticeStatus).toBe('success')
+    expect(normalized.noticeElapsed).toBe(4_000)
+    expect(normalized.noticeChannel).toBe('测试渠道')
+    expect(normalized.noticeModel).toBe('gpt-4.1-mini')
   })
 
   it('persists title candidates when normalizing a stored conversation', () => {

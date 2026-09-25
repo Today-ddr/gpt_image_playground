@@ -1,10 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
+import { runAfternoonTeaNotice } from '../../lib/afternoonTeaNoticeRun'
 import {
   applyAfternoonTeaNoticeText,
-  buildAfternoonTeaNoticeUserPrompt,
   getAfternoonTeaNoticePrimaryActionLabel,
-  parseAfternoonTeaNoticeResultForStyles,
-  pickAfternoonTeaNoticeStyles,
   readAfternoonTeaNoticeDraft,
   readAfternoonTeaNoticeSystemPrompt,
   resolveAfternoonTeaNoticeSelectedIndex,
@@ -14,7 +12,6 @@ import {
   type AfternoonTeaNotice,
   type AfternoonTeaNoticeStatus,
 } from '../../lib/afternoonTeaNotice'
-import { generateAfternoonTeaNotice } from '../../lib/afternoonTeaNoticeApi'
 import { AFTERNOON_TEA_NOTICE_RESULT_COUNT, DEFAULT_AFTERNOON_TEA_NOTICE_SYSTEM_PROMPT } from '../../lib/afternoonTeaNoticePrompts'
 import { getActiveApiProfile } from '../../lib/apiProfiles'
 import { copyTextToClipboard, getClipboardFailureMessage } from '../../lib/clipboard'
@@ -23,6 +20,7 @@ import { ChevronDownIcon, CopyIcon, PasteIcon } from '../icons'
 import {
   canReadAfternoonTeaClipboard,
   createAfternoonTeaClipboardCoordinator,
+  formatAfternoonTeaAnalysisSource,
 } from './AfternoonTeaMobileWorkflow'
 
 function formatElapsed(value: number | null) {
@@ -51,6 +49,8 @@ export type AfternoonTeaNoticeFormViewProps = {
   error: string
   clipboardAvailable: boolean
   clipboardError: string
+  sourceChannel: string
+  sourceModel: string
   onMenuTextChange: (value: string) => void
   onBrandChange: (value: string) => void
   onSystemPromptChange: (value: string) => void
@@ -68,6 +68,7 @@ export function AfternoonTeaNoticeFormView(props: AfternoonTeaNoticeFormViewProp
   const selectedIndex = resolveAfternoonTeaNoticeSelectedIndex(props.notices, props.selectedIndex)
   const primaryActionLabel = getAfternoonTeaNoticePrimaryActionLabel(props.status, props.notices.length)
   const primaryDisabled = props.status !== 'running' && (!props.configured || !props.menuText.trim())
+  const noticeSource = formatAfternoonTeaAnalysisSource(props.sourceChannel, props.sourceModel)
 
   return (
     <div className="min-w-0 px-3 py-3 sm:px-6 sm:py-7 lg:grid lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end lg:gap-x-6" data-afternoon-tea-notice-workflow aria-label="下午茶通知工作流">
@@ -99,7 +100,7 @@ export function AfternoonTeaNoticeFormView(props: AfternoonTeaNoticeFormViewProp
               onChange={(event) => props.onMenuTextChange(event.target.value)}
               disabled={locked}
               rows={8}
-              placeholder={'例如：\n原味巴斯克\n开心果巴斯克\n抹茶巴斯克\n奥利奥巴斯克\n➕\n喜茶羽衣甘蓝双柚'}
+              placeholder={'例如：\n左上蛋黄肉+芝士肉+虾仁肉+牛肉小饼\n右上葱肉+梅干菜肉+榨菜肉\n下蛋黄肉+牛肉+蟹味棒肉\n\n或\n\n套餐A：东坡淋汁豆腐+现磨原味豆浆\n套餐B：豆腐小吃拼盘'}
               className="min-h-28 w-full resize-y rounded-md border border-gray-200 bg-white px-3 py-2.5 text-base leading-relaxed text-gray-900 outline-none placeholder:text-gray-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:opacity-60 dark:border-white/[0.1] dark:bg-white/[0.03] dark:text-gray-100 dark:placeholder:text-gray-500 dark:focus:ring-blue-500/10 sm:min-h-40"
               aria-label="菜单输入"
             />
@@ -108,16 +109,16 @@ export function AfternoonTeaNoticeFormView(props: AfternoonTeaNoticeFormViewProp
             )}
           </section>
 
-          <section aria-label="品牌">
-            <h2 className="mb-2 text-sm font-semibold text-gray-900 dark:text-gray-100">品牌（选填）</h2>
+          <section aria-label="补充信息">
+            <h2 className="mb-2 text-sm font-semibold text-gray-900 dark:text-gray-100">补充信息</h2>
             <input
               type="text"
               value={props.brand}
               onChange={(event) => props.onBrandChange(event.target.value)}
               disabled={locked}
-              placeholder="例如：捏捏虎、麦当劳"
+              placeholder="例如：汉堡包、奶茶、霸王茶姬"
               className="min-h-11 w-full rounded-md border border-gray-200 bg-white px-3 text-base text-gray-900 outline-none placeholder:text-gray-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:opacity-60 dark:border-white/[0.1] dark:bg-white/[0.03] dark:text-gray-100 dark:placeholder:text-gray-500 dark:focus:ring-blue-500/10"
-              aria-label="品牌"
+              aria-label="补充信息"
             />
           </section>
 
@@ -145,9 +146,14 @@ export function AfternoonTeaNoticeFormView(props: AfternoonTeaNoticeFormViewProp
           {props.error && (
             <div role="alert" className="rounded-md border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-600 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300">{props.error}</div>
           )}
-          <div className="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400" aria-live="polite">
-            <span>{getNoticeStatusLabel(props.status, props.notices.length)}</span>
-            <span className="tabular-nums">耗时 {formatElapsed(props.elapsed)}</span>
+          <div className="flex items-start justify-between gap-3 text-xs text-gray-500 dark:text-gray-400" aria-live="polite">
+            <div className="min-w-0">
+              <div>{getNoticeStatusLabel(props.status, props.notices.length)}</div>
+              {noticeSource && (
+                <div className="mt-1 break-all text-gray-700 dark:text-gray-200" aria-label="通知渠道和模型">{noticeSource}</div>
+              )}
+            </div>
+            <span className="shrink-0 tabular-nums">耗时 {formatElapsed(props.elapsed)}</span>
           </div>
         </div>
 
@@ -155,7 +161,7 @@ export function AfternoonTeaNoticeFormView(props: AfternoonTeaNoticeFormViewProp
           <div className="mb-2 flex items-center justify-between gap-3">
             <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">通知文案</h2>
             <span className="text-xs text-gray-500 dark:text-gray-400">
-              {props.notices.length > 0 ? `本次 ${props.notices.length} 种` : `每次随机 ${AFTERNOON_TEA_NOTICE_RESULT_COUNT} 种`}
+              {props.notices.length > 0 ? `本次 ${props.notices.length} 张` : `每次 ${AFTERNOON_TEA_NOTICE_RESULT_COUNT} 张`}
             </span>
           </div>
           {props.notices.length > 0 ? (
@@ -200,7 +206,7 @@ export function AfternoonTeaNoticeFormView(props: AfternoonTeaNoticeFormViewProp
             </div>
           ) : (
             <div className="flex min-h-40 items-center justify-center rounded-xl border border-dashed border-gray-300 bg-gray-50/60 px-4 text-center text-sm text-gray-500 dark:border-white/[0.12] dark:bg-white/[0.02] dark:text-gray-400">
-              {locked ? `正在随机生成 ${AFTERNOON_TEA_NOTICE_RESULT_COUNT} 种风格…` : `生成后会随机给出 ${AFTERNOON_TEA_NOTICE_RESULT_COUNT} 种风格，方便挑选复制`}
+              {locked ? `正在生成 ${AFTERNOON_TEA_NOTICE_RESULT_COUNT} 张菜单卡…` : `生成后给出 ${AFTERNOON_TEA_NOTICE_RESULT_COUNT} 张菜单卡，菜品相同，开场和收尾不同`}
             </div>
           )}
         </section>
@@ -244,6 +250,8 @@ export function AfternoonTeaNoticeWorkflow(props: AfternoonTeaNoticeWorkflowProp
   const [brand, setBrand] = useState(draft.brand)
   const [notices, setNotices] = useState(draft.notices)
   const [selectedIndex, setSelectedIndex] = useState(draft.selectedIndex)
+  const [sourceChannel, setSourceChannel] = useState(draft.sourceChannel)
+  const [sourceModel, setSourceModel] = useState(draft.sourceModel)
   const [systemPrompt, setSystemPrompt] = useState(readAfternoonTeaNoticeSystemPrompt)
   const [status, setStatus] = useState<AfternoonTeaNoticeStatus>(draft.notices.length > 0 ? 'success' : 'idle')
   const [error, setError] = useState('')
@@ -265,8 +273,8 @@ export function AfternoonTeaNoticeWorkflow(props: AfternoonTeaNoticeWorkflowProp
 
   useEffect(() => {
     if (!hydrated) return
-    writeAfternoonTeaNoticeDraft({ menuText, brand, notices, selectedIndex })
-  }, [hydrated, menuText, brand, notices, selectedIndex])
+    writeAfternoonTeaNoticeDraft({ menuText, brand, notices, selectedIndex, sourceChannel, sourceModel })
+  }, [hydrated, menuText, brand, notices, selectedIndex, sourceChannel, sourceModel])
 
   useEffect(() => {
     if (!hydrated) return
@@ -322,6 +330,8 @@ export function AfternoonTeaNoticeWorkflow(props: AfternoonTeaNoticeWorkflowProp
     }
 
     clipboardCoordinator.invalidate()
+    setSourceChannel(profile.name.trim())
+    setSourceModel(profile.understandingModel.trim())
     const controller = new AbortController()
     abortRef.current = controller
     const startedAt = Date.now()
@@ -332,18 +342,19 @@ export function AfternoonTeaNoticeWorkflow(props: AfternoonTeaNoticeWorkflowProp
     setNow(startedAt)
 
     try {
-      const requestedStyles = pickAfternoonTeaNoticeStyles(notices.map((notice) => notice.style))
-      const raw = await generateAfternoonTeaNotice({
-        profile,
-        userPrompt: buildAfternoonTeaNoticeUserPrompt(menuText, brand, requestedStyles),
+      const result = await runAfternoonTeaNotice({
+        menuText,
+        supplement: brand,
         systemPrompt,
+        profile,
         signal: controller.signal,
       })
-      const parsed = parseAfternoonTeaNoticeResultForStyles(raw, requestedStyles)
-      setNotices(parsed)
+      setNotices(result.notices)
+      setSourceChannel(result.sourceChannel)
+      setSourceModel(result.sourceModel)
       setSelectedIndex(0)
       setStatus('success')
-      setFinishedElapsed(Date.now() - startedAt)
+      setFinishedElapsed(result.elapsed)
     } catch (err) {
       const message = err instanceof Error ? err.message.trim() : ''
       const cancelled = message.includes('已取消') || controller.signal.aborted
@@ -369,6 +380,8 @@ export function AfternoonTeaNoticeWorkflow(props: AfternoonTeaNoticeWorkflowProp
       error={error}
       clipboardAvailable={clipboardAvailable}
       clipboardError={clipboardError}
+      sourceChannel={sourceChannel}
+      sourceModel={sourceModel}
       onMenuTextChange={(value) => {
         clipboardCoordinator.invalidate()
         setMenuText(value)

@@ -58,6 +58,12 @@ export const DEFAULT_DISH_SYSTEM_PROMPT = `你是一个公司下午茶图片设�
 - 位置和格式信息：
 例如：上：、左下：、右边：等。
 只保留冒号后的商品名称。
+【商品边界】
+多行菜单必须一行一个商品。
+冒号后的整段是一个商品，行内的加号、顿号、「和」、「/」不要拆开。
+不同行里重复出现的饮品或小食各自保留，不要合并。
+行首的「套餐A：」「1、」这类序号不要写进 displayName。
+单独一行、后面没有菜名的分类标题（例如「热食」「饮品」）不要当成商品。
 【displayName 商品名称】
 生成适合展示在图片上的商品名称。
 规则：
@@ -77,6 +83,7 @@ export const DEFAULT_DISH_SYSTEM_PROMPT = `你是一个公司下午茶图片设�
 - 优先简洁。
 - 默认控制在10个中文字以内。
 - 如果压缩会丢失商品关键信息，可以保留更长名称。
+- 套餐组合是一个商品时，可以超过 10 个字，不要为了变短而拆开。
 【tags 贴纸关键词】
 tags 用于生成图片装饰贴纸，不用于文字展示。
 要求：
@@ -173,14 +180,32 @@ titleCandidates 填写全部 {{candidateCount}} 个备选，且必须包含 titl
   ]
 }`
 
-export function buildDishAnalysisSystemPrompt(systemPrompt: string, count: number) {
+export const DISH_ANALYSIS_LOCKED_ITEMS_INSTRUCTION = `【本次商品已确定】
+用户消息中的商品列表只决定商品数量和顺序。
+items 必须与商品列表数量相同、顺序相同，不得拆分、合并、调序或新增。
+每一行是一个商品。行内的加号、顿号、「和」都属于这一个商品，不要拆开。
+displayName 要整理成适合贴在图片上的名称，不要原样复制位置词。
+去掉：左上、右上、左下、右下、上、下、左、右，以及数量和备注。
+保留能区分商品的食材和口味。套餐组合保持完整，可以超过 10 个字。
+例如：
+左上：牛肉肠粉 → 牛肉肠粉
+套餐A：豆腐+豆浆 → 豆腐+豆浆
+只为每个商品填写 tags，并按原规则生成标题。`
+
+export function buildDishAnalysisSystemPrompt(systemPrompt: string, count: number, options?: { lockItems?: boolean }) {
   const candidateCount = getDishAnalysisCandidateCount(count)
-  return systemPrompt
+  const prompt = systemPrompt
     .replace(/{{candidateCount}}/g, String(candidateCount))
     .replace(/{{titleCount}}/g, String(count))
+  if (!options?.lockItems) return prompt
+  return `${prompt}\n\n${DISH_ANALYSIS_LOCKED_ITEMS_INSTRUCTION}`
 }
 
-export function buildDishAnalysisUserPrompt(orderText: string, count: number) {
+export function buildDishAnalysisUserPrompt(orderText: string, count: number, itemNames?: string[]) {
   const candidateCount = getDishAnalysisCandidateCount(count)
-  return `标题数量：${count}\n备选标题数量：${candidateCount}\n\n下午茶订单：\n${orderText.trim()}`
+  const head = `标题数量：${count}\n备选标题数量：${candidateCount}`
+  const order = orderText.trim()
+  if (!itemNames?.length) return `${head}\n\n下午茶订单：\n${order}`
+  const list = itemNames.map((name, index) => `${index + 1}. ${name}`).join('\n')
+  return `${head}\n\n商品数量和顺序已经确定，共 ${itemNames.length} 个。请按这个顺序整理 displayName，不要增删或拆开。\n\n商品列表：\n${list}\n\n下午茶订单：\n${order}`
 }

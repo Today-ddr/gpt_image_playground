@@ -24,6 +24,13 @@ describe('exportZip', () => {
     posterItems: [],
     batchStartedAt: null,
     batchFinishedAt: null,
+    noticeSupplement: '',
+    noticeCards: [],
+    noticeStatus: 'idle',
+    noticeError: '',
+    noticeElapsed: null,
+    noticeChannel: '',
+    noticeModel: '',
     ...overrides,
   })
 

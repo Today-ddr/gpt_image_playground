@@ -4,6 +4,7 @@ import type { TaskRecord } from '../../types'
 import { canCopyImageToClipboard } from '../../lib/clipboard'
 import {
   AfternoonTeaMobileWorkflow,
+  formatAfternoonTeaAnalysisSource,
   clampGenerateSplitLeftPercent,
   deriveMobileAfternoonTeaPhase,
   getMobileAfternoonTeaCandidates,
@@ -87,6 +88,7 @@ function workflowProps(overrides: Partial<WorkflowProps> = {}): WorkflowProps {
     onCancel: noop,
     onClear: noop,
     onReparse: noop,
+    onContinueWithNewImage: noop,
     onPosterTitleChange: noop,
     onPosterTitlesChange: noop,
     onItemTitleRegionsChange: noop,
@@ -191,6 +193,14 @@ async function createWorkflowHookDriver(overrides: Partial<WorkflowProps> = {}) 
     },
   }
 }
+
+describe('formatAfternoonTeaAnalysisSource', () => {
+  it('labels the channel and model used for menu analysis', () => {
+    expect(formatAfternoonTeaAnalysisSource(' 测试渠道 ', ' gpt-4.1-mini ')).toBe('渠道 测试渠道 · 模型 gpt-4.1-mini')
+    expect(formatAfternoonTeaAnalysisSource('', 'gpt-4.1-mini')).toBe('模型 gpt-4.1-mini')
+    expect(formatAfternoonTeaAnalysisSource('   ', '  ')).toBe('')
+  })
+})
 
 describe('deriveMobileAfternoonTeaPhase', () => {
   it.each([
@@ -677,6 +687,78 @@ describe('AfternoonTeaMobileWorkflow', () => {
     expect(html).toContain('失败 2')
     expect(html).not.toContain('打开系统保存')
     expect(html).not.toContain('sticky bottom-0')
+  })
+
+  it('shows a finished notice while menu parsing is still running', () => {
+    const html = renderWorkflow({
+      orderResult: null,
+      analysisStatus: 'running',
+      itemTitleRegions: [],
+      noticeStatus: 'success',
+      noticeElapsed: 2_000,
+      noticeChannel: '测试渠道',
+      noticeModel: 'gpt-4.1-mini',
+      notices: [{ style: '补给开场', text: '今日汉堡到了🍔' }],
+    })
+
+    expect(html).toContain('正在解析菜单')
+    expect(html).toContain('aria-label="下午茶通知"')
+    expect(html).toContain('今日汉堡到了🍔')
+    expect(html).toContain('渠道 测试渠道 · 模型 gpt-4.1-mini')
+  })
+
+  it('keeps the notice visible on the review step', () => {
+    const html = renderWorkflow({
+      noticeStatus: 'running',
+      notices: [],
+    })
+
+    expect(html).toContain('aria-label="审查工作区"')
+    expect(html).toContain('正在生成通知')
+    expect(html).toContain('正在生成 4 张菜单卡')
+    expect(html.indexOf('aria-label="餐品摆放"')).toBeLessThan(html.indexOf('aria-label="下午茶通知"'))
+  })
+
+  it('marks how later notice cards differ from the first one', () => {
+    const html = renderWorkflow({
+      noticeStatus: 'success',
+      notices: [
+        { style: '补给开场', text: '开场甲\n\n▫️豆腐\n\n收尾甲' },
+        { style: '专场菜单', text: '开场乙\n\n▫️豆腐\n\n收尾乙' },
+      ],
+    })
+
+    expect(html).toContain('基准')
+    expect(html).toContain('相较基准：开场、收尾')
+    expect(html).toContain('data-changed="true"')
+    expect(html.indexOf('aria-label="餐品摆放"')).toBeLessThan(html.indexOf('相较基准：开场、收尾'))
+  })
+
+  it('shows the analysis channel and model while the menu is parsing', () => {
+    const html = renderWorkflow({
+      orderResult: null,
+      analysisStatus: 'running',
+      analysisChannel: '测试渠道',
+      analysisModel: 'gpt-4.1-mini',
+      itemTitleRegions: [],
+    })
+
+    expect(html).toContain('正在解析菜单')
+    expect(html).toContain('aria-label="解析渠道和模型"')
+    expect(html).toContain('渠道 测试渠道 · 模型 gpt-4.1-mini')
+  })
+
+  it('keeps parsed items editable and offers a new photo without another analysis', () => {
+    const reviewHtml = renderWorkflow()
+    const resultHtml = renderWorkflow({
+      batchStartedAt: 10,
+      batchFinishedAt: 20,
+      items: [{ id: 'poster-a', title: '午后茶歇', prompt: 'prompt A', status: 'done', task: task('task-done', 'done', ['image-a']) }],
+    })
+
+    expect(reviewHtml).toContain('更换图片，商品和标题会保留')
+    expect(reviewHtml).not.toContain('商品已列出，标题和贴纸还在生成')
+    expect(resultHtml).toContain('换图再出一批')
   })
 
   it('shows a save preparation action when at least one successful image exists', () => {

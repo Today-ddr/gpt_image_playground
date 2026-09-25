@@ -52,6 +52,34 @@ function normalizeOrderResult(value: unknown): AfternoonTeaOrderResult | null {
   }
 }
 
+function normalizeAfternoonTeaNoticeRecord(record: Partial<AfternoonTeaConversation>) {
+  const noticeCards = Array.isArray(record.noticeCards)
+    ? record.noticeCards.flatMap((item) => {
+      if (!item || typeof item !== 'object') return []
+      const style = normalizeString(item.style)
+      const text = normalizeString(item.text)
+      if (!style || !text) return []
+      return [{ style, text }]
+    })
+    : []
+  const storedStatus = record.noticeStatus
+  const noticeStatus = storedStatus === 'success' || storedStatus === 'error' || storedStatus === 'cancelled'
+    ? storedStatus
+    : noticeCards.length > 0 ? 'success' : 'idle'
+  const noticeElapsed = typeof record.noticeElapsed === 'number' && Number.isFinite(record.noticeElapsed) && record.noticeElapsed >= 0
+    ? record.noticeElapsed
+    : null
+  return {
+    noticeSupplement: typeof record.noticeSupplement === 'string' ? record.noticeSupplement : '',
+    noticeCards,
+    noticeStatus,
+    noticeError: typeof record.noticeError === 'string' ? record.noticeError : '',
+    noticeElapsed,
+    noticeChannel: typeof record.noticeChannel === 'string' ? record.noticeChannel : '',
+    noticeModel: typeof record.noticeModel === 'string' ? record.noticeModel : '',
+  }
+}
+
 function normalizePosterItems(value: unknown): AfternoonTeaPosterBatchItem[] {
   if (!Array.isArray(value)) return []
 
@@ -147,6 +175,7 @@ export function normalizeAfternoonTeaConversations(value: unknown, now = Date.no
         : posterItems,
       batchStartedAt,
       batchFinishedAt,
+      ...normalizeAfternoonTeaNoticeRecord(record),
     }]
   })
 }
@@ -167,6 +196,7 @@ export function createAfternoonTeaSourceImagePatch(
   conversation: AfternoonTeaConversation,
   sourceImageId: string | null,
   sourceImageName: string,
+  aspectRatio?: number,
 ): Pick<AfternoonTeaConversation, 'sourceImageId' | 'sourceImageName' | 'itemTitleRegions'> & Partial<Pick<AfternoonTeaConversation, 'posterItems'>> | null {
   if (isAfternoonTeaConversationFrozen(conversation)) return null
   if (conversation.sourceImageId === sourceImageId && conversation.sourceImageName === sourceImageName) return null
@@ -184,7 +214,7 @@ export function createAfternoonTeaSourceImagePatch(
       itemTitleRegions: [],
     }
   }
-  const itemTitleRegions = createDefaultAfternoonTeaItemTitleRegions(conversation.orderResult.items.length)
+  const itemTitleRegions = createDefaultAfternoonTeaItemTitleRegions(conversation.orderResult.items.length, aspectRatio)
   return {
     sourceImageId,
     sourceImageName,
@@ -316,6 +346,7 @@ export function isEmptyAfternoonTeaConversation(conversation: AfternoonTeaConver
     && !conversation.orderText.trim()
     && !conversation.orderResult
     && conversation.posterItems.length === 0
+    && conversation.noticeCards.length === 0
     && conversation.batchStartedAt == null
     && conversation.batchFinishedAt == null
 }

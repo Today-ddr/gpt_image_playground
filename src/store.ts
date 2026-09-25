@@ -704,6 +704,13 @@ function createAfternoonTeaConversation(titleCount: number, now = Date.now()): A
     posterItems: [],
     batchStartedAt: null,
     batchFinishedAt: null,
+    noticeSupplement: '',
+    noticeCards: [],
+    noticeStatus: 'idle',
+    noticeError: '',
+    noticeElapsed: null,
+    noticeChannel: '',
+    noticeModel: '',
   }
 }
 

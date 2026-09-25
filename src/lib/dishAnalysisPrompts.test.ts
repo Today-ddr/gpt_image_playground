@@ -3,6 +3,7 @@ import {
   buildDishAnalysisSystemPrompt,
   buildDishAnalysisUserPrompt,
   DEFAULT_DISH_SYSTEM_PROMPT,
+  DISH_ANALYSIS_LOCKED_ITEMS_INSTRUCTION,
   DEFAULT_DISH_TITLE_COUNT,
   DEFAULT_DISH_USER_PROMPT,
   getDishAnalysisCandidateCount,
@@ -15,6 +16,9 @@ describe('dish analysis prompts', () => {
     expect(DEFAULT_DISH_USER_PROMPT).toBe('')
     expect(DEFAULT_DISH_SYSTEM_PROMPT).toContain('公司下午茶图片设计助手')
     expect(DEFAULT_DISH_SYSTEM_PROMPT).toContain('整理出用于生成下午茶分享图片的标题和商品贴纸信息')
+    expect(DEFAULT_DISH_SYSTEM_PROMPT).toContain('【商品边界】')
+    expect(DEFAULT_DISH_SYSTEM_PROMPT).toContain('多行菜单必须一行一个商品')
+    expect(DEFAULT_DISH_SYSTEM_PROMPT).toContain('不要为了变短而拆开')
     expect(DEFAULT_DISH_SYSTEM_PROMPT).toContain('【displayName 商品名称】')
     expect(DEFAULT_DISH_SYSTEM_PROMPT).toContain('【tags 贴纸关键词】')
     expect(DEFAULT_DISH_SYSTEM_PROMPT).toContain('生成 {{candidateCount}} 个互不重复、适合放在下午茶分享图片顶部的大标题')
@@ -44,6 +48,15 @@ describe('dish analysis prompts', () => {
   it('replaces candidate count placeholders before title count tokens', () => {
     expect(buildDishAnalysisSystemPrompt('备选 {{candidateCount}}，选用 {{titleCount}}', 4))
       .toBe('备选 10，选用 4')
+  })
+
+  it('locks already segmented items into the request', () => {
+    const system = buildDishAnalysisSystemPrompt('生成 {{titleCount}} 个标题', 2, { lockItems: true })
+    const user = buildDishAnalysisUserPrompt('套餐A：豆腐+豆浆', 2, ['豆腐+豆浆'])
+
+    expect(system).toContain(DISH_ANALYSIS_LOCKED_ITEMS_INSTRUCTION)
+    expect(user).toContain('1. 豆腐+豆浆')
+    expect(user).toContain('不要增删或拆开')
   })
 
   it('builds a user prompt with the numeric title count and trimmed order', () => {
