@@ -255,7 +255,7 @@ export function AfternoonTeaItemPlacement(props: AfternoonTeaItemPlacementProps)
 
   if (!props.imageSrc) {
     return (
-      <section className="min-w-0 overflow-hidden rounded-md border border-gray-200 bg-white dark:border-white/[0.08] dark:bg-white/[0.03]" aria-label="订单商品位置">
+      <section className="min-w-0 overflow-hidden rounded-2xl border border-gray-200 bg-white dark:border-white/[0.08] dark:bg-white/[0.03] sm:rounded-md" aria-label="订单商品位置">
         <div className="border-b border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 dark:border-white/[0.08] dark:text-gray-200">订单商品位置</div>
         <div className="flex aspect-[4/3] items-center justify-center px-4 text-center text-sm text-amber-700 dark:text-amber-300">解析已完成，请粘贴或上传餐品图片</div>
       </section>
@@ -263,7 +263,7 @@ export function AfternoonTeaItemPlacement(props: AfternoonTeaItemPlacementProps)
   }
 
   return (
-    <section className={`min-w-0 max-w-full rounded-md border border-gray-200 bg-white dark:border-white/[0.08] dark:bg-white/[0.03] ${viewMode === 'pin' ? 'overflow-visible' : 'overflow-hidden'}`} aria-label="订单商品位置设置">
+    <section className={`min-w-0 max-w-full rounded-2xl border border-gray-200 bg-white dark:border-white/[0.08] dark:bg-white/[0.03] sm:rounded-md ${viewMode === 'pin' ? 'overflow-visible' : 'overflow-hidden'}`} aria-label="订单商品位置设置">
       <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-2 gap-y-1.5 border-b border-gray-200 px-3 py-2 dark:border-white/[0.08]">
         <span className="hidden min-w-0 text-sm font-medium text-gray-700 sm:inline dark:text-gray-200">订单商品位置</span>
         <div className="ml-auto flex shrink-0 items-center gap-2">

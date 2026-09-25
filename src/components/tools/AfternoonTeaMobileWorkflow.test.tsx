@@ -17,6 +17,7 @@ import {
 } from './AfternoonTeaMobileWorkflow'
 import * as mobileWorkflowHelpers from './AfternoonTeaMobileWorkflow'
 import mobileWorkflowSource from './AfternoonTeaMobileWorkflow.tsx?raw'
+import chromeSource from './toolsMobileChrome.ts?raw'
 
 const noop = () => {}
 
@@ -361,7 +362,9 @@ describe('AfternoonTeaMobileWorkflow', () => {
     expect(resultsHtml).toContain('aria-label="批次结果槽位"')
     expect(resultsHtml).toContain('data-task-card="task-done"')
     expect(mobileWorkflowSource).toContain('sm:px-6')
-    expect(mobileWorkflowSource).toContain('lg:justify-end')
+    expect(mobileWorkflowSource).toContain('TOOLS_MOBILE_ACTION_DOCK_CLASS')
+    expect(chromeSource).toContain('lg:justify-end')
+    expect(chromeSource).toContain('max-lg:rounded-2xl')
     expect(mobileWorkflowSource).toContain('lg:min-w-56')
     expect(mobileWorkflowSource).not.toMatch(/(?:sm|md):grid-cols-\[minmax\(0,0\.9fr\)/)
   })
@@ -373,7 +376,9 @@ describe('AfternoonTeaMobileWorkflow', () => {
     expect(source).toContain('order-3 min-w-0 lg:order-none')
     expect(source).toContain('order-1 min-w-0 space-y-4 lg:order-none')
     expect(source).toContain('aria-label="批次结果槽位"')
-    expect(mobileWorkflowSource).toContain('fixed inset-x-0 bottom-0')
+    expect(chromeSource).toContain('fixed z-30')
+    expect(chromeSource).toContain('max-lg:bottom-[max(1rem,env(safe-area-inset-bottom))]')
+    expect(chromeSource).not.toContain('inset-x-0 bottom-0')
   })
 
   it('offers task details for every materialized result without fabricating one for queued slots', () => {
@@ -409,6 +414,8 @@ describe('AfternoonTeaMobileWorkflow', () => {
     expect(placement).toBeGreaterThan(-1)
     expect(placement).toBeLessThan(posterTitles)
     expect(posterTitles).toBeLessThan(itemMetadata)
+    expect(html).toContain('data-poster-title-layout="paired"')
+    expect(html).toContain('sm:grid-cols-2')
     expect(html).toContain('aria-label="海报标题 01"')
     expect(html).toContain('aria-label="海报标题 02"')
     expect(html).toMatch(/aria-label="海报标题 01"[^>]*class="[^"]*bg-blue-50[^"]*"/)
@@ -627,7 +634,7 @@ describe('AfternoonTeaMobileWorkflow', () => {
 
     expect(classForLabel(html, '餐品海报工作流')).toContain('lg:grid-cols-[minmax(0,1fr)_auto]')
     expect(classForLabel(html, '餐品海报进度')).toMatch(/lg:col-start-1.*lg:row-start-1/)
-    expect(classForLabel(html, '工作流主操作')).toMatch(/fixed inset-x-0 bottom-0.*lg:static.*lg:col-start-2.*lg:row-start-1/)
+    expect(classForLabel(html, '工作流主操作')).toMatch(/fixed z-30.*max-lg:rounded-2xl.*lg:static.*lg:col-start-2.*lg:row-start-1/)
     expect(classForLabel(html, '审查工作区')).toMatch(/lg:col-span-2.*lg:row-start-2/)
     expect((mobileWorkflowSource.match(/aria-label="工作流主操作"/g) ?? [])).toHaveLength(1)
     expect(html).toContain('env(safe-area-inset-bottom)')
@@ -674,6 +681,14 @@ describe('AfternoonTeaMobileWorkflow', () => {
     expect(html).toMatch(/<textarea[^>]*disabled=""[^>]*aria-label="菜单输入"/)
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*aria-label="增加海报数量"/)
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>开始解析<\/button>/)
+  })
+
+  it('keeps the bottom action bar from covering content and enlarges title taps', () => {
+    const html = renderWorkflow()
+
+    expect(html).toContain('max-lg:pb-[calc(11rem+env(safe-area-inset-bottom))]')
+    expect(html).toContain('min-h-11 touch-manipulation rounded-full')
+    expect(html).toContain('afternoon-phase-in')
   })
 
   it('keeps one stable result slot per item and hides the save action when all outputs fail', () => {
@@ -730,6 +745,8 @@ describe('AfternoonTeaMobileWorkflow', () => {
 
     expect(html).toContain('基准')
     expect(html).toContain('相较基准：开场、收尾')
+    expect(html).toContain('xl:grid-cols-4')
+    expect(html).toContain('notice-card-rise')
     expect(html).toContain('data-changed="true"')
     expect(html.indexOf('aria-label="餐品摆放"')).toBeLessThan(html.indexOf('相较基准：开场、收尾'))
   })
@@ -759,6 +776,29 @@ describe('AfternoonTeaMobileWorkflow', () => {
     expect(reviewHtml).toContain('更换图片，商品和标题会保留')
     expect(reviewHtml).not.toContain('商品已列出，标题和贴纸还在生成')
     expect(resultHtml).toContain('换图再出一批')
+  })
+
+  it('offers a new photo once one poster is ready, before the rest finish', () => {
+    const ready = renderWorkflow({
+      batchStartedAt: 10,
+      batchFinishedAt: null,
+      items: [
+        { id: 'poster-a', title: '午后茶歇', prompt: 'prompt A', status: 'done', task: task('task-done', 'done', ['image-a']) },
+        { id: 'poster-b', title: '暖心时光', prompt: 'prompt B', status: 'running', task: task('task-running', 'running') },
+      ],
+    })
+    const waiting = renderWorkflow({
+      batchStartedAt: 10,
+      batchFinishedAt: null,
+      items: [
+        { id: 'poster-a', title: '午后茶歇', prompt: 'prompt A', status: 'running', task: task('task-running', 'running') },
+      ],
+    })
+
+    expect(ready).toContain('生成中 1 / 2')
+    expect(ready).toContain('换图再出一批')
+    expect(waiting).toContain('生成中 0 / 1')
+    expect(waiting).not.toContain('换图再出一批')
   })
 
   it('shows a save preparation action when at least one successful image exists', () => {

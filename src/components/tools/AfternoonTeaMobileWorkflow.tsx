@@ -26,6 +26,7 @@ import { AfternoonTeaNoticePanel } from './AfternoonTeaNoticePanel'
 import type { AfternoonTeaNotice, AfternoonTeaNoticeStatus } from '../../lib/afternoonTeaNotice'
 import { resolveAfternoonTeaPlacementSelection } from '../../lib/afternoonTeaTitlePlacement'
 import { resolveAfternoonTeaTitleCandidates } from '../../lib/dishAnalysisPrompts'
+import { TOOLS_MOBILE_ACTION_DOCK_CLASS, toolsMobileFieldClass, toolsMobilePrimaryButtonClass } from './toolsMobileChrome'
 
 export type MobileAfternoonTeaPhase = 'input' | 'analyzing' | 'review' | 'generating' | 'results'
 
@@ -362,12 +363,12 @@ function AfternoonTeaSourceImagePickers(props: {
   }
   return (
     <div className="mt-2 grid grid-cols-2 gap-2">
-      <label className={`flex min-h-11 touch-manipulation items-center justify-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 text-sm font-medium text-blue-700 has-[:focus-visible]:outline-none has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-blue-500 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-300 ${props.disabled ? 'pointer-events-none opacity-50' : ''}`}>
+      <label className={`flex min-h-12 touch-manipulation items-center justify-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3 text-sm font-medium text-blue-700 shadow-sm active:scale-[0.98] has-[:focus-visible]:outline-none has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-blue-500 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-300 sm:min-h-11 sm:rounded-md sm:shadow-none ${props.disabled ? 'pointer-events-none opacity-50' : ''}`}>
         <CameraIcon className="h-5 w-5" />
         <span>拍照</span>
         <input type="file" accept="image/*" capture="environment" disabled={props.disabled} onChange={handleImageInputChange} className="sr-only" aria-label="拍照" />
       </label>
-      <label className={`flex min-h-11 touch-manipulation items-center justify-center gap-2 rounded-md border border-gray-200 bg-white px-3 text-sm font-medium text-gray-700 has-[:focus-visible]:outline-none has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-blue-500 dark:border-white/[0.1] dark:bg-white/[0.04] dark:text-gray-200 ${props.disabled ? 'pointer-events-none opacity-50' : ''}`}>
+      <label className={`flex min-h-12 touch-manipulation items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-3 text-sm font-medium text-gray-700 shadow-sm active:scale-[0.98] has-[:focus-visible]:outline-none has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-blue-500 dark:border-white/[0.1] dark:bg-white/[0.04] dark:text-gray-200 sm:min-h-11 sm:rounded-md sm:shadow-none ${props.disabled ? 'pointer-events-none opacity-50' : ''}`}>
         <ImportIcon className="h-5 w-5" />
         <span>照片</span>
         <input type="file" accept="image/*" disabled={props.disabled} onChange={handleImageInputChange} className="sr-only" aria-label="选择照片" />
@@ -434,7 +435,8 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
   useEffect(() => () => clipboardCoordinator.invalidate(), [clipboardCoordinator])
   useEffect(() => {
     if (previousPhaseRef.current === 'analyzing' && phase === 'review') {
-      reviewRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      reviewRef.current?.scrollIntoView({ behavior: reduceMotion || window.innerWidth < 1024 ? 'auto' : 'smooth', block: 'start' })
     }
     previousPhaseRef.current = phase
   }, [phase])
@@ -800,36 +802,36 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
   const steps = ['素材', '审查', '生成', '保存']
 
   return (
-    <div className="min-w-0 px-3 py-3 sm:px-6 sm:py-7 lg:grid lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end lg:gap-x-6" data-mobile-afternoon-tea-workflow aria-label="餐品海报工作流">
+    <div className="min-w-0 px-0 pt-1 max-lg:pb-[calc(11rem+env(safe-area-inset-bottom))] sm:px-6 sm:pt-7 lg:grid lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end lg:gap-x-6 lg:pb-7" data-mobile-afternoon-tea-workflow aria-label="餐品海报工作流">
       <div className="mb-3 sm:mb-4 lg:col-start-1 lg:row-start-1" aria-label="餐品海报进度">
         <span className="sr-only" aria-live="polite">当前步骤：{steps[stepIndex]}，{stepIndex + 1}/4</span>
-        <div className="grid grid-cols-4 gap-1.5" aria-hidden="true">
+        <div className="grid grid-cols-4 gap-1 rounded-xl border border-gray-200 bg-gray-100/70 p-1 dark:border-white/[0.08] dark:bg-white/[0.04] sm:gap-1.5 sm:rounded-none sm:border-0 sm:bg-transparent sm:p-0 dark:sm:bg-transparent" aria-hidden="true">
           {steps.map((label, index) => (
             <div key={label} className="min-w-0">
-              <div className={`h-1 rounded-full ${index <= stepIndex ? 'bg-blue-600' : 'bg-gray-200 dark:bg-white/[0.1]'}`} />
-              <div className={`mt-1 text-center text-[11px] ${index === stepIndex ? 'font-medium text-blue-700 dark:text-blue-300' : 'text-gray-400 dark:text-gray-500'}`}>{label}</div>
+              <div className={`hidden h-1 rounded-full sm:block ${index <= stepIndex ? 'bg-blue-600' : 'bg-gray-200 dark:bg-white/[0.1]'}`} />
+              <div className={`truncate rounded-lg px-1 py-1.5 text-center text-[11px] sm:mt-1 sm:rounded-none sm:bg-transparent sm:px-0 sm:py-0 sm:shadow-none ${index === stepIndex ? 'bg-white font-medium text-gray-900 shadow-sm dark:bg-white/10 dark:text-white sm:text-blue-700 dark:sm:text-blue-300' : index < stepIndex ? 'font-medium text-blue-700 dark:text-blue-300 sm:font-normal sm:text-gray-400 dark:sm:text-gray-500' : 'text-gray-400 dark:text-gray-500'}`}>{label}</div>
             </div>
           ))}
         </div>
       </div>
 
       {(phase === 'input' || phase === 'analyzing') && (
-        <div className="space-y-3 pb-3 sm:space-y-4 lg:col-span-2 lg:row-start-2 lg:grid lg:grid-cols-[minmax(0,0.9fr)_minmax(360px,1.1fr)] lg:items-start lg:gap-6 lg:space-y-0" aria-label="素材工作区">
+        <div className="afternoon-phase-in space-y-3 pb-3 sm:space-y-4 lg:col-span-2 lg:row-start-2 lg:grid lg:grid-cols-[minmax(0,0.9fr)_minmax(360px,1.1fr)] lg:items-start lg:gap-6 lg:space-y-0" aria-label="素材工作区">
           <section aria-label="餐品图片">
             <div className="mb-2 flex items-center justify-between gap-3">
               <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">餐品图片</h2>
               {props.imageDataUrl && (
-                <button type="button" onClick={props.onRemoveImage} disabled={imageLocked} className="flex h-11 w-11 items-center justify-center rounded-md text-gray-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-50" aria-label="移除餐品图片">
+                <button type="button" onClick={props.onRemoveImage} disabled={imageLocked} className="flex h-11 w-11 items-center justify-center rounded-xl text-gray-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-50" aria-label="移除餐品图片">
                   <CloseIcon className="h-5 w-5" />
                 </button>
               )}
             </div>
             {props.imageDataUrl ? (
-              <div className="flex max-h-[30svh] min-h-36 items-center justify-center overflow-hidden rounded-md border border-gray-200 bg-gray-50 dark:border-white/[0.08] dark:bg-black/20 sm:max-h-[38svh] sm:min-h-44">
+              <div className="flex max-h-[30svh] min-h-36 items-center justify-center overflow-hidden rounded-2xl border border-gray-200 bg-gray-50 dark:border-white/[0.08] dark:bg-black/20 sm:max-h-[38svh] sm:min-h-44 sm:rounded-md">
                 <img src={props.imageDataUrl} alt="待解析餐品" className="max-h-[30svh] w-full object-contain sm:max-h-[38svh]" />
               </div>
             ) : (
-              <div className="flex aspect-[4/3] items-center justify-center rounded-md border border-dashed border-gray-300 bg-gray-50/60 px-4 text-center text-sm text-gray-500 dark:border-white/[0.12] dark:bg-white/[0.02] dark:text-gray-400">
+              <div className="flex h-36 items-center justify-center rounded-2xl border border-dashed border-gray-300 bg-gray-50/60 px-4 text-center text-sm text-gray-500 dark:border-white/[0.12] dark:bg-white/[0.02] dark:text-gray-400 sm:h-auto sm:aspect-[4/3] sm:rounded-md">
                 {props.imageLoading ? '正在读取图片...' : props.imageMissing ? '原图不可用，请重新选择' : '可先解析菜单，稍后再贴图'}
               </div>
             )}
@@ -841,7 +843,7 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
               <div className="mb-2 flex items-center justify-between gap-3">
                 <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">菜单内容</h2>
                 {clipboardAvailable && (
-                  <button type="button" onClick={() => void handlePaste()} disabled={locked} className="flex min-h-11 items-center gap-1.5 rounded-md px-2 text-sm font-medium text-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-50 dark:text-blue-300">
+                  <button type="button" onClick={() => void handlePaste()} disabled={locked} className="flex min-h-11 items-center gap-1.5 rounded-xl px-2.5 text-sm font-medium text-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-50 dark:text-blue-300">
                     <PasteIcon className="h-4 w-4" />
                     粘贴
                   </button>
@@ -850,7 +852,7 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
               <textarea value={props.userPrompt} onChange={(event) => {
                 clipboardCoordinator.invalidate()
                 props.onUserPromptChange(event.target.value)
-              }} disabled={locked} rows={7} className="min-h-28 w-full resize-y rounded-md border border-gray-200 bg-white px-3 py-2.5 text-base leading-relaxed text-gray-900 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:opacity-60 dark:border-white/[0.1] dark:bg-white/[0.03] dark:text-gray-100 dark:focus:ring-blue-500/10 sm:min-h-40" aria-label="菜单输入" />
+              }} disabled={locked} rows={7} className={`min-h-28 resize-y px-4 py-3 text-base leading-relaxed sm:min-h-40 ${toolsMobileFieldClass}`} aria-label="菜单输入" />
               {clipboardError && <div role="alert" className="mt-2 text-sm text-amber-700 dark:text-amber-300">{clipboardError}</div>}
             </section>
 
@@ -862,14 +864,14 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
                 onChange={(event) => props.onNoticeSupplementChange?.(event.target.value)}
                 disabled={locked}
                 placeholder="例如：汉堡包、奶茶、霸王茶姬"
-                className="min-h-11 w-full rounded-md border border-gray-200 bg-white px-3 text-base text-gray-900 outline-none placeholder:text-gray-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:opacity-60 dark:border-white/[0.1] dark:bg-white/[0.03] dark:text-gray-100 dark:placeholder:text-gray-500 dark:focus:ring-blue-500/10"
+                className={`min-h-12 px-4 text-base sm:min-h-11 ${toolsMobileFieldClass}`}
                 aria-label="补充信息"
               />
             </section>
 
             <section aria-label="海报数量">
               <div className="mb-2 text-sm font-semibold text-gray-900 dark:text-gray-100">海报数量</div>
-              <div className="grid h-12 grid-cols-[48px_1fr_48px] overflow-hidden rounded-md border border-gray-200 bg-white dark:border-white/[0.1] dark:bg-white/[0.03] sm:max-w-56">
+              <div className="grid h-14 grid-cols-[48px_1fr_48px] overflow-hidden rounded-2xl border border-gray-200/80 bg-white shadow-sm dark:border-white/[0.08] dark:bg-white/[0.03] sm:h-12 sm:max-w-56 sm:rounded-md sm:shadow-none dark:sm:border-white/[0.1]">
                 <button type="button" onClick={() => props.onTitleCountChange(Math.max(1, props.titleCount - 1))} disabled={locked || props.titleCount <= 1} className="flex min-h-11 items-center justify-center border-r border-gray-200 text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500 disabled:opacity-35 dark:border-white/[0.1] dark:text-gray-200" aria-label="减少海报数量">
                   <MinusIcon className="h-5 w-5" />
                 </button>
@@ -880,7 +882,7 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
               </div>
             </section>
 
-            <details className="group border-y border-gray-200 py-2 dark:border-white/[0.08]">
+            <details className="group rounded-2xl border border-gray-200 px-3 py-1 dark:border-white/[0.08] sm:rounded-none sm:border-x-0 sm:border-y sm:px-0 sm:py-2">
               <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between text-sm text-gray-600 marker:hidden dark:text-gray-300">
                 <span>高级设置</span>
                 <ChevronDownIcon className="h-4 w-4 transition-transform group-open:rotate-180" />
@@ -890,11 +892,11 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
                   <span>系统提示词</span>
                   <button type="button" onClick={props.onResetSystemPrompt} disabled={locked} className="min-h-11 px-2 text-blue-700 disabled:opacity-50 dark:text-blue-300">恢复默认</button>
                 </div>
-                <textarea value={props.systemPrompt} onChange={(event) => props.onSystemPromptChange(event.target.value)} disabled={locked} rows={8} className="w-full resize-y rounded-md border border-gray-200 bg-white px-3 py-2.5 text-sm leading-relaxed text-gray-800 outline-none focus:border-blue-400 disabled:opacity-60 dark:border-white/[0.1] dark:bg-white/[0.03] dark:text-gray-100" />
+                <textarea value={props.systemPrompt} onChange={(event) => props.onSystemPromptChange(event.target.value)} disabled={locked} rows={8} className={`resize-y px-4 py-3 text-sm leading-relaxed ${toolsMobileFieldClass}`} />
               </div>
             </details>
 
-            {props.error && <div role="alert" className="rounded-md border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-600 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300">{props.error}</div>}
+            {props.error && <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-600 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300 sm:rounded-md">{props.error}</div>}
             <div className="flex items-start justify-between gap-3 text-xs text-gray-500 dark:text-gray-400" aria-live="polite">
               <div className="min-w-0">
                 <div>{phase === 'analyzing' ? '正在解析菜单' : '等待解析'}</div>
@@ -905,19 +907,18 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
               <span className="shrink-0 tabular-nums">耗时 {formatElapsed(props.analysisElapsed)}</span>
             </div>
           </div>
-          {showNotice && <div className="lg:col-span-2">{noticePanel}</div>}
         </div>
       )}
 
       {phase === 'review' && props.orderResult && (
-        <div ref={reviewRef} className="space-y-4 pb-3 scroll-mt-20 sm:space-y-5 lg:col-span-2 lg:row-start-2 lg:grid lg:grid-cols-[minmax(0,1.05fr)_minmax(300px,0.95fr)] lg:items-start lg:gap-6 lg:space-y-0" aria-label="审查工作区">
+        <div ref={reviewRef} className="afternoon-phase-in space-y-4 pb-3 scroll-mt-20 sm:space-y-5 lg:col-span-2 lg:row-start-2 lg:grid lg:grid-cols-[minmax(0,1.05fr)_minmax(300px,0.95fr)] lg:items-start lg:gap-6 lg:space-y-0" aria-label="审查工作区">
           <section aria-label="餐品摆放">
             <div className="mb-2 flex items-center justify-between gap-3">
               <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100">餐品摆放</h2>
               <div className="flex items-center gap-2">
                 <span className="text-xs text-gray-500 dark:text-gray-400">{props.orderResult.items.length} 个餐品</span>
                 {props.imageDataUrl && (
-                  <button type="button" onClick={props.onRemoveImage} disabled={imageLocked} className="flex h-11 w-11 items-center justify-center rounded-md text-gray-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-50" aria-label="移除餐品图片">
+                  <button type="button" onClick={props.onRemoveImage} disabled={imageLocked} className="flex h-11 w-11 items-center justify-center rounded-xl text-gray-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-50" aria-label="移除餐品图片">
                     <CloseIcon className="h-5 w-5" />
                   </button>
                 )}
@@ -941,10 +942,10 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
             <section aria-label="海报标题">
               <h2 className="mb-2 text-sm font-semibold text-gray-900 dark:text-gray-100">海报标题</h2>
               <p className="mb-2 text-xs text-gray-500 dark:text-gray-400">点备选即可替换当前标题，选完自动到下一条</p>
-              <div className="divide-y divide-gray-200 border-y border-gray-200 dark:divide-white/[0.08] dark:border-white/[0.08]">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2" data-poster-title-layout="paired">
                 {props.orderResult.titles.map((title, index) => (
-                  <div key={`${index}-${title}`} role="group" aria-label={`海报标题 ${String(index + 1).padStart(2, '0')}`} className={`flex min-h-16 min-w-0 items-center gap-2 bg-blue-50 px-2 py-2 dark:bg-blue-500/10 ${posterTitleFocusIndex === index ? 'ring-2 ring-inset ring-blue-400 dark:ring-blue-500/60' : ''}`}>
-                    <button type="button" onClick={() => setPosterTitleFocusIndex(index)} className="flex h-11 w-7 shrink-0 items-center justify-center rounded-md text-xs font-semibold tabular-nums text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-blue-300" aria-label={`选择海报标题槽 ${index + 1}`} aria-pressed={posterTitleFocusIndex === index}>
+                  <div key={`${index}-${title}`} role="group" aria-label={`海报标题 ${String(index + 1).padStart(2, '0')}`} className={`flex min-h-16 min-w-0 items-center gap-2 rounded-xl border border-blue-100 bg-blue-50 px-2 py-2 dark:border-blue-500/20 dark:bg-blue-500/10 sm:rounded-md ${props.orderResult?.titles.length === 1 ? 'sm:col-span-2' : ''} ${posterTitleFocusIndex === index ? 'ring-2 ring-inset ring-blue-400 dark:ring-blue-500/60' : ''}`}>
+                    <button type="button" onClick={() => setPosterTitleFocusIndex(index)} className="flex h-11 w-11 shrink-0 touch-manipulation items-center justify-center rounded-md text-xs font-semibold tabular-nums text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-blue-300" aria-label={`选择海报标题槽 ${index + 1}`} aria-pressed={posterTitleFocusIndex === index}>
                     <span className="w-7 shrink-0 text-xs font-semibold tabular-nums text-blue-600 dark:text-blue-300">{String(index + 1).padStart(2, '0')}</span>
                     </button>
                     {editingPosterTitle === index ? (
@@ -982,7 +983,7 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
                         aria-pressed={isCurrent}
                         aria-label={`备选标题 ${candidate}`}
                         onClick={() => handleAfternoonTeaTitleCandidate(candidate)}
-                        className={`min-h-9 rounded-full px-3 text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50 ${
+                        className={`min-h-11 touch-manipulation rounded-full px-3.5 text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 ${
                           isCurrent
                             ? 'bg-blue-600 text-white'
                             : isUsedElsewhere
@@ -1000,9 +1001,9 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
 
           <section aria-label="餐品与标签">
             <h2 className="mb-2 text-sm font-semibold text-gray-900 dark:text-gray-100">餐品与标签</h2>
-            <div className="divide-y divide-gray-200 border-y border-gray-200 dark:divide-white/[0.08] dark:border-white/[0.08]">
+            <div className="space-y-2 sm:space-y-0 sm:divide-y sm:divide-gray-200 sm:border-y sm:border-gray-200 dark:sm:divide-white/[0.08] dark:sm:border-white/[0.08]">
               {props.orderResult.items.map((item, index) => (
-                <div key={`${index}-${item.displayName}`} className={`min-h-14 min-w-0 py-1.5 ${placementSelectedIndex === index ? 'bg-blue-50 dark:bg-blue-500/10' : ''}`}>
+                <div key={`${index}-${item.displayName}`} className={`min-h-14 min-w-0 rounded-xl border border-gray-200 bg-white px-2 py-1.5 dark:border-white/[0.08] dark:bg-gray-900 sm:rounded-none sm:border-0 sm:bg-transparent sm:px-0 dark:sm:bg-transparent ${placementSelectedIndex === index ? 'border-blue-300 bg-blue-50 dark:border-blue-500/40 dark:bg-blue-500/10' : ''}`}>
                   {editingItemName === index ? (
                     <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end" onBlur={(event) => {
                       if (event.currentTarget.contains(event.relatedTarget as Node | null)) return
@@ -1033,7 +1034,7 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
                     </div>
                   ) : (
                     <div className="flex min-w-0 items-center gap-2">
-                      <button type="button" onClick={() => setPlacementSelectedIndex(index)} className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500" aria-label={`定位餐品 ${index + 1}`} aria-pressed={placementSelectedIndex === index}>
+                      <button type="button" onClick={() => setPlacementSelectedIndex(index)} className="flex min-h-11 min-w-0 flex-1 touch-manipulation items-center gap-2 rounded-md px-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500" aria-label={`定位餐品 ${index + 1}`} aria-pressed={placementSelectedIndex === index}>
                         <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-blue-600 text-[11px] font-semibold tabular-nums text-white">{index + 1}</span>
                         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5 py-1">
                         <span className="min-w-0 break-words text-sm font-medium text-gray-900 dark:text-gray-100">{itemNameDrafts[index] ?? item.displayName}</span>
@@ -1055,21 +1056,20 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
             </div>
           </section>
 
-          <details className="group border-y border-gray-200 py-2 dark:border-white/[0.08]">
+          <details className="group rounded-2xl border border-gray-200 px-3 py-1 dark:border-white/[0.08] sm:rounded-none sm:border-x-0 sm:border-y sm:px-0 sm:py-2">
             <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between text-sm text-gray-600 marker:hidden dark:text-gray-300">
               <span>原始素材</span>
               <ChevronDownIcon className="h-4 w-4 text-gray-400 transition-transform group-open:rotate-180" />
             </summary>
             <div className="space-y-3 pb-2 pt-2">
-              {props.imageDataUrl && <img src={props.imageDataUrl} alt="原始餐品" className="max-h-52 w-full rounded-md bg-gray-50 object-contain dark:bg-black/20" />}
-              <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-md bg-gray-50 p-3 font-sans text-sm leading-relaxed text-gray-600 dark:bg-white/[0.03] dark:text-gray-300">{props.userPrompt}</pre>
-              <button type="button" onClick={props.onReparse} disabled={locked} className="min-h-11 rounded-md border border-gray-300 bg-white px-3 text-sm font-medium text-gray-700 disabled:opacity-50 dark:border-white/[0.1] dark:bg-white/[0.04] dark:text-gray-200">修改素材</button>
+              {props.imageDataUrl && <img src={props.imageDataUrl} alt="原始餐品" className="max-h-52 w-full rounded-xl bg-gray-50 object-contain dark:bg-black/20 sm:rounded-md" />}
+              <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-xl bg-gray-50 p-3 font-sans text-sm leading-relaxed text-gray-600 dark:bg-white/[0.03] dark:text-gray-300 sm:rounded-md">{props.userPrompt}</pre>
+              <button type="button" onClick={props.onReparse} disabled={locked} className="min-h-11 rounded-xl border border-gray-200 bg-white px-3 text-sm font-medium text-gray-700 disabled:opacity-50 dark:border-white/[0.1] dark:bg-white/[0.04] dark:text-gray-200 sm:rounded-md">修改素材</button>
             </div>
           </details>
 
-            {(reviewError || props.pageError) && <div role="alert" className="rounded-md border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-600 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300">{reviewError || props.pageError}</div>}
+            {(reviewError || props.pageError) && <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-600 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300 sm:rounded-md">{reviewError || props.pageError}</div>}
             <div className="sr-only" aria-live="polite">审查 {props.orderResult.titles.length} 个海报标题和 {props.orderResult.items.length} 个餐品</div>
-            {showNotice && <div className="lg:col-span-2">{noticePanel}</div>}
           </div>
         </div>
       )}
@@ -1077,7 +1077,7 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
       {(phase === 'generating' || phase === 'results') && (
         <div
           ref={generateSplitContainerRef}
-          className={`flex flex-col gap-3 pb-4 sm:gap-4 lg:col-span-2 lg:row-start-2 lg:flex-row lg:items-stretch lg:gap-0 lg:pb-3 ${generateSplitDragging ? 'lg:select-none' : ''}`}
+          className={`afternoon-phase-in flex flex-col gap-3 pb-4 sm:gap-4 lg:col-span-2 lg:row-start-2 lg:flex-row lg:items-stretch lg:gap-0 lg:pb-3 ${generateSplitDragging ? 'lg:select-none' : ''}`}
           aria-label="生成与保存工作区"
         >
           {/* 移动端先结果后预览；桌面左右分栏 + 中间可拖拽调整宽度 */}
@@ -1093,7 +1093,7 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
                   <span className="shrink-0 text-xs tabular-nums text-gray-500 dark:text-gray-400" aria-label={`第 ${currentResultSlotNumber} 张，已出 ${completionOrderNumbers.size} 张`}>第 {currentResultSlotNumber} 张 · 已出 {completionOrderNumbers.size} 张</span>
                 )}
               </div>
-              <div className="relative flex min-h-40 items-center justify-center overflow-hidden rounded-md bg-gray-100 dark:bg-black/30 sm:min-h-72" onTouchStart={(event) => { touchStartXRef.current = event.touches[0]?.clientX ?? null }} onTouchEnd={handleTouchEnd}>
+              <div className="relative flex min-h-40 items-center justify-center overflow-hidden rounded-2xl bg-gray-100 dark:bg-black/30 sm:min-h-72 sm:rounded-md" onTouchStart={(event) => { touchStartXRef.current = event.touches[0]?.clientX ?? null }} onTouchEnd={handleTouchEnd}>
                 {selectedImageSrc ? (
                   <button type="button" onClick={() => {
                     if (currentResultSlot) dismissFreshSlot(currentResultSlot.key)
@@ -1112,7 +1112,7 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
                       void handleCopyCurrentPoster()
                     }}
                     disabled={copying || (copyQueue.mode === 'current' && !selectedImageSrc)}
-                    className="absolute right-2 top-2 z-20 flex min-h-11 items-center gap-1.5 rounded-md bg-white/95 px-3 text-sm font-medium text-gray-800 shadow-sm ring-1 ring-black/5 backdrop-blur focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-gray-900/90 dark:text-gray-100 dark:ring-white/10"
+                    className="absolute right-2 top-2 z-20 flex min-h-11 items-center gap-1.5 rounded-xl bg-white/95 px-3 text-sm font-medium text-gray-800 shadow-sm ring-1 ring-black/5 backdrop-blur focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-gray-900/90 dark:text-gray-100 dark:ring-white/10"
                     aria-label={copyQueue.mode === 'next' ? '复制下一张海报图片' : '复制当前海报图片'}
                   >
                     <CopyIcon className="h-4 w-4" />
@@ -1121,10 +1121,10 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
                 )}
                 {availableCandidates.length > 1 && (
                   <>
-                    <button type="button" onClick={() => moveSelection(-1)} className="absolute left-1 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-md bg-black/45 text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white" aria-label="上一张海报">
+                    <button type="button" onClick={() => moveSelection(-1)} className="absolute left-1 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-black/45 text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white" aria-label="上一张海报">
                       <ChevronLeftIcon className="h-5 w-5" />
                     </button>
-                    <button type="button" onClick={() => moveSelection(1)} className="absolute right-1 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-md bg-black/45 text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white" aria-label="下一张海报">
+                    <button type="button" onClick={() => moveSelection(1)} className="absolute right-1 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-black/45 text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white" aria-label="下一张海报">
                       <ChevronRightIcon className="h-5 w-5" />
                     </button>
                   </>
@@ -1139,7 +1139,7 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
                     <button key={candidate.itemId} type="button" onClick={() => {
                       if (slot) dismissFreshSlot(slot.key)
                       setSelectedItemId(candidate.itemId)
-                    }} className={`relative h-14 w-14 shrink-0 overflow-hidden rounded-md border-2 bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:bg-black/20 sm:h-16 sm:w-16 ${candidate.itemId === selectedItemId ? 'border-blue-600' : 'border-transparent'}`} aria-label={`选择海报 ${candidate.title}`} aria-pressed={candidate.itemId === selectedItemId}>
+                    }} className={`relative h-14 w-14 shrink-0 overflow-hidden rounded-xl border-2 bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:bg-black/20 sm:h-16 sm:w-16 sm:rounded-md ${candidate.itemId === selectedItemId ? 'border-blue-500' : 'border-transparent'}`} aria-label={`选择海报 ${candidate.title}`} aria-pressed={candidate.itemId === selectedItemId}>
                       {thumbnails[candidate.imageId] ? <img src={thumbnails[candidate.imageId]} alt="" className="h-full w-full object-cover" /> : <span className="text-xs text-gray-400">{slotNumber || candidateIndex + 1}</span>}
                       {slotNumber > 0 && <span className="absolute left-0.5 top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-blue-600 px-1 text-[10px] font-semibold text-white">{slotNumber}</span>}
                       {isFresh && <span className="absolute right-0.5 top-0.5 h-2 w-2 rounded-full bg-blue-500" aria-label="新" />}
@@ -1202,7 +1202,7 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
               : undefined}
           >
             <section aria-label="生成状态">
-              <div className="grid grid-cols-3 gap-x-3 gap-y-1 border-y border-gray-200 py-3 text-xs text-gray-600 dark:border-white/[0.08] dark:text-gray-300" aria-live="polite">
+              <div className="grid grid-cols-3 gap-x-3 gap-y-1 rounded-2xl border border-gray-200 bg-white/80 px-3 py-3 text-xs text-gray-600 dark:border-white/[0.08] dark:bg-gray-900/80 dark:text-gray-300 sm:rounded-none sm:border-x-0 sm:bg-transparent dark:sm:bg-transparent" aria-live="polite">
                 <span>总数 {resultSlots.length}</span>
                 <span>完成 {counters.done}</span>
                 <span>失败 {counters.error}</span>
@@ -1243,7 +1243,7 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
                     />
                   </div>
                 ) : (
-                  <div key={slot.key} data-mobile-result-slot={slot.itemId} data-result-slot-number={completionOrderNumbers.get(slot.key) || undefined} className="relative flex min-h-14 min-w-0 items-center gap-2 rounded-md border border-gray-200 px-3 py-2 dark:border-white/[0.08]">
+                  <div key={slot.key} data-mobile-result-slot={slot.itemId} data-result-slot-number={completionOrderNumbers.get(slot.key) || undefined} className="relative flex min-h-14 min-w-0 items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 dark:border-white/[0.08] dark:bg-gray-900 sm:rounded-md sm:bg-transparent dark:sm:bg-transparent">
                     {completionOrderNumbers.has(slot.key) && (
                       <>
                         <span className="sr-only">第 {completionOrderNumbers.get(slot.key)} 张</span>
@@ -1264,15 +1264,15 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
               </div>
             </section>
 
-            {(props.pageError || saveStatus) && <div role={props.pageError || saveStatus.startsWith('无法') ? 'alert' : 'status'} className={`rounded-md px-3 py-2.5 text-sm ${props.pageError || saveStatus.startsWith('无法') ? 'border border-red-200 bg-red-50 text-red-600 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300' : 'bg-gray-100 text-gray-600 dark:bg-white/[0.05] dark:text-gray-300'}`}>{props.pageError || saveStatus}</div>}
+            {(props.pageError || saveStatus) && <div role={props.pageError || saveStatus.startsWith('无法') ? 'alert' : 'status'} className={`rounded-xl px-3 py-2.5 text-sm sm:rounded-md ${props.pageError || saveStatus.startsWith('无法') ? 'border border-red-200 bg-red-50 text-red-600 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300' : 'bg-gray-100 text-gray-600 dark:bg-white/[0.05] dark:text-gray-300'}`}>{props.pageError || saveStatus}</div>}
 
-            <details className="group border-y border-gray-200 py-2 dark:border-white/[0.08]">
+            <details className="group rounded-2xl border border-gray-200 px-3 py-1 dark:border-white/[0.08] sm:rounded-none sm:border-x-0 sm:border-y sm:px-0 sm:py-2">
               <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between text-sm text-gray-600 marker:hidden dark:text-gray-300">
                 <span>生成详情</span>
                 <ChevronDownIcon className="h-4 w-4 text-gray-400 transition-transform group-open:rotate-180" />
               </summary>
               <div className="space-y-3 pb-2 pt-2">
-                {props.imageDataUrl && <img src={props.imageDataUrl} alt="生成原图" className="max-h-48 w-full rounded-md bg-gray-50 object-contain dark:bg-black/20" />}
+                {props.imageDataUrl && <img src={props.imageDataUrl} alt="生成原图" className="max-h-48 w-full rounded-xl bg-gray-50 object-contain dark:bg-black/20 sm:rounded-md" />}
                 {props.items.map((item) => (
                   <details key={item.id} className="border-t border-gray-200 py-1 first:border-0 dark:border-white/[0.08]">
                     <summary className="flex min-h-11 cursor-pointer items-center break-words text-sm font-medium text-gray-700 dark:text-gray-200">{item.title}</summary>
@@ -1285,37 +1285,44 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
         </div>
       )}
 
-      {(phase !== 'results' || availableCandidates.length > 0 || Boolean(props.orderResult)) && <div className="fixed inset-x-0 bottom-0 z-30 border-t border-gray-200 bg-white/95 px-3 pt-2.5 pb-[calc(0.65rem+env(safe-area-inset-bottom))] shadow-[0_-8px_24px_rgba(0,0,0,0.06)] backdrop-blur dark:border-white/[0.08] dark:bg-gray-950/95 dark:shadow-[0_-8px_24px_rgba(0,0,0,0.35)] sm:px-6 lg:static lg:inset-auto lg:col-start-2 lg:row-start-1 lg:mx-0 lg:mb-4 lg:mt-0 lg:flex lg:justify-end lg:border-t-0 lg:bg-transparent lg:px-0 lg:py-0 lg:shadow-none lg:backdrop-blur-none dark:lg:bg-transparent" aria-label="工作流主操作">
+      {showNotice && <div className="afternoon-phase-in lg:col-span-2 lg:row-start-3">{noticePanel}</div>}
+
+      {(phase !== 'results' || availableCandidates.length > 0 || Boolean(props.orderResult)) && <div className={TOOLS_MOBILE_ACTION_DOCK_CLASS} aria-label="工作流主操作">
         {phase === 'input' && (
           <button type="button" onClick={() => {
             clipboardCoordinator.invalidate()
             props.onSubmit()
-          }} disabled={!props.configured || locked || !props.userPrompt.trim()} className="min-h-12 w-full touch-manipulation rounded-xl bg-blue-600 px-4 text-base font-semibold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 active:scale-[0.99] lg:w-auto lg:min-w-56 lg:rounded-md">开始解析</button>
+          }} disabled={!props.configured || locked || !props.userPrompt.trim()} className={toolsMobilePrimaryButtonClass}>开始解析</button>
         )}
         {phase === 'analyzing' && (
-          <button type="button" onClick={props.onCancel} className="min-h-12 w-full touch-manipulation rounded-xl border border-gray-300 bg-white px-4 text-base font-semibold text-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 active:scale-[0.99] dark:border-white/[0.12] dark:bg-white/[0.04] dark:text-gray-100 lg:w-auto lg:min-w-56 lg:rounded-md">取消解析</button>
+          <button type="button" onClick={props.onCancel} className="min-h-12 w-full touch-manipulation rounded-xl border border-gray-200/80 bg-white px-4 text-sm font-medium shadow-sm lg:border-gray-300 lg:text-base lg:font-semibold lg:shadow-none text-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 active:scale-[0.98] dark:border-white/[0.12] dark:bg-white/[0.04] dark:text-gray-100 lg:w-auto lg:min-w-56 lg:rounded-md">取消解析</button>
         )}
         {phase === 'review' && (
           <div className="w-full lg:w-auto">
-            <button type="button" onClick={handleConfirmAndGenerate} disabled={locked || !props.imageDataUrl || !props.orderResult} className="min-h-12 w-full touch-manipulation rounded-xl bg-blue-600 px-4 text-base font-semibold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 active:scale-[0.99] lg:w-auto lg:min-w-56 lg:rounded-md">确认并生成 {props.orderResult?.titles.length ?? 0} 张</button>
+            <button type="button" onClick={handleConfirmAndGenerate} disabled={locked || !props.imageDataUrl || !props.orderResult} className={toolsMobilePrimaryButtonClass}>确认并生成 {props.orderResult?.titles.length ?? 0} 张</button>
             {!props.imageDataUrl && <div className="mt-1.5 text-center text-xs text-amber-700 dark:text-amber-300">生成海报需要一张餐品图片</div>}
           </div>
         )}
         {phase === 'generating' && (
-          <button type="button" disabled className="flex min-h-12 w-full cursor-wait items-center justify-center gap-2 rounded-xl border border-gray-200 bg-gray-50 px-4 text-base font-semibold text-gray-700 dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-gray-200 lg:w-auto lg:min-w-56 lg:rounded-md">
-            <span>生成中 {counters.done + counters.error} / {resultSlots.length}</span>
-            <WandAnimation size={28} className="dark:invert" />
-          </button>
+          <div className="flex w-full flex-col gap-2 lg:w-auto">
+            <button type="button" disabled className="flex min-h-12 w-full cursor-wait items-center justify-center gap-2 rounded-xl border border-gray-200 bg-gray-50 px-4 text-sm font-medium text-gray-700 shadow-sm dark:border-white/[0.1] dark:bg-white/[0.05] dark:text-gray-200 lg:w-auto lg:min-w-56 lg:rounded-md lg:text-base lg:font-semibold lg:shadow-none">
+              <span>生成中 {counters.done + counters.error} / {resultSlots.length}</span>
+              <WandAnimation size={28} className="dark:invert" />
+            </button>
+            {availableCandidates.length > 0 && (
+              <button type="button" onClick={props.onContinueWithNewImage} disabled={!props.orderResult} className="min-h-12 w-full touch-manipulation rounded-xl border border-gray-200/80 bg-white px-4 text-sm font-medium shadow-sm lg:border-gray-300 lg:text-base lg:font-semibold lg:shadow-none text-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-50 active:scale-[0.98] dark:border-white/[0.12] dark:bg-white/[0.04] dark:text-gray-100 lg:min-w-56 lg:rounded-md" aria-label="换图再出一批">换图再出一批</button>
+            )}
+          </div>
         )}
         {phase === 'results' && (
           <div className="flex w-full flex-col gap-2 lg:w-auto">
             {availableCandidates.length > 0 && (
-              <button type="button" onClick={() => void handleSave()} disabled={!preparedFile || preparingFile || saving} className="flex min-h-12 w-full touch-manipulation items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 text-base font-semibold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 active:scale-[0.99] lg:min-w-56 lg:rounded-md" aria-label="保存当前海报图片">
+              <button type="button" onClick={() => void handleSave()} disabled={!preparedFile || preparingFile || saving} className={`flex items-center justify-center gap-2 ${toolsMobilePrimaryButtonClass}`} aria-label="保存当前海报图片">
                 <DownloadIcon className="h-5 w-5" />
                 {preparingFile ? '准备图片...' : saving ? '正在打开...' : '打开系统保存'}
               </button>
             )}
-            <button type="button" onClick={props.onContinueWithNewImage} disabled={!props.orderResult} className="min-h-12 w-full touch-manipulation rounded-xl border border-gray-300 bg-white px-4 text-base font-semibold text-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-50 active:scale-[0.99] dark:border-white/[0.12] dark:bg-white/[0.04] dark:text-gray-100 lg:min-w-56 lg:rounded-md" aria-label="换图再出一批">换图再出一批</button>
+            <button type="button" onClick={props.onContinueWithNewImage} disabled={!props.orderResult} className="min-h-12 w-full touch-manipulation rounded-xl border border-gray-200/80 bg-white px-4 text-sm font-medium shadow-sm lg:border-gray-300 lg:text-base lg:font-semibold lg:shadow-none text-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-50 active:scale-[0.98] dark:border-white/[0.12] dark:bg-white/[0.04] dark:text-gray-100 lg:min-w-56 lg:rounded-md" aria-label="换图再出一批">换图再出一批</button>
           </div>
         )}
       </div>}

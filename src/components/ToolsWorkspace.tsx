@@ -31,6 +31,13 @@ import {
 import { analyzeDish } from '../lib/dishAnalysisApi'
 import { readAfternoonTeaNoticeSystemPrompt, type AfternoonTeaNotice, type AfternoonTeaNoticeStatus } from '../lib/afternoonTeaNotice'
 import { AfternoonTeaNoticeRunCoordinator, runAfternoonTeaNotice } from '../lib/afternoonTeaNoticeRun'
+import {
+  PosterReadyTitleReminder,
+  countReadyPosterImages,
+  observePosterReadyFinish,
+  posterReadyLabel,
+  shouldBlinkPosterReadyOnHide,
+} from '../lib/posterReadyTitle'
 import { copyTextToClipboard, getClipboardFailureMessage } from '../lib/clipboard'
 import { storeImage } from '../lib/db'
 import {
@@ -1112,6 +1119,11 @@ export default function ToolsWorkspace() {
   const activeConversation = afternoonTeaConversations.find((conversation) => conversation.id === activeAfternoonTeaConversationId) ?? null
   const coordinatorRef = useRef(new DishAnalysisCoordinator())
   const noticeCoordinatorRef = useRef(new AfternoonTeaNoticeRunCoordinator())
+  const supplementSaveTimerRef = useRef<number | null>(null)
+  const pendingSupplementSaveRef = useRef<{ conversationId: string, value: string } | null>(null)
+  const knownPosterFinishRef = useRef<string | null | undefined>(undefined)
+  const initialPosterFinishRef = useRef<string | null | undefined>(undefined)
+  const posterReadyTitleRef = useRef<PosterReadyTitleReminder | null>(null)
   const mountedRef = useRef(true)
   const defaultSystemPromptRef = useRef(DEFAULT_DISH_SYSTEM_PROMPT)
   const cachedSourceImageRef = useRef<{ dataUrl: string; id: string } | null>(null)
@@ -1376,24 +1388,86 @@ export default function ToolsWorkspace() {
     void restoreConversation(conversationId)
   }, [afternoonTeaConversationsLoaded, activeAfternoonTeaConversationId])
 
+  const posterFinishKey = activeConversation?.batchStartedAt != null && activeConversation.batchFinishedAt != null
+    ? `${activeConversation.id}:${activeConversation.batchStartedAt}:${activeConversation.batchFinishedAt}`
+    : null
+  const clockRunning = analysisRun?.status === 'running' || noticeJob?.status === 'running'
   useEffect(() => {
-    if (analysisRun?.status !== 'running') return
-    setAnalysisNow(Date.now())
-    const timer = window.setInterval(() => setAnalysisNow(Date.now()), 1_000)
+    if (!clockRunning) return
+    const tick = () => {
+      const now = Date.now()
+      setAnalysisNow(now)
+      setNoticeNow(now)
+    }
+    tick()
+    const timer = window.setInterval(tick, 1_000)
     return () => window.clearInterval(timer)
-  }, [analysisRun?.conversationId, analysisRun?.startedAt, analysisRun?.status])
+  }, [clockRunning, analysisRun?.startedAt, noticeJob?.startedAt])
+
+  function posterReadyTitleReminder() {
+    if (!posterReadyTitleRef.current) {
+      posterReadyTitleRef.current = new PosterReadyTitleReminder({
+        getTitle: () => document.title,
+        setTitle: (title) => { document.title = title },
+      })
+    }
+    return posterReadyTitleRef.current
+  }
 
   useEffect(() => {
-    if (noticeJob?.status !== 'running') return
-    setNoticeNow(Date.now())
-    const timer = window.setInterval(() => setNoticeNow(Date.now()), 1_000)
-    return () => window.clearInterval(timer)
-  }, [activeConversation?.id, noticeJob?.status, noticeJob?.startedAt])
+    if (afternoonTeaConversationsLoaded && initialPosterFinishRef.current === undefined) {
+      initialPosterFinishRef.current = posterFinishKey
+    }
+    const decision = observePosterReadyFinish({
+      loaded: afternoonTeaConversationsLoaded,
+      knownKey: knownPosterFinishRef.current,
+      nextKey: posterFinishKey,
+      hidden: document.hidden,
+    })
+    knownPosterFinishRef.current = decision.knownKey
+    if (!decision.start || !activeConversation || !document.hidden) return
+    posterReadyTitleReminder().update(posterReadyLabel(countReadyPosterImages(activeConversation.posterItems, tasks)))
+  }, [afternoonTeaConversationsLoaded, posterFinishKey, activeConversation, tasks])
+
+  const posterFinishKeyRef = useRef(posterFinishKey)
+  const posterReadyCountRef = useRef(0)
+  posterFinishKeyRef.current = posterFinishKey
+  posterReadyCountRef.current = activeConversation ? countReadyPosterImages(activeConversation.posterItems, tasks) : 0
+
+  useEffect(() => {
+    const onVisibility = () => {
+      if (!document.hidden) {
+        posterReadyTitleReminder().stop()
+        return
+      }
+      // 这一轮是打开页面之后才生成完的。切走就在标签上交替提醒，回到这个页面再恢复。
+      if (!shouldBlinkPosterReadyOnHide(initialPosterFinishRef.current, posterFinishKeyRef.current)) return
+      posterReadyTitleReminder().start(posterReadyLabel(posterReadyCountRef.current))
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => document.removeEventListener('visibilitychange', onVisibility)
+  }, [])
+
+  useEffect(() => {
+    const reminder = posterReadyTitleRef.current
+    if (!reminder?.reminding || !document.hidden || !activeConversation) return
+    const done = countReadyPosterImages(activeConversation.posterItems, tasks)
+    if (done <= 0) return
+    reminder.update(posterReadyLabel(done))
+  }, [tasks, activeConversation])
+
+  useEffect(() => () => posterReadyTitleReminder().stop(), [])
 
   useEffect(() => {
     mountedRef.current = true
     return () => {
       mountedRef.current = false
+      if (supplementSaveTimerRef.current != null) window.clearTimeout(supplementSaveTimerRef.current)
+      const pendingSupplement = pendingSupplementSaveRef.current
+      pendingSupplementSaveRef.current = null
+      if (pendingSupplement) {
+        updateAfternoonTeaConversation(pendingSupplement.conversationId, { noticeSupplement: pendingSupplement.value })
+      }
       coordinatorRef.current.dispose()
       noticeCoordinatorRef.current.dispose()
       const runtimes = new Set(batchRuntimesRef.current.values())
@@ -2196,12 +2270,12 @@ export default function ToolsWorkspace() {
   }, imageLoading || conversationBusy || Boolean(confirmDialog) || activeToolId !== 'dish-analysis')
 
   return (
-    <main className="safe-area-x mx-auto max-w-[100rem] pb-[calc(6.5rem+env(safe-area-inset-bottom))] sm:pb-12">
+    <main className="safe-area-x mx-auto max-w-[100rem] pb-4 sm:pb-12">
       <div className="grid min-h-0 sm:min-h-[calc(100vh-8rem)] sm:grid-cols-[180px_minmax(0,1fr)]">
-        <nav className="sticky top-[calc(var(--safe-area-top,0px)+3.5rem)] z-30 flex h-12 items-center border-b border-gray-200 bg-white/90 backdrop-blur dark:border-white/[0.08] dark:bg-gray-950/90 sm:static sm:block sm:h-auto sm:border-b-0 sm:border-r sm:bg-transparent sm:py-6 sm:backdrop-blur-none dark:sm:bg-transparent" aria-label="工具列表">
+        <nav className="relative z-[35] mb-1 mt-2 flex h-12 items-center sm:static sm:z-auto sm:mx-0 sm:mb-0 sm:mt-0 sm:block sm:h-auto sm:border-r sm:border-gray-200 sm:py-6 dark:sm:border-white/[0.08]" aria-label="工具列表">
           <div className="hidden text-xs font-medium text-gray-400 sm:block sm:px-3">工具</div>
-          <div className="relative flex min-w-0 flex-1 items-center px-1 sm:mx-3 sm:mt-2 sm:block sm:px-0">
-            <div className="flex min-w-0 flex-1 items-center overflow-x-auto sm:block sm:overflow-visible">
+          <div className="relative flex min-w-0 flex-1 items-center gap-1.5 sm:mx-3 sm:mt-2 sm:block sm:gap-0 sm:px-0">
+            <div className="grid min-w-0 flex-1 grid-cols-2 gap-1 overflow-x-auto rounded-xl border border-gray-200 bg-gray-100/70 p-1 dark:border-white/[0.08] dark:bg-white/[0.04] sm:block sm:overflow-visible sm:rounded-none sm:border-0 sm:bg-transparent sm:p-0 dark:sm:bg-transparent">
               {TOOL_ITEMS.map((tool) => {
                 const selected = activeToolId === tool.id
                 const overlayHistory = tool.id === 'dish-analysis' && selected
@@ -2211,8 +2285,8 @@ export default function ToolsWorkspace() {
                     type="button"
                     aria-current={selected ? 'page' : undefined}
                     onClick={() => selectTool(tool.id)}
-                    className={`min-w-0 shrink-0 truncate px-3 py-1.5 text-left text-sm sm:mt-1 sm:w-full sm:whitespace-nowrap sm:border-l-2 sm:px-3 sm:py-2 sm:text-sm sm:font-medium sm:first:mt-0 ${selected
-                      ? `font-semibold text-gray-900 dark:text-gray-100 sm:border-blue-500 sm:bg-blue-50/70 sm:text-blue-700 sm:dark:bg-blue-500/10 sm:dark:text-blue-300 ${overlayHistory ? 'sm:pr-[68px]' : ''}`
+                    className={`min-w-0 shrink-0 truncate rounded-lg px-2 py-1.5 text-center text-sm transition-colors sm:mt-1 sm:w-full sm:rounded-none sm:border-l-2 sm:px-3 sm:py-2 sm:text-left sm:font-medium sm:first:mt-0 ${selected
+                      ? `bg-white font-medium text-gray-900 shadow-sm dark:bg-white/10 dark:text-white sm:border-blue-500 sm:bg-blue-50/70 sm:font-semibold sm:text-blue-700 sm:shadow-none sm:dark:bg-blue-500/10 sm:dark:text-blue-300 ${overlayHistory ? 'sm:pr-[68px]' : ''}`
                       : 'font-medium text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200 sm:border-transparent sm:hover:bg-gray-50 dark:sm:hover:bg-white/[0.04]'}`}
                   >
                     {tool.label}
@@ -2221,12 +2295,12 @@ export default function ToolsWorkspace() {
               })}
             </div>
             {activeToolId === 'dish-analysis' && (
-            <div className="relative z-10 ml-auto flex shrink-0 items-center gap-0 sm:absolute sm:right-1 sm:top-5 sm:ml-0 sm:-translate-y-1/2">
+            <div className="relative z-10 flex shrink-0 items-center gap-1 sm:absolute sm:right-1 sm:top-5 sm:ml-0 sm:gap-0 sm:-translate-y-1/2">
               <button
                 ref={historyButtonRef}
                 type="button"
                 onClick={() => setHistoryOpen((value) => !value)}
-                className="flex h-11 w-11 items-center justify-center rounded-md text-gray-500 transition hover:bg-gray-100 hover:text-gray-800 dark:hover:bg-white/[0.06] dark:hover:text-gray-200 sm:h-9 sm:w-8"
+                className="flex h-11 w-11 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-500 shadow-sm transition hover:bg-gray-50 hover:text-gray-800 dark:border-white/[0.08] dark:bg-gray-900 dark:hover:bg-white/[0.06] dark:hover:text-gray-200 sm:h-9 sm:w-8 sm:rounded-md sm:border-0 sm:bg-transparent sm:shadow-none dark:sm:bg-transparent"
                 title="餐品解析历史"
                 aria-label="餐品解析历史"
                 aria-expanded={historyOpen}
@@ -2236,7 +2310,7 @@ export default function ToolsWorkspace() {
               <button
                 type="button"
                 onClick={handleNewConversation}
-                className="flex h-11 w-11 items-center justify-center rounded-md text-gray-500 transition hover:bg-gray-100 hover:text-gray-800 dark:hover:bg-white/[0.06] dark:hover:text-gray-200 sm:h-9 sm:w-8"
+                className="flex h-11 w-11 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-500 shadow-sm transition hover:bg-gray-50 hover:text-gray-800 dark:border-white/[0.08] dark:bg-gray-900 dark:hover:bg-white/[0.06] dark:hover:text-gray-200 sm:h-9 sm:w-8 sm:rounded-md sm:border-0 sm:bg-transparent sm:shadow-none dark:sm:bg-transparent"
                 title="新建餐品解析会话"
                 aria-label="新建餐品解析会话"
               >
@@ -2290,7 +2364,13 @@ export default function ToolsWorkspace() {
               const conversationId = activeConversation?.id
               if (!conversationId) return
               setNoticeSupplements((current) => ({ ...current, [conversationId]: value }))
-              updateAfternoonTeaConversation(conversationId, { noticeSupplement: value })
+              pendingSupplementSaveRef.current = { conversationId, value }
+              if (supplementSaveTimerRef.current != null) window.clearTimeout(supplementSaveTimerRef.current)
+              supplementSaveTimerRef.current = window.setTimeout(() => {
+                supplementSaveTimerRef.current = null
+                pendingSupplementSaveRef.current = null
+                updateAfternoonTeaConversation(conversationId, { noticeSupplement: value })
+              }, 400)
             }}
             noticeStatus={noticeJob?.status ?? 'idle'}
             notices={noticeJob?.notices ?? []}
@@ -2298,12 +2378,14 @@ export default function ToolsWorkspace() {
             noticeElapsed={noticeElapsed}
             noticeChannel={noticeJob?.sourceChannel ?? ''}
             noticeModel={noticeJob?.sourceModel ?? ''}
-            onCopyNotice={(text) => {
-              void copyTextToClipboard(text).then(() => {
+            onCopyNotice={async (text) => {
+              try {
+                await copyTextToClipboard(text)
                 showToast('已复制', 'success')
-              }).catch((err: unknown) => {
+              } catch (err: unknown) {
                 showToast(getClipboardFailureMessage('复制失败', err), 'error')
-              })
+                throw err
+              }
             }}
             batchStartedAt={activeConversation?.batchStartedAt ?? null}
             batchFinishedAt={activeConversation?.batchFinishedAt ?? null}

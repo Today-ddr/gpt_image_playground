@@ -17,11 +17,13 @@ import { getActiveApiProfile } from '../../lib/apiProfiles'
 import { copyTextToClipboard, getClipboardFailureMessage } from '../../lib/clipboard'
 import { useStore } from '../../store'
 import { ChevronDownIcon, CopyIcon, PasteIcon } from '../icons'
+import { NoticeCopyFlash, useNoticeCopyFlash } from './AfternoonTeaNoticePanel'
 import {
   canReadAfternoonTeaClipboard,
   createAfternoonTeaClipboardCoordinator,
   formatAfternoonTeaAnalysisSource,
 } from './AfternoonTeaMobileWorkflow'
+import { TOOLS_MOBILE_ACTION_DOCK_CLASS, toolsMobileFieldClass, toolsMobilePrimaryButtonClass } from './toolsMobileChrome'
 
 function formatElapsed(value: number | null) {
   if (value == null) return '--:--'
@@ -60,7 +62,7 @@ export type AfternoonTeaNoticeFormViewProps = {
   onPasteMenu: () => void
   onSubmit: () => void
   onCancel: () => void
-  onCopy: (text: string) => void
+  onCopy: (text: string) => void | Promise<void>
 }
 
 export function AfternoonTeaNoticeFormView(props: AfternoonTeaNoticeFormViewProps) {
@@ -69,11 +71,12 @@ export function AfternoonTeaNoticeFormView(props: AfternoonTeaNoticeFormViewProp
   const primaryActionLabel = getAfternoonTeaNoticePrimaryActionLabel(props.status, props.notices.length)
   const primaryDisabled = props.status !== 'running' && (!props.configured || !props.menuText.trim())
   const noticeSource = formatAfternoonTeaAnalysisSource(props.sourceChannel, props.sourceModel)
+  const copyFlash = useNoticeCopyFlash()
 
   return (
-    <div className="min-w-0 px-3 py-3 sm:px-6 sm:py-7 lg:grid lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end lg:gap-x-6" data-afternoon-tea-notice-workflow aria-label="下午茶通知工作流">
+    <div className="min-w-0 px-0 pt-1 max-lg:pb-[calc(9.5rem+env(safe-area-inset-bottom))] sm:px-6 sm:pt-7 lg:grid lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end lg:gap-x-6 lg:pb-7" data-afternoon-tea-notice-workflow aria-label="下午茶通知工作流">
       {!props.configured && (
-        <div className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-300 lg:col-span-2">
+        <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-300 sm:rounded-md lg:col-span-2">
           请先在 API 配置中选择 OpenAI 配置，并填写语义理解/多模态模型 ID
         </div>
       )}
@@ -88,7 +91,7 @@ export function AfternoonTeaNoticeFormView(props: AfternoonTeaNoticeFormViewProp
                   type="button"
                   onClick={props.onPasteMenu}
                   disabled={locked}
-                  className="flex min-h-11 items-center gap-1.5 rounded-md px-2 text-sm font-medium text-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-50 dark:text-blue-300"
+                  className="flex min-h-11 items-center gap-1.5 rounded-xl px-2.5 text-sm font-medium text-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:opacity-50 dark:text-blue-300"
                 >
                   <PasteIcon className="h-4 w-4" />
                   粘贴
@@ -101,7 +104,7 @@ export function AfternoonTeaNoticeFormView(props: AfternoonTeaNoticeFormViewProp
               disabled={locked}
               rows={8}
               placeholder={'例如：\n左上蛋黄肉+芝士肉+虾仁肉+牛肉小饼\n右上葱肉+梅干菜肉+榨菜肉\n下蛋黄肉+牛肉+蟹味棒肉\n\n或\n\n套餐A：东坡淋汁豆腐+现磨原味豆浆\n套餐B：豆腐小吃拼盘'}
-              className="min-h-28 w-full resize-y rounded-md border border-gray-200 bg-white px-3 py-2.5 text-base leading-relaxed text-gray-900 outline-none placeholder:text-gray-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:opacity-60 dark:border-white/[0.1] dark:bg-white/[0.03] dark:text-gray-100 dark:placeholder:text-gray-500 dark:focus:ring-blue-500/10 sm:min-h-40"
+              className={`min-h-28 resize-y px-4 py-3 text-base leading-relaxed sm:min-h-40 ${toolsMobileFieldClass}`}
               aria-label="菜单输入"
             />
             {props.clipboardError && (
@@ -117,12 +120,12 @@ export function AfternoonTeaNoticeFormView(props: AfternoonTeaNoticeFormViewProp
               onChange={(event) => props.onBrandChange(event.target.value)}
               disabled={locked}
               placeholder="例如：汉堡包、奶茶、霸王茶姬"
-              className="min-h-11 w-full rounded-md border border-gray-200 bg-white px-3 text-base text-gray-900 outline-none placeholder:text-gray-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:opacity-60 dark:border-white/[0.1] dark:bg-white/[0.03] dark:text-gray-100 dark:placeholder:text-gray-500 dark:focus:ring-blue-500/10"
+              className={`min-h-12 px-4 text-base sm:min-h-11 ${toolsMobileFieldClass}`}
               aria-label="补充信息"
             />
           </section>
 
-          <details className="group border-y border-gray-200 py-2 dark:border-white/[0.08]">
+          <details className="group rounded-2xl border border-gray-200 px-3 py-1 dark:border-white/[0.08] sm:rounded-none sm:border-x-0 sm:border-y sm:px-0 sm:py-2">
             <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between text-sm text-gray-600 marker:hidden dark:text-gray-300">
               <span>高级设置</span>
               <ChevronDownIcon className="h-4 w-4 transition-transform group-open:rotate-180" />
@@ -137,14 +140,14 @@ export function AfternoonTeaNoticeFormView(props: AfternoonTeaNoticeFormViewProp
                 onChange={(event) => props.onSystemPromptChange(event.target.value)}
                 disabled={locked}
                 rows={8}
-                className="w-full resize-y rounded-md border border-gray-200 bg-white px-3 py-2.5 text-sm leading-relaxed text-gray-800 outline-none focus:border-blue-400 disabled:opacity-60 dark:border-white/[0.1] dark:bg-white/[0.03] dark:text-gray-100"
+                className={`resize-y px-4 py-3 text-sm leading-relaxed ${toolsMobileFieldClass}`}
                 aria-label="系统提示词"
               />
             </div>
           </details>
 
           {props.error && (
-            <div role="alert" className="rounded-md border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-600 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300">{props.error}</div>
+            <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-600 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300 sm:rounded-md">{props.error}</div>
           )}
           <div className="flex items-start justify-between gap-3 text-xs text-gray-500 dark:text-gray-400" aria-live="polite">
             <div className="min-w-0">
@@ -176,10 +179,15 @@ export function AfternoonTeaNoticeFormView(props: AfternoonTeaNoticeFormViewProp
                     role="listitem"
                     onClick={() => {
                       props.onSelectedIndexChange(index)
-                      if (canCopy) props.onCopy(notice.text)
+                      if (!canCopy) return
+                      void Promise.resolve(props.onCopy(notice.text)).then(() => {
+                        copyFlash.show(notice.style, 'success')
+                      }).catch(() => {
+                        copyFlash.show(notice.style, 'error')
+                      })
                     }}
                     disabled={!canCopy}
-                    className={`flex min-h-0 flex-col rounded-xl border px-2.5 py-2.5 text-left transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 enabled:cursor-pointer enabled:active:scale-[0.99] disabled:cursor-not-allowed sm:px-3 sm:py-3 ${selected
+                    className={`relative flex min-h-0 flex-col rounded-2xl border px-2.5 py-2.5 text-left shadow-sm transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 enabled:cursor-pointer enabled:active:scale-[0.98] disabled:cursor-not-allowed sm:rounded-xl sm:px-3 sm:py-3 sm:shadow-none ${selected
                       ? 'border-blue-300 bg-blue-50/70 ring-2 ring-inset ring-blue-400 dark:border-blue-500/40 dark:bg-blue-500/10 dark:ring-blue-500/60'
                       : 'border-gray-200 bg-white dark:border-white/[0.1] dark:bg-white/[0.03]'}`}
                     aria-pressed={selected}
@@ -199,25 +207,26 @@ export function AfternoonTeaNoticeFormView(props: AfternoonTeaNoticeFormViewProp
                         点击复制
                       </span>
                     </div>
+                    <NoticeCopyFlash status={copyFlash.flash?.key === notice.style ? copyFlash.flash.status : null} />
                     <pre className="min-h-24 whitespace-pre-wrap break-words font-sans text-sm leading-6 text-gray-700 dark:text-gray-200">{notice.text}</pre>
                   </button>
                 )
               })}
             </div>
           ) : (
-            <div className="flex min-h-40 items-center justify-center rounded-xl border border-dashed border-gray-300 bg-gray-50/60 px-4 text-center text-sm text-gray-500 dark:border-white/[0.12] dark:bg-white/[0.02] dark:text-gray-400">
+            <div className="flex min-h-40 items-center justify-center rounded-2xl border border-dashed border-gray-300 bg-gray-50/60 px-4 text-center text-sm text-gray-500 dark:border-white/[0.12] dark:bg-white/[0.02] dark:text-gray-400 sm:rounded-xl">
               {locked ? `正在生成 ${AFTERNOON_TEA_NOTICE_RESULT_COUNT} 张菜单卡…` : `生成后给出 ${AFTERNOON_TEA_NOTICE_RESULT_COUNT} 张菜单卡，菜品相同，开场和收尾不同`}
             </div>
           )}
         </section>
       </div>
 
-      <div className="fixed inset-x-0 bottom-0 z-30 border-t border-gray-200 bg-white/95 px-3 pt-2.5 pb-[calc(0.65rem+env(safe-area-inset-bottom))] shadow-[0_-8px_24px_rgba(0,0,0,0.06)] backdrop-blur dark:border-white/[0.08] dark:bg-gray-950/95 dark:shadow-[0_-8px_24px_rgba(0,0,0,0.35)] sm:px-6 lg:static lg:inset-auto lg:col-start-2 lg:row-start-1 lg:mx-0 lg:mb-4 lg:mt-0 lg:flex lg:justify-end lg:border-t-0 lg:bg-transparent lg:px-0 lg:py-0 lg:shadow-none lg:backdrop-blur-none dark:lg:bg-transparent" aria-label="工作流主操作">
+      <div className={TOOLS_MOBILE_ACTION_DOCK_CLASS} aria-label="工作流主操作">
         {props.status === 'running' ? (
           <button
             type="button"
             onClick={props.onCancel}
-            className="min-h-12 w-full touch-manipulation rounded-xl border border-gray-300 bg-white px-4 text-base font-semibold text-gray-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 active:scale-[0.99] dark:border-white/[0.12] dark:bg-white/[0.04] dark:text-gray-100 lg:w-auto lg:min-w-56 lg:rounded-md"
+            className="min-h-12 w-full touch-manipulation rounded-xl border border-gray-200/80 bg-white px-4 text-sm font-medium text-gray-800 shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 active:scale-[0.98] dark:border-white/[0.12] dark:bg-white/[0.04] dark:text-gray-100 lg:w-auto lg:min-w-56 lg:rounded-md lg:border-gray-300 lg:text-base lg:font-semibold lg:shadow-none"
             aria-label="取消生成"
           >
             {primaryActionLabel}
@@ -227,7 +236,7 @@ export function AfternoonTeaNoticeFormView(props: AfternoonTeaNoticeFormViewProp
             type="button"
             onClick={props.onSubmit}
             disabled={primaryDisabled}
-            className="min-h-12 w-full touch-manipulation rounded-xl bg-blue-600 px-4 text-base font-semibold text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 active:scale-[0.99] lg:w-auto lg:min-w-56 lg:rounded-md"
+            className={toolsMobilePrimaryButtonClass}
             aria-label={primaryActionLabel}
           >
             {primaryActionLabel}
@@ -305,6 +314,7 @@ export function AfternoonTeaNoticeWorkflow(props: AfternoonTeaNoticeWorkflowProp
       showToast('已复制', 'success')
     } catch (err) {
       showToast(getClipboardFailureMessage('复制失败', err), 'error')
+      throw err
     }
   }
 
