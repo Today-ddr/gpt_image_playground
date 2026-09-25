@@ -75,6 +75,7 @@ export function buildAfternoonTeaNoticeUserPrompt(
       '锁定条目（行数、顺序、加号都已确定，清单必须按这个顺序覆盖）：',
       ...segments.map((segment, index) => `${index + 1}. ${segment.displayName}`),
       '只去掉行首位置词，菜名里的字不要删。套餐字母是否保留由你判断，四张卡共用这一份清单。',
+      '原文如果已经是写好的通知，开场、款数行和收尾不是商品。itemLines 只写锁定条目，不要把口号再写进去。',
     ]
     : ['这段菜单没有分行。请先提取真实食品或饮品，再写成清单。不要编造菜单里没有的菜。']
 

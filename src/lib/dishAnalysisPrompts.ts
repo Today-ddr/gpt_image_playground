@@ -190,6 +190,9 @@ displayName 要整理成适合贴在图片上的名称，不要原样复制位�
 例如：
 左上：牛肉肠粉 → 牛肉肠粉
 套餐A：豆腐+豆浆 → 豆腐+豆浆
+东坡淋汁豆腐+现磨原味豆浆 → 东坡淋汁豆腐+现磨原味豆浆
+不要把「现磨原味豆浆」缩成「原味豆浆」。
+原文如果是写好的通知，开场、款数行和收尾不是商品，不要写进 items。
 只为每个商品填写 tags，并按原规则生成标题。`
 
 export function buildDishAnalysisSystemPrompt(systemPrompt: string, count: number, options?: { lockItems?: boolean }) {

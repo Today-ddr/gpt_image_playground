@@ -37,6 +37,31 @@ describe('segmentAfternoonTeaMenu', () => {
     ])
   })
 
+  it('reads a pasted notice and keeps only the combo rows', () => {
+    expect(segmentAfternoonTeaMenu(`下午茶来咯🥢✨
+四款豆制轻食随心挑👇
+▫️套餐A：东坡淋汁豆腐+现磨原味豆浆🥛
+▫️套餐B：豆腐小吃拼盘🥟
+▫️套餐C：豆乳面+现磨原味豆浆🥛
+▫️套餐D：天贝轻食卷+腐皮糯米鸡🌯
+这波清爽又管饱，安排得明明白白🤤`)).toEqual([
+      { displayName: '东坡淋汁豆腐+现磨原味豆浆' },
+      { displayName: '豆腐小吃拼盘' },
+      { displayName: '豆乳面+现磨原味豆浆' },
+      { displayName: '天贝轻食卷+腐皮糯米鸡' },
+    ])
+  })
+
+  it('keeps plain dish lines when one dashed note is mixed in', () => {
+    expect(segmentAfternoonTeaMenu(`牛肉肠粉
+柠檬红茶
+- 加一份布丁`)).toEqual([
+      { displayName: '牛肉肠粉' },
+      { displayName: '柠檬红茶' },
+      { displayName: '加一份布丁' },
+    ])
+  })
+
   it('leaves a single prose sentence to the model', () => {
     expect(segmentAfternoonTeaMenu('草莓蛋糕和柠檬红茶')).toBeNull()
     expect(segmentAfternoonTeaMenu('   ')).toBeNull()

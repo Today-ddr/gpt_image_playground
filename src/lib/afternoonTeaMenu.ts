@@ -27,6 +27,9 @@ const INLINE_LABEL = /^(?:套餐\s*)?(?:[A-Za-z]|[0-9]{1,2}|[一二三四五六�
 const PARENTHETICAL_NOTE = /[（(][^（）()]{0,30}[）)]/g
 const TRAILING_QUANTITY = /(?:\s*[*xX×]\s*\d+|\s*\d+\s*[份个只杯瓶盒])\s*$/u
 const TRAILING_NOTE = /(?:[，,、]\s*|\s+)(?:少辣|微辣|中辣|特辣|加辣|加冰|少冰|去冰|多冰|常温|热饮|需要配清汤|配清汤|不要葱|不要香菜)\s*$/u
+const BULLET_PREFIX = /^(?:▫️|▪|▫|●|○|•|・|·|-|－|—)\uFE0F?\s*/u
+const TRAILING_EMOJI = /(?:\p{Extended_Pictographic}|\uFE0F|\u200D)+\s*$/u
+const CONTAINS_EMOJI = /\p{Extended_Pictographic}/u
 
 export type AfternoonTeaMenuSegment = {
   displayName: string
@@ -43,14 +46,22 @@ function sameTags(left: string[], right: string[]) {
 
 /** 去掉序号、数量和括号备注，保留套餐里的加号 */
 function cleanMenuItemName(name: string) {
-  let text = name.replace(CATEGORY_PREFIX, '').replace(WRAPPED_LABEL, '').replace(INLINE_LABEL, '').trim()
+  let text = name.replace(BULLET_PREFIX, '').trim()
+  text = text.replace(CATEGORY_PREFIX, '').replace(WRAPPED_LABEL, '').replace(INLINE_LABEL, '').trim()
   text = text.replace(PARENTHETICAL_NOTE, '')
   let previous = ''
   while (text !== previous) {
     previous = text
-    text = text.replace(TRAILING_QUANTITY, '').replace(TRAILING_NOTE, '')
+    text = text.replace(TRAILING_QUANTITY, '').replace(TRAILING_NOTE, '').replace(TRAILING_EMOJI, '')
   }
   return text.replace(/\s*[+＋]\s*/g, '+').replace(/[ \t]{2,}/g, ' ').trim()
+}
+
+/** 已经写好的通知里，只有子弹行或套餐行是商品 */
+function isNoticeProductLine(line: string) {
+  const stripped = line.replace(BULLET_PREFIX, '').trim()
+  if (stripped !== line.trim()) return Boolean(stripped)
+  return WRAPPED_LABEL.test(line) || INLINE_LABEL.test(line)
 }
 
 /**
@@ -63,7 +74,14 @@ export function segmentAfternoonTeaMenu(orderText: string): AfternoonTeaMenuSegm
   const labeledSingleLine = lines.length === 1 && (WRAPPED_LABEL.test(lines[0]) || INLINE_LABEL.test(lines[0]))
   if (lines.length < 2 && !labeledSingleLine) return null
 
-  const segments = lines.flatMap((line) => {
+  const productLines = lines.filter(isNoticeProductLine)
+  // 只有「其余行都是分类名或带表情的口号」才当成已写好的通知。
+  // 普通菜名里夹了一行「- 备注」时，不能把没带符号的菜丢掉。
+  const noticeShaped = productLines.length > 0
+    && productLines.length < lines.length
+    && lines.every((line) => isNoticeProductLine(line) || CATEGORY_LINE.test(line) || CONTAINS_EMOJI.test(line))
+  const chosen = noticeShaped ? productLines : lines
+  const segments = chosen.flatMap((line) => {
     if (CATEGORY_LINE.test(line)) return []
     const displayName = cleanMenuItemName(line)
     return displayName ? [{ displayName }] : []
