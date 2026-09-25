@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_AFTERNOON_TEA_TITLE_REGION,
   createDefaultAfternoonTeaItemTitleRegions,
+  getAfternoonTeaPlacementPinCenter,
   normalizeAfternoonTeaItemTitleRegions,
   resolveAfternoonTeaItemTitleRegionsForImage,
 } from './afternoonTeaTitlePlacement'
@@ -32,6 +33,29 @@ describe('afternoon tea item title placement', () => {
       const pinY = region.y + region.height / 2
       return pinX >= 0 && pinY >= 0 && pinX <= 1 && pinY <= 1
     })).toBe(true)
+  })
+
+  it('lines pins across a wide table and uses a Z on a squarer photo', () => {
+    const widePins = createDefaultAfternoonTeaItemTitleRegions(4, 3).map(getAfternoonTeaPlacementPinCenter)
+    const squarePins = createDefaultAfternoonTeaItemTitleRegions(4, 1376 / 1170).map(getAfternoonTeaPlacementPinCenter)
+
+    expect(widePins).toEqual([
+      { x: 0.186, y: 0.5 },
+      { x: 0.395, y: 0.5 },
+      { x: 0.606, y: 0.5 },
+      { x: 0.815, y: 0.5 },
+    ])
+    expect(squarePins).toEqual([
+      { x: 0.32, y: 0.36 },
+      { x: 0.68, y: 0.36 },
+      { x: 0.32, y: 0.64 },
+      { x: 0.68, y: 0.64 },
+    ])
+    expect(createDefaultAfternoonTeaItemTitleRegions(3, 2.4).map(getAfternoonTeaPlacementPinCenter)).toEqual([
+      { x: 0.221, y: 0.5 },
+      { x: 0.5, y: 0.5 },
+      { x: 0.781, y: 0.5 },
+    ])
   })
 
   it('preserves positions for the same image and resets them for a new image', () => {

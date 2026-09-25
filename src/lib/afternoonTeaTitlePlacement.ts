@@ -7,6 +7,9 @@ export const DEFAULT_AFTERNOON_TEA_TITLE_REGION: AfternoonTeaTitleRegion = {
   height: 0.16,
 }
 
+/** 宽高比达到这个值就当长条桌，图钉横排；更方的图按 Z 字形排 */
+export const AFTERNOON_TEA_WIDE_IMAGE_ASPECT = 1.7
+
 export interface AfternoonTeaTitlePlacement {
   semanticRegion: string
   boxPercent: {
@@ -65,19 +68,80 @@ export function normalizeAfternoonTeaTitleRegion(value: unknown): AfternoonTeaTi
   return readValidRegion(value) ?? copyDefaultRegion()
 }
 
-export function createDefaultAfternoonTeaItemTitleRegions(count: number): AfternoonTeaTitleRegion[] {
-  const itemCount = isFiniteNumber(count) ? Math.max(0, Math.floor(count)) : 0
+function regionAroundPin(pinX: number, pinY: number, width: number, height: number): AfternoonTeaTitleRegion {
+  const clamped = clampAfternoonTeaTitleRegion({
+    x: pinX - width / 2,
+    y: pinY - height / 2,
+    width,
+    height,
+  })
+  const boxWidth = roundRegionValue(clamped.width)
+  const boxHeight = roundRegionValue(clamped.height)
+  const centerX = roundRegionValue(clamped.x + clamped.width / 2)
+  const centerY = roundRegionValue(clamped.y + clamped.height / 2)
+  return {
+    x: roundRegionValue(centerX - boxWidth / 2),
+    y: roundRegionValue(centerY - boxHeight / 2),
+    width: boxWidth,
+    height: boxHeight,
+  }
+}
+
+function createCenteredAfternoonTeaItemTitleRegion(): AfternoonTeaTitleRegion {
+  return regionAroundPin(0.5, 0.5, DEFAULT_AFTERNOON_TEA_TITLE_REGION.width, DEFAULT_AFTERNOON_TEA_TITLE_REGION.height)
+}
+
+/** 长条桌：同一条横线上从左到右排开 */
+function createHorizontalAfternoonTeaItemTitleRegions(count: number): AfternoonTeaTitleRegion[] {
+  if (count <= 1) return [createCenteredAfternoonTeaItemTitleRegion()]
+  const edge = 0.08
+  const slot = (1 - edge * 2) / count
+  const width = roundRegionValue(Math.min(0.28, Math.max(0.16, slot * 0.86)))
+  const height = 0.16
+  return Array.from({ length: count }, (_, index) => regionAroundPin(
+    edge + (1 - edge * 2) * ((index + 0.5) / count),
+    0.5,
+    width,
+    height,
+  ))
+}
+
+/** 方图：先左后右、先上后下，两列排成 Z 字 */
+function createZAfternoonTeaItemTitleRegions(count: number): AfternoonTeaTitleRegion[] {
+  if (count <= 1) return [createCenteredAfternoonTeaItemTitleRegion()]
+  const columns = 2
+  const rows = Math.ceil(count / columns)
+  const width = 0.3
+  const height = rows <= 2 ? 0.18 : 0.14
+  return Array.from({ length: count }, (_, index) => {
+    const column = index % columns
+    const row = Math.floor(index / columns)
+    const pinY = rows === 1 ? 0.5 : 0.22 + 0.56 * ((row + 0.5) / rows)
+    return regionAroundPin(column === 0 ? 0.32 : 0.68, pinY, width, height)
+  })
+}
+
+function createSpiralAfternoonTeaItemTitleRegions(count: number): AfternoonTeaTitleRegion[] {
   const maxX = 1 - DEFAULT_AFTERNOON_TEA_TITLE_REGION.width
   const maxY = 1 - DEFAULT_AFTERNOON_TEA_TITLE_REGION.height
-  return Array.from({ length: itemCount }, (_, index) => ({
+  return Array.from({ length: count }, (_, index) => ({
     ...DEFAULT_AFTERNOON_TEA_TITLE_REGION,
     x: roundRegionValue((DEFAULT_AFTERNOON_TEA_TITLE_REGION.x + index * 0.191) % maxX),
     y: roundRegionValue((DEFAULT_AFTERNOON_TEA_TITLE_REGION.y + index * 0.227) % maxY),
   }))
 }
 
-export function normalizeAfternoonTeaItemTitleRegions(value: unknown, count: number): AfternoonTeaTitleRegion[] {
-  const defaults = createDefaultAfternoonTeaItemTitleRegions(count)
+export function createDefaultAfternoonTeaItemTitleRegions(count: number, aspectRatio?: number): AfternoonTeaTitleRegion[] {
+  const itemCount = isFiniteNumber(count) ? Math.max(0, Math.floor(count)) : 0
+  if (itemCount === 0) return []
+  if (!isFiniteNumber(aspectRatio) || aspectRatio <= 0) return createSpiralAfternoonTeaItemTitleRegions(itemCount)
+  return aspectRatio >= AFTERNOON_TEA_WIDE_IMAGE_ASPECT
+    ? createHorizontalAfternoonTeaItemTitleRegions(itemCount)
+    : createZAfternoonTeaItemTitleRegions(itemCount)
+}
+
+export function normalizeAfternoonTeaItemTitleRegions(value: unknown, count: number, aspectRatio?: number): AfternoonTeaTitleRegion[] {
+  const defaults = createDefaultAfternoonTeaItemTitleRegions(count, aspectRatio)
   if (!Array.isArray(value)) return defaults
   return defaults.map((fallback, index) => readValidRegion(value[index]) ?? fallback)
 }
@@ -126,11 +190,12 @@ export function resolveAfternoonTeaItemTitleRegionsForImage(
   nextImageId: string | null,
   currentRegions: unknown,
   itemCount: number,
+  aspectRatio?: number,
 ): AfternoonTeaTitleRegion[] {
   if (currentImageId && nextImageId && currentImageId === nextImageId) {
-    return normalizeAfternoonTeaItemTitleRegions(currentRegions, itemCount)
+    return normalizeAfternoonTeaItemTitleRegions(currentRegions, itemCount, aspectRatio)
   }
-  return createDefaultAfternoonTeaItemTitleRegions(itemCount)
+  return createDefaultAfternoonTeaItemTitleRegions(itemCount, aspectRatio)
 }
 
 export function resolveAfternoonTeaPlacementSelection(
