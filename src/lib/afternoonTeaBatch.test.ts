@@ -68,6 +68,7 @@ describe('createAfternoonTeaPosterParamsSnapshot', () => {
     expect(snapshot).toMatchObject({
       size: normalizeImageSize('3024x4032'),
       n: 4,
+      quality: 'max',
     })
     expect(snapshot.size).not.toBe(galleryParams.size)
     expect(galleryParams.size).toBe('1920x1080')

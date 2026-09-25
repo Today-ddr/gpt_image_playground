@@ -57,6 +57,7 @@ import { getCustomQueuedImageResult } from './lib/openaiCompatibleImageApi'
 import { validateMaskMatchesImage } from './lib/canvasImage'
 import { orderInputImagesForMask } from './lib/mask'
 import { getChangedParams, normalizeParamsForSettings } from './lib/paramCompatibility'
+import { withAfternoonTeaReasoning } from './lib/imageModels'
 import { stripInjectedCodexCliSizePrompt } from './lib/size'
 import { effectiveTransparentBackgroundMethod } from './lib/transparentBackground'
 import { createTransparentOutputMeta, getTransparentRequestParams, removeKeyedBackgroundFromDataUrl } from './lib/transparentImage'
@@ -843,6 +844,9 @@ export function mergePersistedState(persistedState: unknown, currentState: AppSt
     supportPromptDismissed: Boolean(persisted.supportPromptDismissed),
     supportPromptOpen: Boolean(persisted.supportPromptOpen),
     supportPromptSkippedForImportedData: Boolean(persisted.supportPromptSkippedForImportedData),
+    params: persisted.params?.quality === 'auto'
+      ? { ...DEFAULT_PARAMS, ...persisted.params, quality: 'max' }
+      : persisted.params ?? currentState.params,
     prompt: restoredAgentDraft ? restoredAgentDraft.prompt : galleryInputDraft?.prompt ?? '',
     inputImages: restoredAgentDraft ? restoredAgentDraft.inputImages : galleryInputDraft?.inputImages ?? [],
     maskDraft: restoredAgentDraft ? restoredAgentDraft.maskDraft : galleryInputDraft?.maskDraft ?? null,
@@ -5437,11 +5441,13 @@ async function executeTask(taskId: string, settingsOverride?: AppSettings) {
     const requestPrompt = task.transparentOutput && task.transparentPrompt
       ? task.transparentPrompt
       : task.prompt
+    const requestProfile = withAfternoonTeaReasoning(activeProfile, Boolean(task.afternoonTeaBatchId))
+    const imageRequestSettings = createSettingsForApiProfile(settings, requestProfile)
 
     if (task.executionMode === 'server' && taskProvider === 'openai') {
       if (cancelledServerTaskIds.has(taskId) || !useStore.getState().tasks.some((item) => item.id === taskId)) return
       pendingServerSubmissions.set(taskId, {
-        profile: activeProfile,
+        profile: requestProfile,
         prompt: replaceImageMentionsForApi(requestPrompt, inputDataUrls.length),
         sendPromptAsIs: Boolean(task.afternoonTeaBatchId),
         allowPromptRewrite: requestSettings.allowPromptRewrite,
@@ -5455,7 +5461,7 @@ async function executeTask(taskId: string, settingsOverride?: AppSettings) {
     }
 
     const result = await callImageApi({
-      settings: requestSettings,
+      settings: imageRequestSettings,
       prompt: replaceImageMentionsForApi(requestPrompt, inputDataUrls.length),
       sendPromptAsIs: Boolean(task.afternoonTeaBatchId),
       nativeTransparentBackground: task.params.transparent_output && !task.transparentOutput,

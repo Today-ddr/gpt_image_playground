@@ -26,7 +26,7 @@ export function normalizeParamsForSettings(
 
   if (isOpenAICompatibleProvider(settings, activeProfile.provider) && activeProfile.codexCli) {
     nextParams.size = normalizeCodexCliImageSize(nextParams.size)
-    nextParams.quality = DEFAULT_PARAMS.quality
+    nextParams.quality = 'auto'
   }
 
   if (activeProfile.provider === 'fal') {

@@ -24,10 +24,13 @@ export function createAfternoonTeaPosterParamsSnapshot(
   if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
     throw new Error('无法读取原图尺寸，请重新上传餐品图片')
   }
-  return normalizeParamsForSettings({
+  const normalized = normalizeParamsForSettings({
     ...params,
     size: normalizeImageSize(`${width}x${height}`),
+    quality: 'max',
   }, settings, { hasInputImages: true })
+  // 先记成 max，提交时再按每个中转站的模型降到它支持的最高档。
+  return { ...normalized, quality: 'max' }
 }
 
 export async function readAfternoonTeaPosterSourceSize(dataUrl: string): Promise<AfternoonTeaPosterSourceSize> {
