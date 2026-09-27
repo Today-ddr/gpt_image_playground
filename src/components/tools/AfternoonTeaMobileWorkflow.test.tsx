@@ -371,11 +371,13 @@ describe('AfternoonTeaMobileWorkflow', () => {
   })
 
 
-  it('shows generation results before the large preview on mobile', () => {
+  it('shows generation status, then the current poster, then the notice on mobile', () => {
     const start = mobileWorkflowSource.indexOf("{(phase === 'generating' || phase === 'results') && (")
     const source = mobileWorkflowSource.slice(start, mobileWorkflowSource.indexOf('aria-label="工作流主操作"', start))
-    expect(source).toContain('order-3 min-w-0 lg:order-none')
-    expect(source).toContain('order-1 min-w-0 space-y-4 lg:order-none')
+    expect(source).toContain('order-1 w-full lg:hidden')
+    expect(source).toContain('order-2 min-w-0 lg:order-none')
+    expect(source).toContain('order-3 w-full lg:order-none lg:basis-full')
+    expect(source).toContain('order-4 min-w-0 space-y-4 lg:order-none')
     expect(source).toContain('aria-label="批次结果槽位"')
     expect(chromeSource).toContain('fixed z-30')
     expect(chromeSource).toContain('max-lg:bottom-[var(--tools-mobile-dock-bottom,0px)]')

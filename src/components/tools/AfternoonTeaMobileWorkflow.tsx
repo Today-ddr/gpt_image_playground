@@ -1097,14 +1097,27 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
       {(phase === 'generating' || phase === 'results') && (
         <div
           ref={generateSplitContainerRef}
-          className={`afternoon-phase-in flex flex-col gap-3 pb-4 sm:gap-4 lg:col-span-2 lg:row-start-2 lg:flex-row lg:items-stretch lg:gap-0 lg:pb-3 ${generateSplitDragging ? 'lg:select-none' : ''}`}
+          className={`afternoon-phase-in flex flex-col gap-3 pb-4 sm:gap-4 lg:col-span-2 lg:row-start-2 lg:flex-row lg:flex-wrap lg:items-stretch lg:gap-0 lg:pb-3 ${generateSplitDragging ? 'lg:select-none' : ''}`}
           aria-label="生成与保存工作区"
         >
-          {/* 移动端先结果后预览；桌面左右分栏 + 中间可拖拽调整宽度 */}
+          {/* 窄屏：生成状态、当前海报、下午茶通知、其余内容。桌面左右分栏，通知落到整行下面。 */}
+          <div className="order-1 w-full lg:hidden">
+            <section aria-label="生成状态">
+              <div className="grid grid-cols-3 gap-x-3 gap-y-1 rounded-2xl border border-gray-200 bg-white/80 px-3 py-3 text-xs text-gray-600 dark:border-white/[0.08] dark:bg-gray-900/80 dark:text-gray-300" aria-live="polite">
+                <span>总数 {resultSlots.length}</span>
+                <span>完成 {counters.done}</span>
+                <span>失败 {counters.error}</span>
+                <span>等待 {counters.queued}</span>
+                <span>生成中 {counters.running}</span>
+                <span>耗时 {formatElapsed(batchElapsed)}</span>
+                {latestFreshSlotNumber > 0 && <span>刚出图：第 {latestFreshSlotNumber} 张</span>}
+              </div>
+            </section>
+          </div>
           {currentCandidate && (
             <section
               aria-label="当前海报"
-              className="order-3 min-w-0 lg:order-none lg:min-w-[280px] lg:pr-1"
+              className="order-2 min-w-0 lg:order-none lg:min-w-[280px] lg:pr-1"
               style={isDesktopGenerateSplit ? { flexBasis: `${generateSplitLeftPercent}%`, flexGrow: 0, flexShrink: 0 } : undefined}
             >
               <div className="mb-2 flex items-center justify-between gap-3">
@@ -1216,12 +1229,12 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
           )}
 
           <div
-            className={`order-1 min-w-0 space-y-4 lg:order-none lg:min-w-[300px] lg:pl-1 ${currentCandidate ? '' : 'lg:w-full'}`}
+            className={`order-4 min-w-0 space-y-4 lg:order-none lg:min-w-[300px] lg:pl-1 ${currentCandidate ? '' : 'lg:w-full'}`}
             style={isDesktopGenerateSplit && currentCandidate
               ? { flexBasis: `${100 - generateSplitLeftPercent}%`, flexGrow: 1, flexShrink: 1, minWidth: GENERATE_SPLIT_MIN_RIGHT_PX }
               : undefined}
           >
-            <section aria-label="生成状态">
+            <section aria-label="生成状态" className="hidden lg:block">
               <div className="grid grid-cols-3 gap-x-3 gap-y-1 rounded-2xl border border-gray-200 bg-white/80 px-3 py-3 text-xs text-gray-600 dark:border-white/[0.08] dark:bg-gray-900/80 dark:text-gray-300 sm:rounded-none sm:border-x-0 sm:bg-transparent dark:sm:bg-transparent" aria-live="polite">
                 <span>总数 {resultSlots.length}</span>
                 <span>完成 {counters.done}</span>
@@ -1302,10 +1315,15 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
               </div>
             </details>
           </div>
+          {showNotice && (
+            <div className="order-3 w-full lg:order-none lg:basis-full lg:pt-4">{noticePanel}</div>
+          )}
         </div>
       )}
 
-      {showNotice && <div className="afternoon-phase-in lg:col-span-2 lg:row-start-3">{noticePanel}</div>}
+      {showNotice && phase !== 'generating' && phase !== 'results' && (
+        <div className="afternoon-phase-in lg:col-span-2 lg:row-start-3">{noticePanel}</div>
+      )}
 
       {(phase !== 'results' || availableCandidates.length > 0 || Boolean(props.orderResult)) && <div className={TOOLS_MOBILE_ACTION_DOCK_CLASS} aria-label="工作流主操作">
         {phase === 'input' && (
