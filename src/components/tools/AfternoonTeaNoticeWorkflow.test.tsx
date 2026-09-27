@@ -133,8 +133,8 @@ describe('AfternoonTeaNoticeFormView', () => {
 
   it('copies the card text through the provided handler', () => {
     expect(noticeWorkflowSource).toContain('props.onCopy(notice.text)')
-    expect(noticeWorkflowSource).toContain("copyFlash.show(notice.style, 'success')")
-    expect(noticeWorkflowSource).toContain("copyFlash.show(notice.style, 'error')")
+    expect(noticeWorkflowSource).toContain('copyFlash.show(noticeCopyFlashKey(index), \'success\')')
+    expect(noticeWorkflowSource).toContain('copyFlash.show(noticeCopyFlashKey(index), \'error\')')
     expect(noticeWorkflowSource).toContain("showToast('已复制', 'success')")
     expect(noticeWorkflowSource).toContain('copyTextToClipboard(text)')
   })

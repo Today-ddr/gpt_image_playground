@@ -17,7 +17,7 @@ import { getActiveApiProfile } from '../../lib/apiProfiles'
 import { copyTextToClipboard, getClipboardFailureMessage } from '../../lib/clipboard'
 import { useStore } from '../../store'
 import { ChevronDownIcon, CopyIcon, PasteIcon } from '../icons'
-import { NoticeCopyFlash, useNoticeCopyFlash } from './AfternoonTeaNoticePanel'
+import { NoticeCopyFlash, noticeCopyFlashKey, useNoticeCopyFlash } from './AfternoonTeaNoticePanel'
 import {
   canReadAfternoonTeaClipboard,
   createAfternoonTeaClipboardCoordinator,
@@ -174,16 +174,16 @@ export function AfternoonTeaNoticeFormView(props: AfternoonTeaNoticeFormViewProp
                 const canCopy = !locked && Boolean(notice.text.trim())
                 return (
                   <button
-                    key={notice.style}
+                    key={noticeCopyFlashKey(index)}
                     type="button"
                     role="listitem"
                     onClick={() => {
                       props.onSelectedIndexChange(index)
                       if (!canCopy) return
                       void Promise.resolve(props.onCopy(notice.text)).then(() => {
-                        copyFlash.show(notice.style, 'success')
+                        copyFlash.show(noticeCopyFlashKey(index), 'success')
                       }).catch(() => {
-                        copyFlash.show(notice.style, 'error')
+                        copyFlash.show(noticeCopyFlashKey(index), 'error')
                       })
                     }}
                     disabled={!canCopy}
@@ -207,7 +207,7 @@ export function AfternoonTeaNoticeFormView(props: AfternoonTeaNoticeFormViewProp
                         点击复制
                       </span>
                     </div>
-                    <NoticeCopyFlash status={copyFlash.flash?.key === notice.style ? copyFlash.flash.status : null} />
+                    <NoticeCopyFlash status={copyFlash.flash?.key === noticeCopyFlashKey(index) ? copyFlash.flash.status : null} />
                     <pre className="min-h-24 whitespace-pre-wrap break-words font-sans text-sm leading-6 text-gray-700 dark:text-gray-200">{notice.text}</pre>
                   </button>
                 )

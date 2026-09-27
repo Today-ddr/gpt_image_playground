@@ -31,6 +31,7 @@ import {
 import { analyzeDish } from '../lib/dishAnalysisApi'
 import { readAfternoonTeaNoticeSystemPrompt, type AfternoonTeaNotice, type AfternoonTeaNoticeStatus } from '../lib/afternoonTeaNotice'
 import { AfternoonTeaNoticeRunCoordinator, runAfternoonTeaNotice } from '../lib/afternoonTeaNoticeRun'
+import { createNoticeSupplementSaver } from '../lib/noticeSupplementSave'
 import {
   PosterReadyTitleReminder,
   countReadyPosterImages,
@@ -1104,6 +1105,16 @@ export default function ToolsWorkspace() {
   const setDefaultAfternoonTeaTitleCount = useStore((state) => state.setDefaultAfternoonTeaTitleCount)
   const setActiveAfternoonTeaConversationId = useStore((state) => state.setActiveAfternoonTeaConversationId)
   const updateAfternoonTeaConversation = useStore((state) => state.updateAfternoonTeaConversation)
+  const updateAfternoonTeaConversationRef = useRef(updateAfternoonTeaConversation)
+  updateAfternoonTeaConversationRef.current = updateAfternoonTeaConversation
+  const supplementSaverRef = useRef<ReturnType<typeof createNoticeSupplementSaver> | null>(null)
+  if (supplementSaverRef.current == null) {
+    supplementSaverRef.current = createNoticeSupplementSaver({
+      save: (conversationId, value) => {
+        updateAfternoonTeaConversationRef.current(conversationId, { noticeSupplement: value })
+      },
+    })
+  }
   const renameAfternoonTeaConversation = useStore((state) => state.renameAfternoonTeaConversation)
   const deleteAfternoonTeaConversation = useStore((state) => state.deleteAfternoonTeaConversation)
   const setAfternoonTeaEditingConversationId = useStore((state) => state.setAfternoonTeaEditingConversationId)
@@ -1119,8 +1130,6 @@ export default function ToolsWorkspace() {
   const activeConversation = afternoonTeaConversations.find((conversation) => conversation.id === activeAfternoonTeaConversationId) ?? null
   const coordinatorRef = useRef(new DishAnalysisCoordinator())
   const noticeCoordinatorRef = useRef(new AfternoonTeaNoticeRunCoordinator())
-  const supplementSaveTimerRef = useRef<number | null>(null)
-  const pendingSupplementSaveRef = useRef<{ conversationId: string, value: string } | null>(null)
   const knownPosterFinishRef = useRef<string | null | undefined>(undefined)
   const initialPosterFinishRef = useRef<string | null | undefined>(undefined)
   const posterReadyTitleRef = useRef<PosterReadyTitleReminder | null>(null)
@@ -1435,7 +1444,9 @@ export default function ToolsWorkspace() {
   posterReadyCountRef.current = activeConversation ? countReadyPosterImages(activeConversation.posterItems, tasks) : 0
 
   useEffect(() => {
+    const flushSupplement = () => supplementSaverRef.current?.flush()
     const onVisibility = () => {
+      if (document.hidden) flushSupplement()
       if (!document.hidden) {
         posterReadyTitleReminder().stop()
         return
@@ -1445,7 +1456,11 @@ export default function ToolsWorkspace() {
       posterReadyTitleReminder().start(posterReadyLabel(posterReadyCountRef.current))
     }
     document.addEventListener('visibilitychange', onVisibility)
-    return () => document.removeEventListener('visibilitychange', onVisibility)
+    window.addEventListener('pagehide', flushSupplement)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility)
+      window.removeEventListener('pagehide', flushSupplement)
+    }
   }, [])
 
   useEffect(() => {
@@ -1462,12 +1477,7 @@ export default function ToolsWorkspace() {
     mountedRef.current = true
     return () => {
       mountedRef.current = false
-      if (supplementSaveTimerRef.current != null) window.clearTimeout(supplementSaveTimerRef.current)
-      const pendingSupplement = pendingSupplementSaveRef.current
-      pendingSupplementSaveRef.current = null
-      if (pendingSupplement) {
-        updateAfternoonTeaConversation(pendingSupplement.conversationId, { noticeSupplement: pendingSupplement.value })
-      }
+      supplementSaverRef.current?.flush()
       coordinatorRef.current.dispose()
       noticeCoordinatorRef.current.dispose()
       const runtimes = new Set(batchRuntimesRef.current.values())
@@ -2364,13 +2374,7 @@ export default function ToolsWorkspace() {
               const conversationId = activeConversation?.id
               if (!conversationId) return
               setNoticeSupplements((current) => ({ ...current, [conversationId]: value }))
-              pendingSupplementSaveRef.current = { conversationId, value }
-              if (supplementSaveTimerRef.current != null) window.clearTimeout(supplementSaveTimerRef.current)
-              supplementSaveTimerRef.current = window.setTimeout(() => {
-                supplementSaveTimerRef.current = null
-                pendingSupplementSaveRef.current = null
-                updateAfternoonTeaConversation(conversationId, { noticeSupplement: value })
-              }, 400)
+              supplementSaverRef.current?.schedule(conversationId, value)
             }}
             noticeStatus={noticeJob?.status ?? 'idle'}
             notices={noticeJob?.notices ?? []}

@@ -26,6 +26,11 @@ type AfternoonTeaNoticePanelProps = {
   onCopy: (text: string) => void | Promise<void>
 }
 
+/** 同一屏里两张卡可能同名，遮罩按位置区分，不能按风格名。 */
+export function noticeCopyFlashKey(index: number) {
+  return String(index)
+}
+
 export function useNoticeCopyFlash() {
   const [flash, setFlash] = useState<{ key: string; status: 'success' | 'error' } | null>(null)
   const timer = useRef<number | null>(null)
@@ -116,9 +121,9 @@ export function AfternoonTeaNoticePanel(props: AfternoonTeaNoticePanelProps) {
                   setSelectedIndex(index)
                   if (!notice.text.trim()) return
                   void Promise.resolve(props.onCopy(notice.text)).then(() => {
-                    copyFlash.show(String(index), 'success')
+                    copyFlash.show(noticeCopyFlashKey(index), 'success')
                   }).catch(() => {
-                    copyFlash.show(String(index), 'error')
+                    copyFlash.show(noticeCopyFlashKey(index), 'error')
                   })
                 }}
                 className={`notice-card-rise relative touch-manipulation rounded-xl border px-2.5 py-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 active:scale-[0.99] ${active ? 'border-blue-300 bg-blue-50/70 ring-2 ring-inset ring-blue-400 dark:border-blue-500/40 dark:bg-blue-500/10 dark:ring-blue-500/60' : 'border-gray-200 bg-white dark:border-white/[0.1] dark:bg-white/[0.03]'}`}
@@ -133,7 +138,7 @@ export function AfternoonTeaNoticePanel(props: AfternoonTeaNoticePanelProps) {
                   </span>
                 </div>
                 <div className={`mb-2 text-[11px] font-medium ${index === 0 ? 'text-gray-500 dark:text-gray-400' : 'text-amber-700 dark:text-amber-300'}`} data-notice-diff={diffLabel}>{diffLabel}</div>
-                <NoticeCopyFlash status={copyFlash.flash?.key === String(index) ? copyFlash.flash.status : null} />
+                <NoticeCopyFlash status={copyFlash.flash?.key === noticeCopyFlashKey(index) ? copyFlash.flash.status : null} />
                 <div className="whitespace-pre-wrap break-words font-sans text-sm leading-6 text-gray-700 dark:text-gray-200">
                   {(diff?.lines ?? notice.text.split('\n').map((text) => ({ text, changed: false }))).map((line, lineIndex) => (
                     <div key={`${index}-${lineIndex}`} data-changed={line.changed ? 'true' : undefined} className={line.changed ? 'rounded bg-amber-100 px-1 text-amber-950 dark:bg-amber-400/15 dark:text-amber-100' : undefined}>
