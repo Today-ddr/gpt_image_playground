@@ -26,7 +26,7 @@ import { AfternoonTeaNoticePanel } from './AfternoonTeaNoticePanel'
 import type { AfternoonTeaNotice, AfternoonTeaNoticeStatus } from '../../lib/afternoonTeaNotice'
 import { resolveAfternoonTeaPlacementSelection } from '../../lib/afternoonTeaTitlePlacement'
 import { resolveAfternoonTeaTitleCandidates } from '../../lib/dishAnalysisPrompts'
-import { TOOLS_MOBILE_ACTION_DOCK_CLASS, toolsMobileFieldClass, toolsMobilePrimaryButtonClass } from './toolsMobileChrome'
+import { TOOLS_MOBILE_ACTION_DOCK_CLASS, syncToolsMobileDockToBrowserChrome, toolsMobileFieldClass, toolsMobilePrimaryButtonClass } from './toolsMobileChrome'
 
 export type MobileAfternoonTeaPhase = 'input' | 'analyzing' | 'review' | 'generating' | 'results'
 
@@ -404,6 +404,21 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
   const previousPhaseRef = useRef(phase)
   const touchStartXRef = useRef<number | null>(null)
   const generateSplitContainerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const sync = () => syncToolsMobileDockToBrowserChrome()
+    sync()
+    const viewport = window.visualViewport
+    window.addEventListener('resize', sync)
+    viewport?.addEventListener('resize', sync)
+    viewport?.addEventListener('scroll', sync)
+    return () => {
+      window.removeEventListener('resize', sync)
+      viewport?.removeEventListener('resize', sync)
+      viewport?.removeEventListener('scroll', sync)
+      document.documentElement.style.removeProperty('--tools-mobile-dock-bottom')
+    }
+  }, [])
   const generateSplitDraggingRef = useRef(false)
   const [generateSplitLeftPercent, setGenerateSplitLeftPercent] = useState(GENERATE_SPLIT_DEFAULT_LEFT_PERCENT)
   const [generateSplitDragging, setGenerateSplitDragging] = useState(false)

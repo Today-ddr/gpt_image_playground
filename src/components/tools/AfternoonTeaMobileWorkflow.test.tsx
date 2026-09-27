@@ -365,7 +365,7 @@ describe('AfternoonTeaMobileWorkflow', () => {
     expect(mobileWorkflowSource).toContain('flex items-center gap-2')
     expect(mobileWorkflowSource).toContain('TOOLS_MOBILE_ACTION_DOCK_CLASS')
     expect(chromeSource).toContain('lg:justify-end')
-    expect(chromeSource).toContain('max-lg:rounded-2xl')
+    expect(chromeSource).toContain('max-lg:rounded-t-2xl')
     expect(mobileWorkflowSource).toContain('lg:min-w-56')
     expect(mobileWorkflowSource).not.toMatch(/(?:sm|md):grid-cols-\[minmax\(0,0\.9fr\)/)
   })
@@ -378,7 +378,9 @@ describe('AfternoonTeaMobileWorkflow', () => {
     expect(source).toContain('order-1 min-w-0 space-y-4 lg:order-none')
     expect(source).toContain('aria-label="批次结果槽位"')
     expect(chromeSource).toContain('fixed z-30')
-    expect(chromeSource).toContain('max-lg:bottom-[max(1rem,env(safe-area-inset-bottom))]')
+    expect(chromeSource).toContain('max-lg:bottom-[var(--tools-mobile-dock-bottom,0px)]')
+    expect(chromeSource).toContain('readBrowserChromeBottomInset')
+    expect(mobileWorkflowSource).toContain('syncToolsMobileDockToBrowserChrome')
     expect(chromeSource).not.toContain('inset-x-0 bottom-0')
   })
 
@@ -635,7 +637,7 @@ describe('AfternoonTeaMobileWorkflow', () => {
 
     expect(classForLabel(html, '餐品海报工作流')).toContain('lg:grid-cols-[minmax(0,1fr)_auto]')
     expect(classForLabel(html, '餐品海报进度')).toMatch(/lg:col-start-1.*lg:row-start-1/)
-    expect(classForLabel(html, '工作流主操作')).toMatch(/fixed z-30.*max-lg:rounded-2xl.*lg:static.*lg:col-start-2.*lg:row-start-1/)
+    expect(classForLabel(html, '工作流主操作')).toMatch(/fixed z-30.*max-lg:rounded-t-2xl.*lg:static.*lg:col-start-2.*lg:row-start-1/)
     expect(classForLabel(html, '审查工作区')).toMatch(/lg:col-span-2.*lg:row-start-2/)
     expect((mobileWorkflowSource.match(/aria-label="工作流主操作"/g) ?? [])).toHaveLength(1)
     expect(html).toContain('env(safe-area-inset-bottom)')

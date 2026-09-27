@@ -11,6 +11,9 @@ describe('settings content', () => {
     expect(settingsModal).toContain('生图模型 ID')
     expect(settingsModal).toContain('语义理解/多模态模型 ID')
     expect(settingsModal).toContain('获取模型列表')
+    expect(settingsModal).toContain('label="选择模型"')
+    expect(settingsModal).toContain('label="选择语义理解模型"')
+    expect(settingsModal).toContain('lg:hidden')
     expect(settingsModal).toContain("activeProfile.apiMode === 'images'")
   })
 

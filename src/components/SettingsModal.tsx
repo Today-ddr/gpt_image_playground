@@ -313,6 +313,43 @@ profiles 中不要包含 apiKey（用户导入后自行填写）。
 ## 统一任务接口示例
 {"customProviders":[{"id":"custom-example-task","name":"示例任务服务商","submit":{"path":"images/generations","method":"POST","contentType":"json","body":{"model":"$profile.model","prompt":"$prompt","n":"$params.n","size":"$params.size","resolution":"2k","quality":"$params.quality","image_urls":"$inputImages.dataUrls"},"taskIdPath":"data.0.task_id"},"poll":{"path":"tasks/{task_id}","method":"GET","query":{"language":"zh"},"intervalSeconds":5,"statusPath":"data.status","successValues":["completed"],"failureValues":["failed","cancelled"],"errorPath":"data.error.message","result":{"imageUrlPaths":["data.result.images.*.url.*"],"b64JsonPaths":[]}}}],"profiles":[{"name":"示例任务服务商","provider":"custom-example-task","baseUrl":"","model":"gpt-image-2","apiMode":"images"}]}`
 
+const MOBILE_MODEL_CHOICE_LIMIT = 40
+
+function MobileModelChoices({ models, selected, onSelect, label }: {
+  models: string[]
+  selected: string
+  onSelect: (model: string) => void
+  label: string
+}) {
+  if (models.length === 0) return null
+  const query = selected.trim().toLowerCase()
+  const matched = query ? models.filter((model) => model.toLowerCase().includes(query)) : models
+  const visible = matched.slice(0, MOBILE_MODEL_CHOICE_LIMIT)
+  return (
+    <div className="mt-2 lg:hidden">
+      <div role="listbox" aria-label={label} className="max-h-48 overflow-y-auto rounded-xl border border-gray-200/80 bg-white dark:border-white/[0.08] dark:bg-gray-950">
+        {visible.length === 0 ? (
+          <div className="px-3 py-2.5 text-xs text-gray-500">没有匹配的模型，可以继续手动输入</div>
+        ) : visible.map((model) => (
+          <button
+            key={model}
+            type="button"
+            role="option"
+            aria-selected={model === selected}
+            onClick={() => onSelect(model)}
+            className={`block min-h-11 w-full border-b border-gray-100 px-3 text-left text-sm last:border-b-0 dark:border-white/[0.06] ${model === selected ? 'bg-blue-50 font-medium text-blue-700 dark:bg-blue-500/10 dark:text-blue-200' : 'text-gray-800 active:bg-gray-50 dark:text-gray-100 dark:active:bg-white/[0.04]'}`}
+          >
+            {model}
+          </button>
+        ))}
+      </div>
+      {matched.length > visible.length && (
+        <div className="mt-1 text-xs text-gray-500">还有 {matched.length - visible.length} 个，输入关键字缩小范围</div>
+      )}
+    </div>
+  )
+}
+
 export default function SettingsModal() {
   const showSettings = useStore((s) => s.showSettings)
   const settingsTabRequest = useStore((s) => s.settingsTabRequest)
@@ -1907,6 +1944,12 @@ export default function SettingsModal() {
                   placeholder={activeProfile.provider === 'fal' ? DEFAULT_FAL_MODEL : getDefaultModelForMode(activeProfile.apiMode ?? DEFAULT_SETTINGS.apiMode)}
                   className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
                 />
+                <MobileModelChoices
+                  models={activeModelOptions}
+                  selected={activeProfile.model}
+                  label="选择模型"
+                  onSelect={(model) => updateActiveProfile({ model }, true)}
+                />
                 {activeModelListState && (
                   <div data-selectable-text className={`mt-1.5 text-xs ${activeModelListState.error ? 'text-red-500 dark:text-red-400' : 'text-gray-500 dark:text-gray-500'}`}>
                     {activeModelListState.message}
@@ -1941,6 +1984,12 @@ export default function SettingsModal() {
                     list={activeModelOptions.length ? activeModelListId : undefined}
                     placeholder="例如 gpt-4.1-mini"
                     className="w-full rounded-xl border border-gray-200/70 bg-white/60 px-3 py-2.5 text-sm text-gray-700 outline-none transition focus:border-blue-300 dark:border-white/[0.08] dark:bg-white/[0.03] dark:text-gray-200 dark:focus:border-blue-500/50"
+                  />
+                  <MobileModelChoices
+                    models={activeModelOptions}
+                    selected={activeProfile.understandingModel ?? ''}
+                    label="选择语义理解模型"
+                    onSelect={(model) => updateActiveProfile({ understandingModel: model }, true)}
                   />
                   <div data-selectable-text className="mt-1.5 text-xs text-gray-500 dark:text-gray-500">
                     仅当前配置生效：复用本配置的 API URL、API Key 和代理设置。并行生图勾选不影响理解接口；本字段也不参与生图或 Agent 请求。

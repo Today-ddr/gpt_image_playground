@@ -1,19 +1,31 @@
 /**
- * 工具页窄屏外壳，对齐画廊移动端：
- * 主操作是离边的磨砂圆角浮层，lg 起回到进度条右侧的文档流。
+ * 工具页窄屏外壳。
+ * 主操作贴住浏览器底部地址栏，lg 起回到进度条右侧的文档流。
+ * --tools-mobile-dock-bottom 由可视区域计算，用来补上地址栏挡住的那段高度。
  */
 export const TOOLS_MOBILE_ACTION_DOCK_CLASS = [
   'fixed z-30',
-  'max-lg:bottom-[max(1rem,env(safe-area-inset-bottom))]',
-  'max-lg:left-[max(0.75rem,env(safe-area-inset-left))]',
-  'max-lg:right-[max(0.75rem,env(safe-area-inset-right))]',
-  'max-lg:rounded-2xl max-lg:border max-lg:border-white/60 max-lg:bg-white/75 max-lg:p-3',
-  'max-lg:shadow-[0_8px_30px_rgb(0,0,0,0.08)] max-lg:ring-1 max-lg:ring-black/5 max-lg:backdrop-blur-2xl',
-  'dark:max-lg:border-white/[0.08] dark:max-lg:bg-gray-900/80',
-  'dark:max-lg:shadow-[0_8px_30px_rgb(0,0,0,0.35)] dark:max-lg:ring-white/10',
+  'max-lg:bottom-[var(--tools-mobile-dock-bottom,0px)]',
+  'max-lg:left-0 max-lg:right-0',
+  'max-lg:rounded-t-2xl max-lg:rounded-b-none max-lg:border max-lg:border-b-0 max-lg:border-white/60',
+  'max-lg:bg-white/90 max-lg:px-[max(0.75rem,env(safe-area-inset-left))] max-lg:pb-2 max-lg:pt-2',
+  'max-lg:shadow-[0_-8px_30px_rgb(0,0,0,0.08)] max-lg:backdrop-blur-2xl',
+  'dark:max-lg:border-white/[0.08] dark:max-lg:bg-gray-900/90',
+  'dark:max-lg:shadow-[0_-8px_30px_rgb(0,0,0,0.35)]',
   'lg:static lg:col-start-2 lg:row-start-1 lg:mx-0 lg:mb-4 lg:mt-0 lg:flex lg:justify-end',
   'lg:border-0 lg:bg-transparent lg:p-0 lg:shadow-none lg:ring-0 lg:backdrop-blur-none dark:lg:bg-transparent',
 ].join(' ')
+
+/** 布局视口比可视区域高出的底部高度，也就是地址栏占掉的缝。 */
+export function readBrowserChromeBottomInset(): number {
+  const viewport = window.visualViewport
+  if (!viewport) return 0
+  return Math.max(0, Math.round(window.innerHeight - viewport.height - viewport.offsetTop))
+}
+
+export function syncToolsMobileDockToBrowserChrome() {
+  document.documentElement.style.setProperty('--tools-mobile-dock-bottom', `${readBrowserChromeBottomInset()}px`)
+}
 
 /** 窄屏主按钮：对齐画廊「生成图像」。不可用时用灰底深字，避免淡蓝底上的白字看不清。 */
 export const toolsMobilePrimaryButtonClass = [
