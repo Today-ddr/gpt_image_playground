@@ -38,6 +38,14 @@ export default defineConfig(({ command }) => {
                 target: devProxyConfig.target,
                 changeOrigin: devProxyConfig.changeOrigin,
                 secure: devProxyConfig.secure,
+                // 与 Docker Nginx 一致：上游见到 Origin 会 403，开发代理也不能把浏览器来源头带过去。
+                configure: (proxy) => {
+                  proxy.on('proxyReq', (proxyReq) => {
+                    proxyReq.removeHeader('origin')
+                    proxyReq.removeHeader('access-control-request-method')
+                    proxyReq.removeHeader('access-control-request-headers')
+                  })
+                },
                 router: (req) => resolveApiProxyUpstream(
                   req.headers['x-api-proxy-target'],
                   devProxyConfig.target,

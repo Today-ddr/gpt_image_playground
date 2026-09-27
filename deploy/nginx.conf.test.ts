@@ -12,5 +12,11 @@ describe('docker API proxy nginx config', () => {
     expect(nginxConf).toContain('$http_x_api_proxy_target')
     expect(nginxConf).toContain('X-Api-Proxy-Target')
   })
+
+  it('drops browser Origin so upstreams that reject cross-origin calls still answer', () => {
+    expect(nginxConf).toContain('proxy_set_header Origin "";')
+    expect(nginxConf).toContain('proxy_set_header Access-Control-Request-Method "";')
+    expect(nginxConf).toContain('proxy_set_header Access-Control-Request-Headers "";')
+  })
 })
 
