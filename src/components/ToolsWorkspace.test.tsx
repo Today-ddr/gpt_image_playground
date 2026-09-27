@@ -84,9 +84,10 @@ describe('DishAnalysisFormView', () => {
     expect(appSource).toContain("appMode === 'tools' && <ToolsWorkspace />")
   })
 
-  it('does not stretch the mobile tools navigation row to the full viewport height', () => {
-    expect(workspaceSource).toContain('grid min-h-0 sm:min-h-[calc(100vh-8rem)]')
-    expect(workspaceSource).not.toContain('min-h-[calc(100dvh-8rem)] sm:min-h-[calc(100vh-8rem)]')
+  it('does not keep a tool sidebar after afternoon tea notice moved into dish analysis', () => {
+    expect(workspaceSource).not.toContain('sm:grid-cols-[180px_minmax(0,1fr)]')
+    expect(workspaceSource).not.toContain("id: 'afternoon-tea-notice'")
+    expect(workspaceSource).toContain('max-w-7xl')
   })
 
   it('renders the complete dish analysis workflow', () => {
@@ -1034,35 +1035,18 @@ describe('dish analysis coordination', () => {
     expect(isDisabled?.(false, afternoonTeaConversation({ batchStartedAt: 10, batchFinishedAt: 20 }), afternoonTeaSettings())).toBe(false)
   })
 
-  it('keeps the tool title on one line while overlaying its actions inside the same item', () => {
-    const navSource = workspaceSource.slice(
-      workspaceSource.indexOf('<nav className='),
-      workspaceSource.indexOf('</nav>'),
-    )
+  it('keeps history and new conversation beside the progress steps', () => {
+    const actionsStart = workspaceSource.indexOf('const sessionActions = (')
+    const actionsSource = workspaceSource.slice(actionsStart, workspaceSource.indexOf('return (', actionsStart))
 
-    expect(workspaceSource).toContain("id: 'dish-analysis'")
-    expect(workspaceSource).toContain("id: 'afternoon-tea-notice'")
-    expect(workspaceSource).toContain("label: '餐品解析'")
-    expect(workspaceSource).toContain("label: '下午茶通知'")
-    expect(navSource).toContain('{tool.label}')
-    expect(navSource).toContain("activeToolId === 'dish-analysis'")
-    expect(navSource).toContain('overflow-x-auto')
-    expect(navSource).toContain("aria-current={selected ? 'page' : undefined}")
-    expect(navSource).toContain('sm:border-l-2')
-    expect(navSource).toContain('sm:border-blue-500')
-    expect(navSource).toMatch(
-      /<div className="[^"]*absolute[^"]*right-[^"]*">[\s\S]*?<MessageCircleIcon[\s\S]*?<EditIcon/,
-    )
-    expect(navSource).toContain('hidden text-xs font-medium text-gray-400 sm:block')
-    expect(navSource).toContain('flex h-12 items-center')
-    expect(navSource).toContain('sm:block sm:h-auto')
-    expect(navSource.match(/className="[^"]*h-11 w-11[^"]*sm:h-9 sm:w-8[^"]*"/g)).toHaveLength(2)
-    expect(navSource).toContain('aria-expanded={historyOpen}')
-    expect(navSource).toContain('className="relative z-10')
-    expect(navSource).toContain('<MessageCircleIcon className="h-5 w-5 sm:h-4 sm:w-4" />')
-    expect(navSource).toContain('<EditIcon className="h-5 w-5 sm:h-4 sm:w-4" />')
-    expect(navSource).not.toContain('translate-x-')
-    expect(navSource).not.toContain('<HistoryIcon')
+    expect(actionsSource).toContain('aria-label="餐品解析历史"')
+    expect(actionsSource).toContain('aria-label="新建餐品解析会话"')
+    expect(actionsSource).toContain('aria-expanded={historyOpen}')
+    expect(actionsSource).toContain('<MessageCircleIcon className="h-5 w-5" />')
+    expect(actionsSource).toContain('<EditIcon className="h-5 w-5" />')
+    expect(actionsSource.match(/className="[^"]*h-11 w-11[^"]*"/g)).toHaveLength(2)
+    expect(workspaceSource).toContain('sessionActions={sessionActions}')
+    expect(workspaceSource).not.toContain('<HistoryIcon')
     expect(iconsSource).toContain('export function MessageCircleIcon')
     expect(iconsSource).toContain('M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29')
   })
@@ -1082,31 +1066,11 @@ describe('dish analysis coordination', () => {
     expect(workspaceSource).toContain('const retryDisabled = !imageDataUrl ||')
   })
 
-  it('only shows history actions on dish analysis and mounts the notice tool separately', () => {
-    expect(workspaceSource).toContain('{activeToolId === \'dish-analysis\' && (')
-    expect(workspaceSource).toContain('<AfternoonTeaNoticeWorkflow configured={Boolean(analysisProfile)} />')
-    expect(workspaceSource).toContain("activeToolId === 'afternoon-tea-notice'")
-    expect(workspaceSource).toContain('writeActiveToolsWorkspaceToolId(toolId)')
-    expect(workspaceSource).toContain("if (toolId !== 'dish-analysis') setHistoryOpen(false)")
-    expect(workspaceSource).toContain("activeToolId !== 'dish-analysis'")
-  })
-
-  it('persists the active tool id and ignores unknown values', () => {
-    const storage = {
-      values: {} as Record<string, string>,
-      getItem(key: string) {
-        return Object.prototype.hasOwnProperty.call(this.values, key) ? this.values[key] : null
-      },
-      setItem(key: string, value: string) {
-        this.values[key] = value
-      },
-    }
-
-    expect(workspaceHelpers.readActiveToolsWorkspaceToolId(storage)).toBe('dish-analysis')
-    workspaceHelpers.writeActiveToolsWorkspaceToolId('afternoon-tea-notice', storage)
-    expect(workspaceHelpers.readActiveToolsWorkspaceToolId(storage)).toBe('afternoon-tea-notice')
-    expect(workspaceHelpers.readActiveToolsWorkspaceToolId({ getItem: () => 'unknown' })).toBe('dish-analysis')
-    expect(workspaceHelpers.readActiveToolsWorkspaceToolId(null)).toBe('dish-analysis')
+  it('keeps afternoon tea notice inside dish analysis instead of a separate tool', () => {
+    expect(workspaceSource).toContain('<AfternoonTeaMobileWorkflow')
+    expect(workspaceSource).not.toContain('<AfternoonTeaNoticeWorkflow')
+    expect(workspaceSource).not.toContain('activeToolId')
+    expect(workspaceSource).toContain('noticeSupplement={')
   })
 
   it('keeps parsed results when a source image is attached later', () => {

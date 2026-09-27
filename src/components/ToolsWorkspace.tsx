@@ -68,7 +68,6 @@ import { ConversationHistoryPopover, type ConversationHistoryItem } from './Conv
 import {
   AfternoonTeaMobileWorkflow,
 } from './tools/AfternoonTeaMobileWorkflow'
-import { AfternoonTeaNoticeWorkflow } from './tools/AfternoonTeaNoticeWorkflow'
 import {
   getAfternoonTeaPosterErrorMessage,
   type AfternoonTeaPosterViewItem,
@@ -77,45 +76,6 @@ import { AfternoonTeaItemPlacement } from './tools/AfternoonTeaTitlePlacement'
 
 export const MAX_DISH_IMAGE_BYTES = 20 * 1024 * 1024
 type ToolTaskExecutionMode = 'browser' | 'server'
-
-export const TOOL_ITEMS = [
-  { id: 'dish-analysis', label: '餐品解析' },
-  { id: 'afternoon-tea-notice', label: '下午茶通知' },
-] as const
-
-export type ToolsWorkspaceToolId = typeof TOOL_ITEMS[number]['id']
-
-export const DEFAULT_TOOLS_WORKSPACE_TOOL_ID: ToolsWorkspaceToolId = 'dish-analysis'
-export const ACTIVE_TOOL_STORAGE_KEY = 'gpt-image-playground.tools.active-tool'
-
-export function isToolsWorkspaceToolId(value: string): value is ToolsWorkspaceToolId {
-  return TOOL_ITEMS.some((tool) => tool.id === value)
-}
-
-export function readActiveToolsWorkspaceToolId(
-  storage: Pick<Storage, 'getItem'> | null = typeof window === 'undefined' ? null : window.localStorage,
-): ToolsWorkspaceToolId {
-  if (!storage) return DEFAULT_TOOLS_WORKSPACE_TOOL_ID
-  try {
-    const raw = storage.getItem(ACTIVE_TOOL_STORAGE_KEY)
-    if (raw && isToolsWorkspaceToolId(raw)) return raw
-  } catch {
-    // localStorage 不可用时回退到默认工具
-  }
-  return DEFAULT_TOOLS_WORKSPACE_TOOL_ID
-}
-
-export function writeActiveToolsWorkspaceToolId(
-  toolId: ToolsWorkspaceToolId,
-  storage: Pick<Storage, 'setItem'> | null = typeof window === 'undefined' ? null : window.localStorage,
-) {
-  if (!storage) return
-  try {
-    storage.setItem(ACTIVE_TOOL_STORAGE_KEY, toolId)
-  } catch {
-    // ignore quota / private mode failures
-  }
-}
 
 export function normalizeDishTitleCount(value: number) {
   if (!Number.isFinite(value)) return DEFAULT_DISH_TITLE_COUNT
@@ -1161,7 +1121,6 @@ export default function ToolsWorkspace() {
   const [noticeSupplements, setNoticeSupplements] = useState<Record<string, string>>({})
   const [noticeNow, setNoticeNow] = useState(Date.now())
   const [historyOpen, setHistoryOpen] = useState(false)
-  const [activeToolId, setActiveToolId] = useState<ToolsWorkspaceToolId>(readActiveToolsWorkspaceToolId)
   const batchItems = activeConversation?.posterItems ?? []
   const viewItems = deriveAfternoonTeaPosterViewItems(batchItems, tasks)
   const batchBusy = Boolean(afternoonTeaBatchOperationId) || batchRunning || retrying
@@ -1207,12 +1166,6 @@ export default function ToolsWorkspace() {
     editOutputs,
     removeTask,
   })
-
-  const selectTool = (toolId: ToolsWorkspaceToolId) => {
-    setActiveToolId(toolId)
-    writeActiveToolsWorkspaceToolId(toolId)
-    if (toolId !== 'dish-analysis') setHistoryOpen(false)
-  }
 
   const restoreConversation = async (conversationId: string) => {
     coordinatorRef.current.cancelRequest()
@@ -2277,81 +2230,53 @@ export default function ToolsWorkspace() {
     if (!file) return false
     void handleImageChange(file)
     return true
-  }, imageLoading || conversationBusy || Boolean(confirmDialog) || activeToolId !== 'dish-analysis')
+  }, imageLoading || conversationBusy || Boolean(confirmDialog))
+
+  const sessionActions = (
+    <div className="relative z-10 flex shrink-0 items-center gap-1.5">
+      <button
+        ref={historyButtonRef}
+        type="button"
+        onClick={() => setHistoryOpen((value) => !value)}
+        className="flex h-11 w-11 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-500 shadow-sm transition hover:bg-gray-50 hover:text-gray-800 dark:border-white/[0.08] dark:bg-gray-900 dark:hover:bg-white/[0.06] dark:hover:text-gray-200 sm:h-9 sm:w-9 sm:shadow-none"
+        title="餐品解析历史"
+        aria-label="餐品解析历史"
+        aria-expanded={historyOpen}
+      >
+        <MessageCircleIcon className="h-5 w-5" />
+      </button>
+      <button
+        type="button"
+        onClick={handleNewConversation}
+        className="flex h-11 w-11 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-500 shadow-sm transition hover:bg-gray-50 hover:text-gray-800 dark:border-white/[0.08] dark:bg-gray-900 dark:hover:bg-white/[0.06] dark:hover:text-gray-200 sm:h-9 sm:w-9 sm:shadow-none"
+        title="新建餐品解析会话"
+        aria-label="新建餐品解析会话"
+      >
+        <EditIcon className="h-5 w-5" />
+      </button>
+      {historyOpen && (
+        <ConversationHistoryPopover
+          items={historyItems}
+          activeId={activeAfternoonTeaConversationId}
+          editingId={afternoonTeaEditingConversationId}
+          confirmDialogOpen={Boolean(confirmDialog)}
+          ignoreOutsideClickRef={historyButtonRef}
+          searchPlaceholder="搜索餐品解析会话..."
+          emptyText="没有找到匹配的餐品解析会话"
+          onEditingIdChange={setAfternoonTeaEditingConversationId}
+          onSelect={handleSelectConversation}
+          onRename={renameAfternoonTeaConversation}
+          onDelete={handleDeleteConversation}
+          onClose={() => setHistoryOpen(false)}
+        />
+      )}
+    </div>
+  )
 
   return (
-    <main className="safe-area-x mx-auto max-w-[100rem] pb-4 sm:pb-12">
-      <div className="grid min-h-0 sm:min-h-[calc(100vh-8rem)] sm:grid-cols-[180px_minmax(0,1fr)]">
-        <nav className="relative z-[35] mb-1 mt-2 flex h-12 items-center sm:static sm:z-auto sm:mx-0 sm:mb-0 sm:mt-0 sm:block sm:h-auto sm:border-r sm:border-gray-200 sm:py-6 dark:sm:border-white/[0.08]" aria-label="工具列表">
-          <div className="hidden text-xs font-medium text-gray-400 sm:block sm:px-3">工具</div>
-          <div className="relative flex min-w-0 flex-1 items-center gap-1.5 sm:mx-3 sm:mt-2 sm:block sm:gap-0 sm:px-0">
-            <div className="grid min-w-0 flex-1 grid-cols-2 gap-1 overflow-x-auto rounded-xl border border-gray-200 bg-gray-100/70 p-1 dark:border-white/[0.08] dark:bg-white/[0.04] sm:block sm:overflow-visible sm:rounded-none sm:border-0 sm:bg-transparent sm:p-0 dark:sm:bg-transparent">
-              {TOOL_ITEMS.map((tool) => {
-                const selected = activeToolId === tool.id
-                const overlayHistory = tool.id === 'dish-analysis' && selected
-                return (
-                  <button
-                    key={tool.id}
-                    type="button"
-                    aria-current={selected ? 'page' : undefined}
-                    onClick={() => selectTool(tool.id)}
-                    className={`min-w-0 shrink-0 truncate rounded-lg px-2 py-1.5 text-center text-sm transition-colors sm:mt-1 sm:w-full sm:rounded-none sm:border-l-2 sm:px-3 sm:py-2 sm:text-left sm:font-medium sm:first:mt-0 ${selected
-                      ? `bg-white font-medium text-gray-900 shadow-sm dark:bg-white/10 dark:text-white sm:border-blue-500 sm:bg-blue-50/70 sm:font-semibold sm:text-blue-700 sm:shadow-none sm:dark:bg-blue-500/10 sm:dark:text-blue-300 ${overlayHistory ? 'sm:pr-[68px]' : ''}`
-                      : 'font-medium text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200 sm:border-transparent sm:hover:bg-gray-50 dark:sm:hover:bg-white/[0.04]'}`}
-                  >
-                    {tool.label}
-                  </button>
-                )
-              })}
-            </div>
-            {activeToolId === 'dish-analysis' && (
-            <div className="relative z-10 flex shrink-0 items-center gap-1 sm:absolute sm:right-1 sm:top-5 sm:ml-0 sm:gap-0 sm:-translate-y-1/2">
-              <button
-                ref={historyButtonRef}
-                type="button"
-                onClick={() => setHistoryOpen((value) => !value)}
-                className="flex h-11 w-11 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-500 shadow-sm transition hover:bg-gray-50 hover:text-gray-800 dark:border-white/[0.08] dark:bg-gray-900 dark:hover:bg-white/[0.06] dark:hover:text-gray-200 sm:h-9 sm:w-8 sm:rounded-md sm:border-0 sm:bg-transparent sm:shadow-none dark:sm:bg-transparent"
-                title="餐品解析历史"
-                aria-label="餐品解析历史"
-                aria-expanded={historyOpen}
-              >
-                <MessageCircleIcon className="h-5 w-5 sm:h-4 sm:w-4" />
-              </button>
-              <button
-                type="button"
-                onClick={handleNewConversation}
-                className="flex h-11 w-11 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-500 shadow-sm transition hover:bg-gray-50 hover:text-gray-800 dark:border-white/[0.08] dark:bg-gray-900 dark:hover:bg-white/[0.06] dark:hover:text-gray-200 sm:h-9 sm:w-8 sm:rounded-md sm:border-0 sm:bg-transparent sm:shadow-none dark:sm:bg-transparent"
-                title="新建餐品解析会话"
-                aria-label="新建餐品解析会话"
-              >
-                <EditIcon className="h-5 w-5 sm:h-4 sm:w-4" />
-              </button>
-              {historyOpen && (
-                <ConversationHistoryPopover
-                  items={historyItems}
-                  activeId={activeAfternoonTeaConversationId}
-                  editingId={afternoonTeaEditingConversationId}
-                  confirmDialogOpen={Boolean(confirmDialog)}
-                  ignoreOutsideClickRef={historyButtonRef}
-                  searchPlaceholder="搜索餐品解析会话..."
-                  emptyText="没有找到匹配的餐品解析会话"
-                  onEditingIdChange={setAfternoonTeaEditingConversationId}
-                  onSelect={handleSelectConversation}
-                  onRename={renameAfternoonTeaConversation}
-                  onDelete={handleDeleteConversation}
-                  onClose={() => setHistoryOpen(false)}
-                />
-              )}
-            </div>
-            )}
-          </div>
-        </nav>
-        <div className="min-w-0 overflow-x-hidden">
-          {activeToolId === 'afternoon-tea-notice' && (
-            <AfternoonTeaNoticeWorkflow configured={Boolean(analysisProfile)} />
-          )}
-          {activeToolId === 'dish-analysis' && (
+    <main className="safe-area-x mx-auto max-w-7xl pb-4 sm:pb-12">
           <AfternoonTeaMobileWorkflow
+            sessionActions={sessionActions}
             key={activeConversation?.id ?? 'no-afternoon-tea-conversation'}
             configured={Boolean(analysisProfile)}
             imageDataUrl={imageDataUrl}
@@ -2438,9 +2363,6 @@ export default function ToolsWorkspace() {
             onTaskReuse={taskActions.onReuse}
             onTaskEditOutputs={taskActions.onEditOutputs}
           />
-          )}
-        </div>
-      </div>
     </main>
   )
 }

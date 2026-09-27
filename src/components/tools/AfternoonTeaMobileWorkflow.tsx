@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent, type TouchEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type TouchEvent } from 'react'
 import type { AfternoonTeaOrderResult, AfternoonTeaTitleRegion, TaskRecord } from '../../types'
 import { prepareImageFile, savePreparedImageFile } from '../../lib/downloadImages'
 import { canCopyImageToClipboard, copyImageSourceToClipboard, getClipboardFailureMessage } from '../../lib/clipboard'
@@ -202,6 +202,8 @@ type AfternoonTeaMobileWorkflowProps = {
   onTaskDelete?: (task: TaskRecord) => void
   onTaskReuse?: (task: TaskRecord) => void
   onTaskEditOutputs?: (task: TaskRecord) => void
+  /** 进度条右侧的会话操作，例如历史和新建 */
+  sessionActions?: ReactNode
 }
 
 export function deriveMobileAfternoonTeaPhase(state: MobileAfternoonTeaPhaseState): MobileAfternoonTeaPhase {
@@ -802,8 +804,9 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
   const steps = ['素材', '审查', '生成', '保存']
 
   return (
-    <div className="min-w-0 px-0 pt-1 max-lg:pb-[calc(11rem+env(safe-area-inset-bottom))] sm:px-6 sm:pt-7 lg:grid lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end lg:gap-x-6 lg:pb-7" data-mobile-afternoon-tea-workflow aria-label="餐品海报工作流">
-      <div className="mb-3 sm:mb-4 lg:col-start-1 lg:row-start-1" aria-label="餐品海报进度">
+    <div className="min-w-0 px-0 pt-2 max-lg:pb-[calc(11rem+env(safe-area-inset-bottom))] sm:pt-4 lg:grid lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end lg:gap-x-6 lg:pb-7" data-mobile-afternoon-tea-workflow aria-label="餐品海报工作流">
+      <div className="mb-3 flex items-center gap-2 sm:mb-4 lg:col-start-1 lg:row-start-1" aria-label="餐品海报进度">
+      <div className="min-w-0 flex-1">
         <span className="sr-only" aria-live="polite">当前步骤：{steps[stepIndex]}，{stepIndex + 1}/4</span>
         <div className="grid grid-cols-4 gap-1 rounded-xl border border-gray-200 bg-gray-100/70 p-1 dark:border-white/[0.08] dark:bg-white/[0.04] sm:gap-1.5 sm:rounded-none sm:border-0 sm:bg-transparent sm:p-0 dark:sm:bg-transparent" aria-hidden="true">
           {steps.map((label, index) => (
@@ -813,6 +816,8 @@ export function AfternoonTeaMobileWorkflow(props: AfternoonTeaMobileWorkflowProp
             </div>
           ))}
         </div>
+      </div>
+      {props.sessionActions}
       </div>
 
       {(phase === 'input' || phase === 'analyzing') && (
