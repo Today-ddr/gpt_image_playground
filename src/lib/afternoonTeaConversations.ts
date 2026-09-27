@@ -63,9 +63,10 @@ function normalizeAfternoonTeaNoticeRecord(record: Partial<AfternoonTeaConversat
     })
     : []
   const storedStatus = record.noticeStatus
-  const noticeStatus = storedStatus === 'success' || storedStatus === 'error' || storedStatus === 'cancelled'
-    ? storedStatus
-    : noticeCards.length > 0 ? 'success' : 'idle'
+  const noticeStatus: AfternoonTeaConversation['noticeStatus'] =
+    storedStatus === 'success' || storedStatus === 'error' || storedStatus === 'cancelled'
+      ? storedStatus
+      : noticeCards.length > 0 ? 'success' : 'idle'
   const noticeElapsed = typeof record.noticeElapsed === 'number' && Number.isFinite(record.noticeElapsed) && record.noticeElapsed >= 0
     ? record.noticeElapsed
     : null

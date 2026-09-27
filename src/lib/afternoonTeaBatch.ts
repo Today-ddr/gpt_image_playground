@@ -18,7 +18,7 @@ export function createAfternoonTeaPosterParamsSnapshot(
   params: TaskParams,
   settings: AppSettings,
   sourceSize: AfternoonTeaPosterSourceSize,
-) {
+): TaskParams {
   const width = Math.round(sourceSize.width)
   const height = Math.round(sourceSize.height)
   if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {

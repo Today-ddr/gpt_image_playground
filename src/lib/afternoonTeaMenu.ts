@@ -163,8 +163,7 @@ function mergeSegmentItems(
   return segments.map((segment, index) => {
     const currentItem = current?.items[index]
     const preliminary = preliminaryItems?.[index]
-    const renamed = Boolean(currentItem && preliminary && currentItem.displayName !== preliminary.displayName)
-    const displayName = renamed
+    const displayName = currentItem && preliminary && currentItem.displayName !== preliminary.displayName
       ? currentItem.displayName
       : (modelDisplayName(segments, model, index) ?? segment.displayName)
     const tags = currentItem && preliminary && !sameTags(currentItem.tags, preliminary.tags)

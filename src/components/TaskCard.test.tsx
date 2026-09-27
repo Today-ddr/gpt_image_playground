@@ -121,14 +121,14 @@ async function getRetryButton(
 
 function getParamBarHtml(html: string) {
   const start = html.indexOf('flex overflow-x-auto hide-scrollbar pt-0.5 gap-1.5 whitespace-nowrap mask-edge-r min-w-0 pr-2')
-  const end = html.indexOf('flex items-center gap-1 flex-shrink-0 mt-0.5 ml-auto', start)
+  const end = html.indexOf('ml-auto mt-0.5 flex max-w-full flex-shrink-0', start)
   expect(start).toBeGreaterThan(-1)
   expect(end).toBeGreaterThan(start)
   return html.slice(start, end)
 }
 
 function getCompactSummaryHtml(html: string) {
-  const marker = '<p class="text-sm text-gray-700 dark:text-gray-300 leading-relaxed line-clamp-3">'
+  const marker = '<p class="line-clamp-2 text-sm leading-relaxed text-gray-700 dark:text-gray-300 sm:line-clamp-3">'
   const start = html.indexOf(marker)
   const end = html.indexOf('</p>', start)
   expect(start).toBeGreaterThan(-1)
