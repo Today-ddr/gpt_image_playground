@@ -42,6 +42,11 @@ find /usr/share/nginx/html/assets -type f -name "*.js" -exec sed -i "s|__VITE_DO
 find /usr/share/nginx/html/assets -type f -name "*.js" -exec sed -i "s|__VITE_DOCKER_LEGACY_API_URL_USED_PLACEHOLDER__|$DOCKER_LEGACY_API_URL_USED|g" {} +
 find /usr/share/nginx/html/assets -type f -name "*.js" -exec sed -i "s|__VITE_SHOW_DEFAULT_CONFIG_ONLY_PLACEHOLDER__|$DEFAULT_CONFIG_ONLY|g" {} +
 
+# 占位符写在带 hash 的脚本里，文件名不会跟着变。浏览器和 Service Worker 会按旧地址一直用缓存，
+# 于是页面还在直连上游。给入口资源加配置参数，配置变了才会重新下载。
+CFG_QUERY="cfg=${API_PROXY_AVAILABLE}-${API_PROXY_LOCKED}-${DEFAULT_CONFIG_ONLY}"
+find /usr/share/nginx/html -name 'index.html' -exec sed -i "s#\\(assets/[^\"'? ]*\\)#\\1?${CFG_QUERY}#g" {} +
+
 # 检查是否启用了 API 代理
 if [ "$ENABLE_API_PROXY" != "true" ]; then
     # 删除代理配置块

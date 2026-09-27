@@ -20,7 +20,7 @@ import type {
   StoredImageThumbnail,
 } from './types'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_PARAMS } from './types'
-import { DEFAULT_SETTINGS, getActiveApiProfile, getAgentImageApiProfile, getAgentTextApiProfile, getCustomProviderDefinition, getImageGenerationProfiles, getRawImageGenerationProfiles, mergeImportedSettings, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
+import { DEFAULT_SETTINGS, getActiveApiProfile, getAgentImageApiProfile, getAgentTextApiProfile, getCustomProviderDefinition, getImageGenerationProfiles, getRawImageGenerationProfiles, mergeImportedSettings, normalizeSettings, validateApiProfile, withBuiltInApiProxyEnabled } from './lib/apiProfiles'
 import { dismissAllTooltips } from './lib/tooltipDismiss'
 import { remapImageMentionsForOrder, replaceImageMentionsForApi } from './lib/promptImageMentions'
 import {
@@ -2447,7 +2447,30 @@ async function recoverFalTask(taskId: string) {
 }
 
 /** 初始化：从 IndexedDB 加载任务，按需恢复输入图片，并清理孤立图片 */
+const BUILT_IN_API_PROXY_DEFAULT_KEY = 'gpt-image-playground.api-proxy-default-on'
+
+function enableBuiltInApiProxyForSavedProfiles() {
+  let alreadyApplied = false
+  try {
+    alreadyApplied = localStorage.getItem(BUILT_IN_API_PROXY_DEFAULT_KEY) === '1'
+  } catch {
+    alreadyApplied = false
+  }
+  if (alreadyApplied) return
+
+  const current = normalizeSettings(useStore.getState().settings)
+  const next = withBuiltInApiProxyEnabled(current)
+  if (next === current) return
+  useStore.setState({ settings: next })
+  try {
+    localStorage.setItem(BUILT_IN_API_PROXY_DEFAULT_KEY, '1')
+  } catch {
+    // 写不进本地存储时，这次会话里的配置已经改过，下次打开还会再试一次。
+  }
+}
+
 export async function initStore() {
+  enableBuiltInApiProxyForSavedProfiles()
   const legacyAgentConversations = normalizeAgentConversations(useStore.getState().agentConversations)
   const storedTasks = await getAllTasks()
   const storedAgentConversations = normalizeAgentConversations(await getAllAgentConversations())

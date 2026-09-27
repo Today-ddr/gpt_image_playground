@@ -16,6 +16,7 @@ import {
   normalizeApiProfile,
   normalizeSettings,
   persistedCodexCli,
+  withBuiltInApiProxyEnabled,
   resolveImageGenerationProfileIds,
   switchApiProfileProvider,
   validateApiProfile,
@@ -23,6 +24,44 @@ import {
 
 afterEach(() => {
   vi.unstubAllEnvs()
+})
+
+describe('withBuiltInApiProxyEnabled', () => {
+  it('turns the proxy on for a saved OpenAI profile when the deployment provides one', () => {
+    vi.stubEnv('VITE_API_PROXY_AVAILABLE', 'true')
+    const settings = normalizeSettings({
+      profiles: [createDefaultOpenAIProfile({
+        apiProxy: false,
+        apiKey: 'test-key',
+        baseUrl: 'https://apiiiii.tooday.pw/v1',
+      })],
+    })
+
+    const next = withBuiltInApiProxyEnabled(settings)
+
+    expect(next.profiles[0]?.apiProxy).toBe(true)
+  })
+
+  it('leaves the proxy off when this deployment has no proxy', () => {
+    vi.stubEnv('VITE_API_PROXY_AVAILABLE', 'false')
+    const settings = normalizeSettings({
+      profiles: [createDefaultOpenAIProfile({ apiProxy: false, apiKey: 'test-key' })],
+    })
+
+    expect(withBuiltInApiProxyEnabled(settings).profiles[0]?.apiProxy).toBe(false)
+  })
+
+  it('does not enable the proxy for fal profiles', () => {
+    vi.stubEnv('VITE_API_PROXY_AVAILABLE', 'true')
+    const settings = normalizeSettings({
+      profiles: [createDefaultFalProfile({ apiProxy: false, apiKey: 'test-key' })],
+      activeProfileId: 'fal-profile',
+    })
+    const falProfile = createDefaultFalProfile({ id: 'fal-profile', apiProxy: false, apiKey: 'test-key' })
+    const next = withBuiltInApiProxyEnabled({ ...settings, profiles: [falProfile], activeProfileId: falProfile.id })
+
+    expect(next.profiles[0]?.apiProxy).toBe(false)
+  })
 })
 
 describe('validateApiProfile', () => {

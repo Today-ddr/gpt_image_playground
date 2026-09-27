@@ -782,13 +782,19 @@ export default function SettingsModal() {
 
   const loadActiveProfileModels = async () => {
     const profileId = activeProfile.id
+    // 有同源代理却没打开时，模型列表会直连上游，预检 403 后浏览器只报 CORS。
+    let profile = activeProfile
+    if (apiProxyAvailable && activeProfileApiProxyEligible && !apiProxyLocked && !profile.apiProxy) {
+      updateActiveProfile({ apiProxy: true }, true)
+      profile = { ...profile, apiProxy: true }
+    }
     setModelListStateByProfile((states) => ({
       ...states,
       [profileId]: { loading: true, message: '正在获取模型列表...', error: false },
     }))
 
     try {
-      const models = await fetchApiModels(activeProfile)
+      const models = await fetchApiModels(profile)
       setModelOptionsByProfile((options) => ({ ...options, [profileId]: models }))
       setModelListStateByProfile((states) => ({
         ...states,

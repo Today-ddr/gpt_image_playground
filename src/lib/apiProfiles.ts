@@ -17,7 +17,7 @@ import type {
   TransparentBackgroundMethod,
 } from '../types'
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, DEFAULT_ZIP_DOWNLOAD_ROUTES, REASONING_EFFORT_VALUES, ZIP_DOWNLOAD_ROUTE_VALUES } from '../types'
-import { shouldUseApiProxy } from './devProxy'
+import { isApiProxyAvailable, shouldUseApiProxy } from './devProxy'
 import { normalizeStreamPartialImages, parseDefaultApiUrl } from './defaultApiUrl'
 import { readRuntimeEnv } from './runtimeEnv'
 import { isImportableConfigUrl } from './customProviderConfigUrl'
@@ -805,6 +805,28 @@ export function getActiveApiProfile(settings: Partial<AppSettings> | unknown): A
     streamImages: profile.provider === 'openai' && typeof record.streamImages === 'boolean' ? record.streamImages : profile.streamImages,
     streamPartialImages: normalizeStreamPartialImages(record.streamPartialImages, profile.streamPartialImages),
   }
+}
+
+function profileCanUseBuiltInApiProxy(settings: AppSettings, profile: ApiProfile): boolean {
+  if (!isOpenAICompatibleProvider(settings, profile.provider)) return false
+  const customProvider = settings.customProviders.find((item) => item.id === profile.provider)
+  // 异步任务要自己轮询，现有代理只转发单次请求，不能替它补上。
+  return !customProvider?.poll && !customProvider?.submit.taskIdPath && !customProvider?.editSubmit?.taskIdPath
+}
+
+/**
+ * 部署端开了同源代理时，把还没打开代理的兼容接口改成走代理。
+ * 已保存的配置经常是关的，浏览器会直连上游；上游一见到 Origin 就 403，页面只显示 CORS。
+ */
+export function withBuiltInApiProxyEnabled(settings: AppSettings): AppSettings {
+  if (!isApiProxyAvailable()) return settings
+  let changed = false
+  const profiles = settings.profiles.map((profile) => {
+    if (profile.apiProxy || !profileCanUseBuiltInApiProxy(settings, profile)) return profile
+    changed = true
+    return { ...profile, apiProxy: true }
+  })
+  return changed ? { ...settings, profiles } : settings
 }
 
 export function validateApiProfile(profile: ApiProfile): string | null {
