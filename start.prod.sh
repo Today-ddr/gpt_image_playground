@@ -17,10 +17,12 @@ if ! command -v curl >/dev/null 2>&1; then
   exit 1
 fi
 
-# 可用环境变量覆盖；默认对应当前仓库 owner 小写
+# 可用环境变量覆盖；默认对应当前仓库 owner 小写。
+# 生产编排默认关闭代理。这里默认打开，浏览器才能经同源 /api-proxy 访问不支持跨域的上游。
 : "${GHCR_OWNER:=today-ddr}"
 : "${IMAGE_TAG:=latest}"
-export GHCR_OWNER IMAGE_TAG
+: "${ENABLE_API_PROXY:=true}"
+export GHCR_OWNER IMAGE_TAG ENABLE_API_PROXY
 
 compose_file=compose.prod.yaml
 if [ ! -f "$compose_file" ]; then
@@ -32,7 +34,7 @@ mkdir -p data/jobs
 
 echo "拉取镜像 ghcr.io/${GHCR_OWNER}/gpt_image_playground:${IMAGE_TAG} ..."
 echo "拉取镜像 ghcr.io/${GHCR_OWNER}/gpt_image_playground-job-api:${IMAGE_TAG} ..."
-if ! docker compose -f "$compose_file" pull --policy always; then
+if ! docker compose -f "$compose_file" pull; then
   echo '' >&2
   echo '拉取失败。若仓库/Package 是私有的，请先登录 GHCR：' >&2
   echo '  # 在 GitHub → Settings → Developer settings → Personal access tokens' >&2
@@ -64,7 +66,7 @@ until curl -fsS "$health_url" >/dev/null 2>&1; do
 done
 
 echo "已启动（预构建镜像，无本机编译）：http://localhost:${app_port}"
-echo "镜像标签：${IMAGE_TAG}  owner：${GHCR_OWNER}"
+echo "镜像标签：${IMAGE_TAG}  owner：${GHCR_OWNER}  API 代理：${ENABLE_API_PROXY}"
 echo "查看日志：docker compose -f ${compose_file} logs -f"
 echo "停止服务：docker compose -f ${compose_file} down"
-echo "更新版本：git pull && IMAGE_TAG=${IMAGE_TAG} ./start.prod.sh"
+echo "更新版本：git pull && IMAGE_TAG=latest ./start.prod.sh"
