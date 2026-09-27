@@ -87,6 +87,9 @@ const MAX_THUMBNAIL_BACKFILL_CONCURRENT = 4
 const FAL_RECOVERY_POLL_MS = 10_000
 const CUSTOM_RECOVERY_POLL_MS = 10_000
 const SERVER_RECOVERY_POLL_MS = 2_000
+const SERVER_JOB_MISSING_GRACE_MS = 10 * 60 * 1000
+const SERVER_JOB_REDISCOVER_MS = 7 * 24 * 60 * 60 * 1000
+const MISSING_SERVER_JOB_ERROR = '后台任务不存在，可能已超过结果保留时间。'
 const SUPPORT_PROMPT_IMAGE_THRESHOLD = 50
 const AGENT_INPUT_DRAFT_RETENTION_MS = 3 * 24 * 60 * 60 * 1000
 const AFTERNOON_TEA_CONVERSATION_PERSIST_RETRY_MS = 1_000
@@ -796,7 +799,8 @@ export function mergePersistedState(persistedState: unknown, currentState: AppSt
   const activeAfternoonTeaConversationId = typeof persisted.activeAfternoonTeaConversationId === 'string'
     ? persisted.activeAfternoonTeaConversationId
     : null
-  const appMode = persisted.appMode === 'agent' ? 'agent' : 'gallery'
+  // Agent 入口已从顶栏拿掉，旧的本地记录打开时回到画廊。
+  const appMode = 'gallery'
   const galleryInputDraft = settings.persistInputOnRestart
     ? normalizeAgentInputDraft(persisted.galleryInputDraft ?? {
         prompt: persisted.prompt,
@@ -2552,6 +2556,15 @@ export async function initStore() {
   for (const task of tasks) {
     if (task.executionMode === 'server' && task.status === 'running') {
       scheduleServerRecovery(task.id, 0)
+    } else if (
+      task.executionMode === 'server'
+      && task.status === 'error'
+      && task.error === MISSING_SERVER_JOB_ERROR
+      && Date.now() - task.createdAt < SERVER_JOB_REDISCOVER_MS
+    ) {
+      // 上次打开时误判过期，但后台结果可能已经写好。先改回进行中再查一次。
+      updateTaskInStore(task.id, { status: 'running', error: null, finishedAt: null, elapsed: null })
+      scheduleServerRecovery(task.id, 0)
     }
     if (
       task.apiProvider === 'fal' &&
@@ -3655,8 +3668,11 @@ async function recoverServerTask(taskId: string) {
     if (!job) {
       if (pendingServerSubmissions.has(taskId)) {
         await submitServerTask(taskId)
+      } else if (Date.now() - task.createdAt < SERVER_JOB_MISSING_GRACE_MS) {
+        // 手机常在图片还没传完时杀掉页面。重新打开后内存里的提交丢了，服务端任务可能稍后才出现。
+        scheduleServerRecovery(taskId)
       } else {
-        failServerTask(task, '后台任务不存在，可能已超过结果保留时间。')
+        failServerTask(task, MISSING_SERVER_JOB_ERROR)
       }
       return
     }

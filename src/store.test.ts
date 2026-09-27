@@ -2140,6 +2140,95 @@ describe('server-managed image jobs', () => {
     expect(useStore.getState().tasks.find((item) => item.id === running.id)?.outputImages).toHaveLength(1)
   })
 
+  it('keeps polling when a young server job is missing after the page is reloaded', async () => {
+    vi.useFakeTimers()
+    try {
+      const createdAt = Date.now()
+      const running = task({
+        id: 'server-young-missing',
+        apiProvider: 'openai',
+        executionMode: 'server',
+        status: 'running',
+        createdAt,
+        finishedAt: null,
+        elapsed: null,
+      })
+      await putDbTask(running)
+      vi.mocked(getImageJob)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValue({
+          id: running.id,
+          status: 'done',
+          createdAt,
+          startedAt: createdAt,
+          finishedAt: createdAt + 1,
+          error: null,
+          resultUrls: ['/api/job-files/server-young-missing/output-1.png'],
+        })
+      vi.stubGlobal('fetch', vi.fn(async () => new Response(new Blob(['recovered'], { type: 'image/png' }))))
+
+      await initStore()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(useStore.getState().tasks.find((item) => item.id === running.id)?.status).toBe('running')
+
+      await vi.advanceTimersByTimeAsync(2_000)
+      await vi.waitFor(() => expect(useStore.getState().tasks.find((item) => item.id === running.id)?.status).toBe('done'))
+      expect(useStore.getState().tasks.find((item) => item.id === running.id)?.error).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('expires a missing server job only after the grace period', async () => {
+    const running = task({
+      id: 'server-old-missing',
+      apiProvider: 'openai',
+      executionMode: 'server',
+      status: 'running',
+      createdAt: 1,
+      finishedAt: null,
+      elapsed: null,
+    })
+    await putDbTask(running)
+    vi.mocked(getImageJob).mockResolvedValue(null)
+
+    await initStore()
+
+    await vi.waitFor(() => expect(useStore.getState().tasks.find((item) => item.id === running.id)?.status).toBe('error'))
+    expect(useStore.getState().tasks.find((item) => item.id === running.id)?.error).toBe('后台任务不存在，可能已超过结果保留时间。')
+  })
+
+  it('imports a finished server job after the phone already marked it missing', async () => {
+    const createdAt = Date.now()
+    const failed = task({
+      id: 'server-false-missing',
+      apiProvider: 'openai',
+      executionMode: 'server',
+      status: 'error',
+      error: '后台任务不存在，可能已超过结果保留时间。',
+      createdAt,
+      finishedAt: createdAt + 1,
+      elapsed: 1,
+    })
+    await putDbTask(failed)
+    vi.mocked(getImageJob).mockResolvedValue({
+      id: failed.id,
+      status: 'done',
+      createdAt,
+      startedAt: createdAt,
+      finishedAt: createdAt + 1,
+      error: null,
+      resultUrls: ['/api/job-files/server-false-missing/output-1.png'],
+    })
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(new Blob(['recovered'], { type: 'image/png' }))))
+
+    await initStore()
+
+    await vi.waitFor(() => expect(useStore.getState().tasks.find((item) => item.id === failed.id)?.status).toBe('done'))
+    expect(useStore.getState().tasks.find((item) => item.id === failed.id)?.outputImages).toHaveLength(1)
+    expect(submitImageJob).not.toHaveBeenCalled()
+  })
+
   it('requires confirmation before direct browser fallback', async () => {
     vi.mocked(getImageJobExecutionPreference).mockResolvedValue({ executionMode: 'browser', requiresConfirmation: true })
 
@@ -2452,7 +2541,7 @@ describe('input persistence setting', () => {
     const current = useStore.getState()
 
     expect(mergePersistedState({ appMode: 'tools' }, current).appMode).toBe('gallery')
-    expect(mergePersistedState({ appMode: 'agent' }, current).appMode).toBe('agent')
+    expect(mergePersistedState({ appMode: 'agent' }, current).appMode).toBe('gallery')
   })
 })
 
