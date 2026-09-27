@@ -748,7 +748,7 @@ export function getPersistedState(state: AppState) {
         }
       : {}),
     dismissedCodexCliPrompts: state.dismissedCodexCliPrompts,
-    ...(state.appMode === 'agent' ? { appMode: state.appMode } : {}),
+    ...(state.appMode === 'gallery' ? { appMode: state.appMode } : {}),
     galleryInputDraft: settings.persistInputOnRestart && galleryInputDraft
       ? { ...galleryInputDraft, inputImages: galleryInputDraft.inputImages.map((img) => ({ id: img.id, dataUrl: '' })) }
       : null,
@@ -799,8 +799,8 @@ export function mergePersistedState(persistedState: unknown, currentState: AppSt
   const activeAfternoonTeaConversationId = typeof persisted.activeAfternoonTeaConversationId === 'string'
     ? persisted.activeAfternoonTeaConversationId
     : null
-  // Agent 入口已从顶栏拿掉，旧的本地记录打开时回到画廊。
-  const appMode = 'gallery'
+  // 默认进入工具。只有用户明确留在画廊时才恢复画廊。
+  const appMode = persisted.appMode === 'gallery' ? 'gallery' : 'tools'
   const galleryInputDraft = settings.persistInputOnRestart
     ? normalizeAgentInputDraft(persisted.galleryInputDraft ?? {
         prompt: persisted.prompt,
@@ -1258,7 +1258,7 @@ export const useStore = create<AppState>()(
   persist(
     (set, get) => ({
       // Mode
-      appMode: 'gallery',
+      appMode: 'tools',
       setAppMode: (appMode) => {
         if (appMode !== 'agent') {
           const state = get()

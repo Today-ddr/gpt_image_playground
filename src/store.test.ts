@@ -2528,20 +2528,22 @@ describe('input persistence setting', () => {
     expect(persisted.inputImages).toEqual([])
   })
 
-  it('does not persist tools mode because the URL is its source of truth', () => {
+  it('does not persist tools mode because it is the default', () => {
     useStore.setState({ appMode: 'tools' })
 
     expect(getPersistedState(useStore.getState())).not.toHaveProperty('appMode')
 
-    useStore.setState({ appMode: 'agent' })
-    expect(getPersistedState(useStore.getState())).toHaveProperty('appMode', 'agent')
+    useStore.setState({ appMode: 'gallery' })
+    expect(getPersistedState(useStore.getState())).toHaveProperty('appMode', 'gallery')
   })
 
-  it('keeps legacy tools cache on gallery while retaining agent cache restoration', () => {
+  it('opens tools by default and restores an explicit gallery choice', () => {
     const current = useStore.getState()
 
-    expect(mergePersistedState({ appMode: 'tools' }, current).appMode).toBe('gallery')
-    expect(mergePersistedState({ appMode: 'agent' }, current).appMode).toBe('gallery')
+    expect(mergePersistedState({}, current).appMode).toBe('tools')
+    expect(mergePersistedState({ appMode: 'tools' }, current).appMode).toBe('tools')
+    expect(mergePersistedState({ appMode: 'agent' }, current).appMode).toBe('tools')
+    expect(mergePersistedState({ appMode: 'gallery' }, current).appMode).toBe('gallery')
   })
 })
 

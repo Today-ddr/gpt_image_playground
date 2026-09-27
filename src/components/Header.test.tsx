@@ -2,14 +2,11 @@ import { describe, expect, it } from 'vitest'
 import headerSource from './Header.tsx?raw'
 
 describe('Header mobile mode navigation', () => {
-  it('uses the gallery scroll-collapse behavior in tools mode too', () => {
-    expect(headerSource.match(/appMode !== 'agent' && scrollDirection === 'down'/g)).toHaveLength(2)
-  })
-
-  it('does not offer the Agent mode tab', () => {
+  it('puts the mode switch in the mobile header row and keeps the title for desktop', () => {
+    expect(headerSource).toContain('w-full max-w-[16.5rem] sm:hidden')
+    expect(headerSource).toContain('hidden min-w-0 items-start relative mr-2 sm:inline-flex')
+    expect(headerSource).not.toContain('max-h-14')
     expect(headerSource).not.toContain("setAppMode('agent')")
-    expect(headerSource).toContain('max-w-[16.5rem]')
-    expect(headerSource).toContain('min-h-11')
-    expect(headerSource).not.toContain('grid-cols-3')
+    expect(headerSource).toContain('min-h-8')
   })
 })
