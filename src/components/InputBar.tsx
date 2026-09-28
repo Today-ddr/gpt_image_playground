@@ -1,8 +1,8 @@
 import { useRef, useEffect, useCallback, useState, useMemo, useLayoutEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { ALL_FAVORITES_COLLECTION_ID, deleteFavoriteCollection, getTaskFavoriteCollectionIds, useStore, submitTask, submitAgentMessage, stopAgentResponse, addImageFromFile, createInputImageFromFile, deleteImageIfUnreferenced, removeMultipleTasks, getCachedImage, ensureImageCached, getActiveAgentRounds, taskMatchesFilterStatus, taskMatchesSearchQuery } from '../store'
-import { DEFAULT_PARAMS, type TaskRecord } from '../types'
-import { getActiveApiProfile, getAgentImageApiProfile, normalizeSettings } from '../lib/apiProfiles'
+import { DEFAULT_PARAMS, type ImageGenerationChannelMode, type TaskRecord } from '../types'
+import { getActiveApiProfile, getAgentImageApiProfile, getImageGenerationProfiles, normalizeSettings } from '../lib/apiProfiles'
 import { DEFAULT_FAL_IMAGE_SIZE, getChangedParams, getOutputImageLimitForSettings, normalizeParamsForSettings } from '../lib/paramCompatibility'
 import { getAtImageQuery, getImageMentionLabel, getPromptIndexFromVisibleIndex, getPromptMentionParts, getSelectedImageMentionLabel, getSelectedTextMentionLabel, imageMentionMatches, insertImageMentionAtVisibleRange, insertTextMentionAtVisibleRange, isCursorInSelectedImageMention, stripImageMentionMarkers } from '../lib/promptImageMentions'
 import { isImeEnter } from '../lib/imeEnter'
@@ -20,6 +20,7 @@ import { CloseIcon, CollapseIcon, ExpandIcon } from './icons'
 import ButtonTooltip from './input/buttonTooltip'
 import DragUploadOverlay from './input/dragUploadOverlay'
 import InputBatchBars from './input/inputBatchBars'
+import ChannelModeSwitch from './input/channelModeSwitch'
 import InputParamsPanel from './input/inputParamsPanel'
 
 
@@ -768,6 +769,19 @@ export default function InputBar() {
     syncMentionTagSelection(el)
     setPrompt(getContentEditablePlainText(el))
   }, [setPrompt])
+  const channelMode: ImageGenerationChannelMode = settings.imageGenerationChannelMode === 'single' ? 'single' : 'multi'
+  const galleryGenerationProfiles = useMemo(() => getImageGenerationProfiles(settings), [settings])
+  const channelModeLocked = Boolean(settings.reuseTaskApiProfileTemporarily && reusedTaskApiProfileId)
+  const channelModeDetail = channelModeLocked
+    ? `正在复用任务配置「${activeProfile.name}」，本次固定单渠道`
+    : channelMode === 'single'
+      ? `单渠道：只用当前配置「${activeProfile.name}」`
+      : galleryGenerationProfiles.length > 1
+        ? `多渠道：同时请求 ${galleryGenerationProfiles.map((profile) => profile.name).join('、')}`
+        : `多渠道目前只勾选了「${galleryGenerationProfiles[0]?.name ?? activeProfile.name}」，可在设置里再勾选配置`
+  const setChannelMode = useCallback((mode: ImageGenerationChannelMode) => {
+    setSettings({ imageGenerationChannelMode: mode })
+  }, [setSettings])
   const activeProvider = activeProfile.provider
   const isFalProvider = activeProvider === 'fal'
   const agentAutoImageCount = appMode === 'agent'
@@ -2173,7 +2187,17 @@ export default function InputBar() {
           {/* 参数 + 按钮 */}
           <div className="mt-3">
             {/* 桌面端布局 */}
-            <div className="hidden sm:flex items-end justify-between gap-3">
+            <div className="hidden sm:flex items-end justify-between gap-2">
+              {appMode === 'gallery' && (
+                <div className="shrink-0">
+                  <ChannelModeSwitch
+                    mode={channelMode}
+                    detail={channelModeDetail}
+                    disabled={channelModeLocked}
+                    onChange={setChannelMode}
+                  />
+                </div>
+              )}
               {renderParams('grid-cols-6')}
 
               <div className="flex gap-2 flex-shrink-0 mb-0.5">
@@ -2239,6 +2263,14 @@ export default function InputBar() {
               </div>
 
               <div className="flex items-center gap-2">
+                {appMode === 'gallery' && (
+                  <ChannelModeSwitch
+                    mode={channelMode}
+                    detail={channelModeDetail}
+                    disabled={channelModeLocked}
+                    onChange={setChannelMode}
+                  />
+                )}
                 <div
                   className="relative"
                   onMouseEnter={() => setAttachHover(true)}

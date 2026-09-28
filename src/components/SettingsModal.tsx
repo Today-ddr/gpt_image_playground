@@ -1700,7 +1700,7 @@ export default function SettingsModal() {
                                 <div className="flex shrink-0 items-center gap-1">
                                   <label
                                     className="flex items-center gap-1 rounded px-1 py-0.5 text-[10px] text-gray-500 dark:text-gray-400"
-                                    title="勾选后参与画廊/Tools 生图并行请求"
+                                    title="勾选后加入多渠道列表。画廊切到多渠道，以及工具并行生图时会请求这些配置"
                                     onClick={(e) => e.stopPropagation()}
                                   >
                                     <input
@@ -1760,7 +1760,7 @@ export default function SettingsModal() {
                     {imageGenerationProfiles.length > 1 ? '（多中转站并行）' : ''}
                   </div>
                   <div className="mt-1 text-[11px] leading-4 text-gray-400 dark:text-gray-500">
-                    在配置下拉列表中勾选「生图」即可加入并行组。语义理解仍只用上方当前配置。
+                    在配置下拉列表中勾选「生图」即可加入多渠道列表。画廊输入栏可切换「单渠道 / 多渠道」：单渠道只用当前配置，多渠道按该列表并行。语义理解仍只用上方当前配置。工具里的并行生图仍按勾选列表。
                   </div>
                 </div>
 

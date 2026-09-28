@@ -658,6 +658,7 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     activeProfileId,
     imageGenerationProfileIds: rawImageGenerationProfileIds,
   })
+  const imageGenerationChannelMode = record.imageGenerationChannelMode === 'single' ? 'single' : 'multi'
 
   return {
     baseUrl: active.baseUrl,
@@ -690,6 +691,7 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     profiles,
     activeProfileId,
     imageGenerationProfileIds,
+    imageGenerationChannelMode,
   }
 }
 

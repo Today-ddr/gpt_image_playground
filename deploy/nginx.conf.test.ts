@@ -18,5 +18,11 @@ describe('docker API proxy nginx config', () => {
     expect(nginxConf).toContain('proxy_set_header Access-Control-Request-Method "";')
     expect(nginxConf).toContain('proxy_set_header Access-Control-Request-Headers "";')
   })
+
+  it('does not cache HTML or the service worker after deploy', () => {
+    expect(nginxConf).toMatch(/location = \/index\.html[\s\S]*Cache-Control "no-cache"/)
+    expect(nginxConf).toMatch(/location = \/sw\.js[\s\S]*Cache-Control "no-cache"/)
+    expect(nginxConf).toMatch(/location \/ \{[\s\S]*Cache-Control "no-cache"/)
+  })
 })
 

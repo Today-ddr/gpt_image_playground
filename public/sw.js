@@ -1,4 +1,4 @@
-const CACHE_NAME = 'gpt-image-playground-v0.8.3'
+const CACHE_NAME = 'gpt-image-playground-v0.8.3-net1'
 const APP_SHELL = ['./', './index.html', './manifest.webmanifest', './pwa-icon.svg']
 const APP_SHELL_URLS = new Set(APP_SHELL.map((path) => new URL(path, self.registration.scope).href))
 const ASSETS_PATH = new URL('./assets/', self.registration.scope).pathname
@@ -14,9 +14,8 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
       Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))),
-    ),
+    ).then(() => self.clients.claim()),
   )
-  self.clients.claim()
 })
 
 self.addEventListener('fetch', (event) => {
@@ -31,8 +30,10 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       fetch(request)
         .then((response) => {
-          const copy = response.clone()
-          caches.open(CACHE_NAME).then((cache) => cache.put('./index.html', copy))
+          if (response.ok) {
+            const copy = response.clone()
+            caches.open(CACHE_NAME).then((cache) => cache.put('./index.html', copy))
+          }
           return response
         })
         .catch(() => caches.match('./index.html')),
@@ -40,7 +41,23 @@ self.addEventListener('fetch', (event) => {
     return
   }
 
-  if (!APP_SHELL_URLS.has(url.href) && !url.pathname.startsWith(ASSETS_PATH)) return
+  // hashed 资源走网络优先：部署后旧 SW 接管时，不要把已删除的旧文件从缓存里配给新页面。
+  if (url.pathname.startsWith(ASSETS_PATH)) {
+    event.respondWith(
+      fetch(request)
+        .then((response) => {
+          if (response.ok) {
+            const copy = response.clone()
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, copy))
+          }
+          return response
+        })
+        .catch(() => caches.match(request).then((cached) => cached || Promise.reject(new Error('asset cache miss')))),
+    )
+    return
+  }
+
+  if (!APP_SHELL_URLS.has(url.href)) return
 
   event.respondWith(
     caches.match(request).then((cached) => {

@@ -778,12 +778,42 @@ function getPersistableAgentConversation(conversation: AgentConversation): Agent
   return getPersistableAgentConversations([conversation])[0]!
 }
 
+const TRANSIENT_REHYDRATE_KEYS = [
+  'tasks',
+  'toast',
+  'confirmDialog',
+  'showSettings',
+  'settingsTabRequest',
+  'detailTaskId',
+  'lightboxImageId',
+  'lightboxImageList',
+  'selectedTaskIds',
+  'selectedFavoriteCollectionIds',
+  'favoritePickerTaskIds',
+  'isManageCollectionsModalOpen',
+  'streamPreviews',
+  'streamPreviewSlots',
+  'searchQuery',
+  'filterStatus',
+  'filterFavorite',
+  'agentMobileHeaderVisible',
+  'agentEditingRoundId',
+  'agentEditingConversationId',
+  'agentGeneratingTitleIds',
+] as const
+
+function omitTransientRehydrateState(persisted: Partial<AppState>): Partial<AppState> {
+  const next: Partial<AppState> = { ...persisted }
+  for (const key of TRANSIENT_REHYDRATE_KEYS) delete next[key]
+  return next
+}
+
 export function mergePersistedState(persistedState: unknown, currentState: AppState): AppState {
   if (!persistedState || typeof persistedState !== 'object') {
     return { ...currentState, afternoonTeaBatchOperationId: null }
   }
 
-  const persisted = persistedState as Partial<AppState>
+  const persisted = omitTransientRehydrateState(persistedState as Partial<AppState>)
   const settings = normalizeSettings(persisted.settings ?? currentState.settings)
   const hasPersistedAgentConversations = Array.isArray(persisted.agentConversations)
   if (hasPersistedAgentConversations && normalizeAgentConversations(persisted.agentConversations).length > 0) {
@@ -812,21 +842,7 @@ export function mergePersistedState(persistedState: unknown, currentState: AppSt
   const normalizedAgentInputDrafts = hasPersistedAgentConversations
     ? normalizeAgentInputDrafts(persisted.agentInputDrafts, agentConversations)
     : normalizeAgentInputDraftsByKey(persisted.agentInputDrafts)
-  let agentInputDrafts = cleanStaleAgentInputDrafts(normalizedAgentInputDrafts, activeAgentConversationId)
-  if (appMode === 'agent' && activeAgentConversationId && !agentInputDrafts[activeAgentConversationId] && settings.persistInputOnRestart && typeof persisted.prompt === 'string') {
-    agentInputDrafts = {
-      ...agentInputDrafts,
-      [activeAgentConversationId]: normalizeAgentInputDraft({
-        prompt: persisted.prompt,
-        inputImages: persisted.inputImages,
-        maskDraft: null,
-        maskEditorImageId: null,
-      }, Date.now()),
-    }
-  }
-  const restoredAgentDraft = appMode === 'agent' && activeAgentConversationId
-    ? agentInputDrafts[activeAgentConversationId] ?? null
-    : null
+  const agentInputDrafts = cleanStaleAgentInputDrafts(normalizedAgentInputDrafts, activeAgentConversationId)
   const favoriteCollections = Array.isArray(persisted.favoriteCollections)
     ? ensureDefaultFavoriteCollection(normalizeFavoriteCollections(persisted.favoriteCollections))
     : currentState.favoriteCollections
@@ -858,10 +874,10 @@ export function mergePersistedState(persistedState: unknown, currentState: AppSt
     params: persisted.params?.quality === 'auto'
       ? { ...DEFAULT_PARAMS, ...persisted.params, quality: 'max' }
       : persisted.params ?? currentState.params,
-    prompt: restoredAgentDraft ? restoredAgentDraft.prompt : galleryInputDraft?.prompt ?? '',
-    inputImages: restoredAgentDraft ? restoredAgentDraft.inputImages : galleryInputDraft?.inputImages ?? [],
-    maskDraft: restoredAgentDraft ? restoredAgentDraft.maskDraft : galleryInputDraft?.maskDraft ?? null,
-    maskEditorImageId: restoredAgentDraft ? restoredAgentDraft.maskEditorImageId : galleryInputDraft?.maskEditorImageId ?? null,
+    prompt: galleryInputDraft?.prompt ?? '',
+    inputImages: galleryInputDraft?.inputImages ?? [],
+    maskDraft: galleryInputDraft?.maskDraft ?? null,
+    maskEditorImageId: galleryInputDraft?.maskEditorImageId ?? null,
     afternoonTeaBatchOperationId: null,
   }
 }
@@ -2712,8 +2728,11 @@ export async function submitTask(options: {
 
   const normalizedSettings = normalizeSettings(settings)
   const activeProfile = getActiveApiProfile(settings)
-  // 必须用原始 settings，以便 getActiveApiProfile 能叠加上层 legacy apiKey 等字段
-  let targetProfiles = getImageGenerationProfiles(settings)
+  // 画廊「单渠道」只用当前配置；「多渠道」按勾选的生图配置并行。
+  // 必须用原始 settings，以便 getActiveApiProfile 能叠加上层 legacy apiKey 等字段。
+  let targetProfiles = normalizedSettings.imageGenerationChannelMode === 'single'
+    ? [activeProfile]
+    : getImageGenerationProfiles(settings)
   if (normalizedSettings.reuseTaskApiProfileTemporarily && (reusedTaskApiProfileId || reusedTaskApiProfileMissing)) {
     const reusedProfile = getReusedTaskApiProfile(normalizedSettings, reusedTaskApiProfileId)
     if (!reusedProfile) {

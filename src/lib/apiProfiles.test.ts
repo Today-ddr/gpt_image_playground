@@ -815,6 +815,13 @@ describe('image generation parallel profiles', () => {
     expect(emptied.imageGenerationProfileIds).toEqual(['second'])
   })
 
+  it('defaults gallery channel mode to multi and keeps an explicit single choice', () => {
+    expect(normalizeSettings({}).imageGenerationChannelMode).toBe('multi')
+    expect(normalizeSettings({ imageGenerationChannelMode: 'single' }).imageGenerationChannelMode).toBe('single')
+    expect(normalizeSettings({ imageGenerationChannelMode: 'multi' }).imageGenerationChannelMode).toBe('multi')
+    expect(normalizeSettings({ imageGenerationChannelMode: 'other' as never }).imageGenerationChannelMode).toBe('multi')
+  })
+
   it('drops deleted profile ids from the parallel group', () => {
     const first = createDefaultOpenAIProfile({ id: 'first', name: 'A', apiKey: 'k1' })
     const second = createDefaultOpenAIProfile({ id: 'second', name: 'B', apiKey: 'k2' })

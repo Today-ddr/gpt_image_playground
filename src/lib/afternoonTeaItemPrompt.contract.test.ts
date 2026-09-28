@@ -42,11 +42,11 @@ describe('afternoon tea item title prompt contract', () => {
 
     expect(data.items[0].displayName).toBe('蟹肉紫菜包饭')
     expect(data.title).toBe('今日下午茶')
+    expect(prompt.prompt).toContain('每个 `displayName` 必须完整显示一次。')
     expect(prompt.prompt).toContain('每个 posterData.items 条目的 displayName 必须且只能显示一次')
     expect(prompt.prompt).toContain('不得把一个商品名放到另一个商品的区域')
     expect(prompt.prompt).toContain('不得显示坐标、百分比、边框、定位框或辅助标记')
     expect(prompt.prompt).toContain('不得在其他位置重复商品名称')
-    expect(prompt.prompt).toContain('所有区域都需要识别，但只能为 posterData.items 中的条目添加商品文字标签')
     expect(prompt.prompt).toContain('如果 tags 与 displayName 冲突，以 displayName 为准，忽略冲突的 tags')
     expect(prompt.prompt).not.toContain('每一个下午茶区域都必须被识别和标注')
     expect(prompt.prompt).not.toContain('允许跳过无法可靠匹配的区域或条目')

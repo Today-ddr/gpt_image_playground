@@ -1,4 +1,4 @@
-import { useEffect, type RefObject } from 'react'
+import { useEffect, useRef, type RefObject } from 'react'
 
 type ScrollBoundaryRef = RefObject<HTMLElement | null>
 type ScrollDelta = { x: number; y: number }
@@ -61,6 +61,9 @@ function canScrollWithin(root: HTMLElement, target: EventTarget | null, delta: S
 }
 
 export function usePreventBackgroundScroll(active: boolean, allowRefs?: ScrollBoundaryRef | ScrollBoundaryRef[]) {
+  const allowRefsRef = useRef(allowRefs)
+  allowRefsRef.current = allowRefs
+
   useEffect(() => {
     if (!active) return
 
@@ -78,7 +81,7 @@ export function usePreventBackgroundScroll(active: boolean, allowRefs?: ScrollBo
     let lastTouchY = 0
 
     const preventOutsideWheel = (event: WheelEvent) => {
-      const root = getAllowedRoot(event.target, allowRefs)
+      const root = getAllowedRoot(event.target, allowRefsRef.current)
       if (!root || !canScrollWithin(root, event.target, { x: event.deltaX, y: event.deltaY })) {
         event.preventDefault()
       }
@@ -93,7 +96,7 @@ export function usePreventBackgroundScroll(active: boolean, allowRefs?: ScrollBo
 
     const preventOutsideTouch = (event: TouchEvent) => {
       const touch = event.touches[0]
-      const root = getAllowedRoot(event.target, allowRefs)
+      const root = getAllowedRoot(event.target, allowRefsRef.current)
       if (!touch || !root) {
         event.preventDefault()
         return
@@ -122,6 +125,6 @@ export function usePreventBackgroundScroll(active: boolean, allowRefs?: ScrollBo
         document.documentElement.style.overscrollBehavior = previousDocumentOverscrollBehavior
       }
     }
-  }, [active, allowRefs])
+  }, [active])
 }
 

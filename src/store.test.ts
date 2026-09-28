@@ -1658,6 +1658,32 @@ describe('mask draft lifecycle in store actions', () => {
     expect(state.showToast).toHaveBeenCalledWith('任务已提交（2 个中转站并行）', 'success')
   })
 
+  it('submits only the active profile when gallery channel mode is single', async () => {
+    const first = createDefaultOpenAIProfile({ id: 'relay-a', name: '中转 A', apiKey: 'key-a', model: 'model-a' })
+    const second = createDefaultOpenAIProfile({ id: 'relay-b', name: '中转 B', apiKey: 'key-b', model: 'model-b' })
+    const settings = normalizeSettings({
+      profiles: [first, second],
+      activeProfileId: first.id,
+      imageGenerationProfileIds: [first.id, second.id],
+      imageGenerationChannelMode: 'single',
+    })
+    useStore.setState({
+      settings,
+      prompt: '单渠道提示词',
+      params: { ...DEFAULT_PARAMS, n: 1 },
+      tasks: [],
+      showToast: vi.fn(),
+    })
+
+    await submitTask()
+
+    const state = useStore.getState()
+    expect(state.tasks).toHaveLength(1)
+    expect(state.tasks[0].apiProfileId).toBe('relay-a')
+    expect(state.tasks[0].generationGroupId).toBeUndefined()
+    expect(state.showToast).toHaveBeenCalledWith('任务已提交', 'success')
+  })
+
   it('does not fan out when reusing a temporary task API profile', async () => {
     const first = createDefaultOpenAIProfile({ id: 'relay-a', name: '中转 A', apiKey: 'key-a', model: 'model-a' })
     const second = createDefaultOpenAIProfile({ id: 'relay-b', name: '中转 B', apiKey: 'key-b', model: 'model-b' })
@@ -2544,6 +2570,36 @@ describe('input persistence setting', () => {
     expect(mergePersistedState({ appMode: 'tools' }, current).appMode).toBe('tools')
     expect(mergePersistedState({ appMode: 'agent' }, current).appMode).toBe('tools')
     expect(mergePersistedState({ appMode: 'gallery' }, current).appMode).toBe('gallery')
+  })
+
+  it('does not restore transient UI state from persisted snapshots', () => {
+    const current = useStore.getState()
+    const restored = mergePersistedState({
+      appMode: 'gallery',
+      showSettings: true,
+      settingsTabRequest: 'api',
+      detailTaskId: 'task-1',
+      lightboxImageId: 'img-1',
+      lightboxImageList: ['img-1'],
+      confirmDialog: { title: '提示', message: '旧弹窗', action: () => {} },
+      tasks: [{ id: 'stale-task' }] as never,
+      selectedTaskIds: ['task-1'],
+      toast: { message: 'hi', type: 'info' },
+      favoritePickerTaskIds: ['task-1'],
+      isManageCollectionsModalOpen: true,
+    }, current)
+
+    expect(restored.appMode).toBe('gallery')
+    expect(restored.showSettings).toBe(current.showSettings)
+    expect(restored.settingsTabRequest).toBe(current.settingsTabRequest)
+    expect(restored.detailTaskId).toBe(current.detailTaskId)
+    expect(restored.lightboxImageId).toBe(current.lightboxImageId)
+    expect(restored.confirmDialog).toBe(current.confirmDialog)
+    expect(restored.tasks).toBe(current.tasks)
+    expect(restored.selectedTaskIds).toEqual(current.selectedTaskIds)
+    expect(restored.toast).toBe(current.toast)
+    expect(restored.favoritePickerTaskIds).toBe(current.favoritePickerTaskIds)
+    expect(restored.isManageCollectionsModalOpen).toBe(current.isManageCollectionsModalOpen)
   })
 })
 

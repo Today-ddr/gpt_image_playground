@@ -25,6 +25,12 @@ import { useGlobalClickSuppression } from './lib/clickSuppression'
 
 let customProviderConfigUrlImportStarted = false
 
+function startStore() {
+  void initStore().catch((error) => {
+    console.error('初始化本地数据失败:', error)
+  })
+}
+
 export default function App() {
   const setSettings = useStore((s) => s.setSettings)
   const appMode = useStore((s) => s.appMode)
@@ -72,7 +78,7 @@ export default function App() {
           clearAppliedUrlSettings()
         })
 
-      initStore()
+      startStore()
       return
     }
 
@@ -95,7 +101,7 @@ export default function App() {
         })
     }
 
-    initStore()
+    startStore()
   }, [setSettings])
 
   useEffect(() => {

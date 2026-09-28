@@ -2,6 +2,8 @@
 
 export type ApiMode = 'images' | 'responses'
 export type AppMode = 'tools' | 'gallery' | 'agent'
+/** 画廊生图渠道：单渠道只用当前配置，多渠道按勾选的生图配置并行 */
+export type ImageGenerationChannelMode = 'single' | 'multi'
 export const REASONING_EFFORT_VALUES = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 export type ReasoningEffort = typeof REASONING_EFFORT_VALUES[number]
 export type ImageQuality = 'auto' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
@@ -131,6 +133,11 @@ export interface AppSettings {
    * 空/缺省时回退为 [activeProfileId]；语义理解仍只用 activeProfileId。
    */
   imageGenerationProfileIds: string[]
+  /**
+   * 画廊生图渠道。single 只用当前配置；multi 按 imageGenerationProfileIds 并行。
+   * 工具里的并行生图不读这个开关。
+   */
+  imageGenerationChannelMode: ImageGenerationChannelMode
 }
 
 // ===== 任务参数 =====

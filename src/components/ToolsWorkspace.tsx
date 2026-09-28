@@ -1122,7 +1122,7 @@ export default function ToolsWorkspace() {
   const [noticeNow, setNoticeNow] = useState(Date.now())
   const [historyOpen, setHistoryOpen] = useState(false)
   const batchItems = activeConversation?.posterItems ?? []
-  const viewItems = deriveAfternoonTeaPosterViewItems(batchItems, tasks)
+  const viewItems = deriveAfternoonTeaPosterViewItems(batchItems, tasks ?? [])
   const batchBusy = Boolean(afternoonTeaBatchOperationId) || batchRunning || retrying
   const busyConversationId = resolveAfternoonTeaBusyConversationId(
     batchRuntimeRef.current?.batchId,

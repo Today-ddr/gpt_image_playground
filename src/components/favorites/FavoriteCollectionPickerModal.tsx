@@ -47,7 +47,7 @@ export function FavoriteCollectionPickerModal() {
   } | null>(null)
   const touchDragRef = useRef<{ id: string, startX: number, startY: number, moved: boolean } | null>(null)
 
-  const selectedTasks = useMemo(() => tasks.filter((task) => taskIds?.includes(task.id)), [tasks, taskIds])
+  const selectedTasks = useMemo(() => (Array.isArray(tasks) ? tasks.filter((task) => taskIds?.includes(task.id)) : []), [tasks, taskIds])
   const selectableCollections = collections
 
   useEffect(() => {
