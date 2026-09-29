@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo, useRef } from 'react'
 import { useStore, getCachedImage, ensureImageCached, reuseConfig, editOutputs, removeTask, showCodexCliPrompt, getCodexCliPromptKey, retryTask } from '../store'
 import { useCloseOnEscape } from '../hooks/useCloseOnEscape'
+import { useImageLoadState } from '../hooks/useImageLoadState'
 import { usePreventBackgroundScroll } from '../hooks/usePreventBackgroundScroll'
 import { useTooltip } from '../hooks/useTooltip'
 import { formatImageRatio } from '../lib/size'
@@ -38,7 +39,6 @@ export default function DetailModal() {
   const [now, setNow] = useState(Date.now())
   const [showRawUrlsModal, setShowRawUrlsModal] = useState(false)
   const [showRawResponseModal, setShowRawResponseModal] = useState(false)
-  const [streamPreviewLoaded, setStreamPreviewLoaded] = useState(false)
   const modalRef = useRef<HTMLDivElement>(null)
   const rawUrlsModalRef = useRef<HTMLDivElement>(null)
   const rawResponseModalRef = useRef<HTMLDivElement>(null)
@@ -83,10 +83,7 @@ export default function DetailModal() {
     }))
   }, [task?.params.n, task?.status, streamPreviewSlots, streamPreviewSrc])
   const activeStreamPreviewSrc = streamPreviewItems[imageIndex]?.src || ''
-
-  useEffect(() => {
-    setStreamPreviewLoaded(false)
-  }, [activeStreamPreviewSrc, detailTaskId, imageIndex])
+  const streamPreview = useImageLoadState(activeStreamPreviewSrc)
 
   useEffect(() => {
     const count = task?.status === 'running'
@@ -642,7 +639,7 @@ export default function DetailModal() {
           )}
           {(task.status === 'running' || isFalReconnecting) && (
             <>
-              <div className="absolute left-4 top-4 flex items-center gap-1 bg-black/50 text-white text-xs px-2 py-0.5 rounded backdrop-blur-sm font-mono">
+              <div className="absolute left-4 top-4 z-10 flex items-center gap-1 bg-black/50 text-white text-xs px-2 py-0.5 rounded backdrop-blur-sm font-mono">
                 <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
@@ -652,21 +649,22 @@ export default function DetailModal() {
                 <>
                   {currentStreamPreviewSrc ? (
                     <img
+                      ref={streamPreview.imgRef}
                       src={currentStreamPreviewSrc}
-                      className={`max-w-[calc(100%-2rem)] max-h-[calc(100%-2rem)] object-contain ${streamPreviewLoaded ? '' : 'hidden'}`}
+                      className={`absolute inset-0 m-auto max-w-[calc(100%-2rem)] max-h-[calc(100%-2rem)] object-contain ${streamPreview.loaded ? 'opacity-100' : 'opacity-0'}`}
                       alt=""
-                      onLoad={() => setStreamPreviewLoaded(true)}
-                      onError={() => setStreamPreviewLoaded(false)}
+                      onLoad={streamPreview.onLoad}
+                      onError={streamPreview.onError}
                     />
                   ) : null}
-                  {(!currentStreamPreviewSrc || !streamPreviewLoaded) && (
-                    <div className="flex flex-col items-center gap-2">
+                  {(!currentStreamPreviewSrc || !streamPreview.loaded) && (
+                    <div className="relative z-10 flex flex-col items-center gap-2">
                       <WandAnimation size={40} className="dark:invert" />
                       <p role="status" className="text-xs text-gray-500 dark:text-gray-400">正在生成图片</p>
                     </div>
                   )}
-                  {streamPreviewLoaded && (
-                    <span className="absolute top-4 right-4 flex items-center gap-1 rounded bg-blue-500 px-2 py-0.5 text-xs font-medium text-white backdrop-blur-sm">
+                  {streamPreview.loaded && (
+                    <span className="absolute top-4 right-4 z-10 flex items-center gap-1 rounded bg-blue-500 px-2 py-0.5 text-xs font-medium text-white backdrop-blur-sm">
                       流式预览
                     </span>
                   )}
@@ -674,7 +672,7 @@ export default function DetailModal() {
                     <>
                       <button
                         onClick={() => setImageIndex((imageIndex - 1 + streamPreviewLen) % streamPreviewLen)}
-                        className="absolute left-2 top-1/2 -translate-y-1/2 p-1.5 rounded-full bg-black/30 text-white hover:bg-black/50 transition"
+                        className="absolute left-2 top-1/2 z-10 -translate-y-1/2 p-1.5 rounded-full bg-black/30 text-white hover:bg-black/50 transition"
                       >
                         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -682,13 +680,13 @@ export default function DetailModal() {
                       </button>
                       <button
                         onClick={() => setImageIndex((imageIndex + 1) % streamPreviewLen)}
-                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-full bg-black/30 text-white hover:bg-black/50 transition"
+                        className="absolute right-2 top-1/2 z-10 -translate-y-1/2 p-1.5 rounded-full bg-black/30 text-white hover:bg-black/50 transition"
                       >
                         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                         </svg>
                       </button>
-                      <span className="absolute bottom-2 left-1/2 -translate-x-1/2 bg-black/50 text-white text-xs px-2 py-0.5 rounded-full">
+                      <span className="absolute bottom-2 left-1/2 z-10 -translate-x-1/2 bg-black/50 text-white text-xs px-2 py-0.5 rounded-full">
                         {imageIndex + 1} / {streamPreviewLen}
                       </span>
                     </>

@@ -1114,4 +1114,213 @@ describe('callImageApi', () => {
       images: ['data:image/png;base64,aW1hZ2U='],
     })
   })
+
+  it('parses Responses API streams that only use single newlines between events', async () => {
+    const streamBody = [
+      'data: {"type":"response.image_generation_call.partial_image","partial_image_index":0,"partial_image_b64":"cGFydGlhbA=="}',
+      'data: {"type":"response.completed","response":{"output":[{"type":"image_generation_call","result":"ZmluYWw=","size":"1024x1024"}]}}',
+      'data: [DONE]',
+    ].join('\n')
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(streamBody, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    }))
+    const partialImages: string[] = []
+
+    const result = await callImageApi({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        apiKey: 'test-key',
+        apiMode: 'responses',
+        streamImages: true,
+        profiles: DEFAULT_SETTINGS.profiles.map((profile) => ({
+          ...profile,
+          apiKey: 'test-key',
+          apiMode: 'responses',
+          streamImages: true,
+        })),
+      },
+      prompt: 'prompt',
+      params: { ...DEFAULT_PARAMS },
+      inputImageDataUrls: [],
+      onPartialImage: (partial: { image: string }) => partialImages.push(partial.image),
+    } as any)
+
+    expect(partialImages).toEqual(['data:image/png;base64,cGFydGlhbA=='])
+    expect(result.images).toEqual(['data:image/png;base64,ZmluYWw='])
+  })
+
+  it('downloads Responses API HTTP image results in gallery mode', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      if (String(input) === 'https://cdn.example/a.png') {
+        return new Response(Uint8Array.from([1, 2, 3]), {
+          status: 200,
+          headers: { 'Content-Type': 'image/png' },
+        })
+      }
+      return new Response(JSON.stringify({
+        output: [{
+          type: 'image_generation_call',
+          result: { url: 'https://cdn.example/a.png' },
+          size: '1024x1024',
+        }],
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    })
+
+    const result = await callImageApi({
+      settings: { ...DEFAULT_SETTINGS, apiKey: 'test-key', apiMode: 'responses' },
+      prompt: 'prompt',
+      params: { ...DEFAULT_PARAMS },
+      inputImageDataUrls: [],
+    })
+
+    expect(fetchMock).toHaveBeenCalledWith('https://cdn.example/a.png', expect.objectContaining({ cache: 'no-store' }))
+    expect(result).toMatchObject({
+      images: ['data:image/png;base64,AQID'],
+      rawImageUrls: ['https://cdn.example/a.png'],
+      actualParams: { size: '1024x1024' },
+    })
+  })
+
+  it('resolves custom async tasks as soon as images are present even if status is still in progress', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify({ task_id: 'task-1' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        data: {
+          status: 'IN_PROGRESS',
+          data: {
+            data: [{ b64_json: 'aW1hZ2U=' }],
+          },
+        },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+
+    await expect(callImageApi({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        baseUrl: 'https://api.example.com/v1',
+        customProviders: [{
+          id: 'custom-async',
+          name: 'Custom Async',
+          template: 'http-image',
+          submit: {
+            path: 'images/generations',
+            method: 'POST',
+            contentType: 'json',
+            body: { model: '$profile.model', prompt: '$prompt' },
+            taskIdPath: 'task_id',
+          },
+          poll: {
+            path: 'images/tasks/{task_id}',
+            method: 'GET',
+            intervalSeconds: 1,
+            statusPath: 'data.status',
+            successValues: ['SUCCESS'],
+            failureValues: ['FAILURE'],
+            result: {
+              imageUrlPaths: ['data.data.data.*.url'],
+              b64JsonPaths: ['data.data.data.*.b64_json'],
+            },
+          },
+        }],
+        profiles: [{
+          ...DEFAULT_SETTINGS.profiles[0],
+          id: 'profile-custom',
+          provider: 'custom-async',
+          baseUrl: 'https://api.example.com/v1',
+          apiKey: 'test-key',
+          model: 'model',
+          timeout: 60,
+        }],
+        activeProfileId: 'profile-custom',
+      },
+      prompt: 'prompt',
+      params: { ...DEFAULT_PARAMS },
+      inputImageDataUrls: [],
+    })).resolves.toEqual({
+      images: ['data:image/png;base64,aW1hZ2U='],
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('stops polling when a successful custom task cannot download its image URL', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.endsWith('/images/generations')) {
+        return new Response(JSON.stringify({ task_id: 'task-1' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+      if (url.includes('/images/tasks/')) {
+        return new Response(JSON.stringify({
+          data: {
+            status: 'SUCCESS',
+            data: {
+              data: [{ url: 'https://cdn.example/a.png' }],
+            },
+          },
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }
+      throw new TypeError('Failed to fetch')
+    })
+
+    await expect(callImageApi({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        baseUrl: 'https://api.example.com/v1',
+        customProviders: [{
+          id: 'custom-async',
+          name: 'Custom Async',
+          template: 'http-image',
+          submit: {
+            path: 'images/generations',
+            method: 'POST',
+            contentType: 'json',
+            body: { model: '$profile.model', prompt: '$prompt' },
+            taskIdPath: 'task_id',
+          },
+          poll: {
+            path: 'images/tasks/{task_id}',
+            method: 'GET',
+            intervalSeconds: 1,
+            statusPath: 'data.status',
+            successValues: ['SUCCESS'],
+            failureValues: ['FAILURE'],
+            result: {
+              imageUrlPaths: ['data.data.data.*.url'],
+              b64JsonPaths: ['data.data.data.*.b64_json'],
+            },
+          },
+        }],
+        profiles: [{
+          ...DEFAULT_SETTINGS.profiles[0],
+          id: 'profile-custom',
+          provider: 'custom-async',
+          baseUrl: 'https://api.example.com/v1',
+          apiKey: 'test-key',
+          model: 'model',
+          timeout: 60,
+        }],
+        activeProfileId: 'profile-custom',
+      },
+      prompt: 'prompt',
+      params: { ...DEFAULT_PARAMS },
+      inputImageDataUrls: [],
+    })).rejects.toThrow(/图片链接下载失败|Failed to fetch/)
+
+    const pollCalls = fetchMock.mock.calls.filter(([input]) => String(input).includes('/images/tasks/'))
+    expect(pollCalls).toHaveLength(1)
+  })
 })

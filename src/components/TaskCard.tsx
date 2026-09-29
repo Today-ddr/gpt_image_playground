@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef, type ReactNode } from 'react'
 import type { TaskRecord } from '../types'
+import { useImageLoadState } from '../hooks/useImageLoadState'
 import { useStore, ensureImageThumbnailCached, subscribeImageThumbnail, retryTask } from '../store'
 import { formatImageRatio } from '../lib/size'
 import { getParamDisplay, ActualValueBadge } from '../lib/paramDisplay'
@@ -79,11 +80,11 @@ export default function TaskCard({
   const [swipeStartedSelected, setSwipeStartedSelected] = useState(false)
   const [swipeActionActive, setSwipeActionActive] = useState(false)
   const [swipeDirection, setSwipeDirection] = useState<-1 | 0 | 1>(0)
-  const [streamPreviewLoaded, setStreamPreviewLoaded] = useState(false)
   const toggleTaskSelection = useStore((s) => s.toggleTaskSelection)
   const settings = useStore((s) => s.settings)
   const openFavoritePicker = useStore((s) => s.openFavoritePicker)
   const streamPreviewSrc = useStore((s) => s.streamPreviews[task.id] || '')
+  const streamPreview = useImageLoadState(streamPreviewSrc)
   const touchStartRef = useRef<{ x: number; y: number } | null>(null)
   const swipeResetTimerRef = useRef<number | null>(null)
   const suppressClickUntilRef = useRef(0)
@@ -237,10 +238,6 @@ export default function TaskCard({
       applySwipeOffset(0)
     }
   }, [isSwiping])
-
-  useEffect(() => {
-    setStreamPreviewLoaded(false)
-  }, [streamPreviewSrc, task.id])
 
   // 定时更新运行中任务的计时
   useEffect(() => {
@@ -409,21 +406,22 @@ export default function TaskCard({
           {task.status === 'running' && streamPreviewSrc && (
             <>
               <img
+                ref={streamPreview.imgRef}
                 src={streamPreviewSrc}
-                className={`h-full w-full object-cover ${streamPreviewLoaded ? '' : 'hidden'}`}
+                className={`absolute inset-0 h-full w-full object-cover ${streamPreview.loaded ? 'opacity-100' : 'opacity-0'}`}
                 alt=""
-                onLoad={() => setStreamPreviewLoaded(true)}
-                onError={() => setStreamPreviewLoaded(false)}
+                onLoad={streamPreview.onLoad}
+                onError={streamPreview.onError}
               />
-              {streamPreviewLoaded && (
-                <span className="absolute top-1.5 right-1.5 flex items-center gap-1 rounded bg-blue-500 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm sm:text-xs">
+              {streamPreview.loaded && (
+                <span className="absolute top-1.5 right-1.5 z-10 flex items-center gap-1 rounded bg-blue-500 px-1.5 py-0.5 text-[10px] font-medium text-white backdrop-blur-sm sm:text-xs">
                   预览
                 </span>
               )}
             </>
           )}
-          {task.status === 'running' && (!streamPreviewSrc || !streamPreviewLoaded) && (
-            <div className="flex flex-col items-center gap-2">
+          {task.status === 'running' && (!streamPreviewSrc || !streamPreview.loaded) && (
+            <div className="relative z-10 flex flex-col items-center gap-2">
               <WandAnimation size={32} className="dark:invert" />
               <p role="status" className="text-xs text-gray-400 dark:text-gray-500">正在生成图片</p>
             </div>

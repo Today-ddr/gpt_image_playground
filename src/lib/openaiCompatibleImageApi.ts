@@ -6,7 +6,6 @@ import { prependCodexCliSizePrompt } from './size'
 import {
   assertImageInputPayloadSize,
   assertMaskEditFileSize,
-  appendStreamingFormatHint,
   maybeAppendImageToolDroppedHint,
   maybeAppendStreamingHint,
   type CallApiOptions,
@@ -22,6 +21,13 @@ import {
   normalizeBase64Image,
   pickActualParams,
 } from './imageApiShared'
+import { readJsonServerSentEvents } from './jsonServerSentEvents'
+import {
+  getImageGenerationItemFromEvent,
+  getResponsesImageResultSource,
+  resolveResponsesImageResultDataUrl,
+  upsertResponsesOutputItems,
+} from './responsesImageResult'
 
 const PROMPT_REWRITE_GUARD_PREFIX = 'Use the following text as the complete prompt. Do not rewrite it:'
 
@@ -113,81 +119,6 @@ function getNumberValue(source: Record<string, unknown>, key: string): number | 
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
-function getStreamEventErrorMessage(event: Record<string, unknown>): string | null {
-  const error = event.error
-  if (isRecordValue(error)) {
-    const message = getStringValue(error, 'message')
-    if (message) return message
-  }
-  if (typeof error === 'string' && error.trim()) return error
-
-  const type = getStringValue(event, 'type')
-  if (type?.endsWith('.failed')) {
-    return getStringValue(event, 'message') ?? '流式请求失败'
-  }
-  return null
-}
-
-function parseServerSentEventBlock(block: string): string | null {
-  const dataLines: string[] = []
-  for (const line of block.split(/\r?\n/)) {
-    if (!line || line.startsWith(':')) continue
-    if (!line.startsWith('data:')) continue
-    dataLines.push(line.slice(5).replace(/^ /, ''))
-  }
-
-  const data = dataLines.join('\n').trim()
-  if (!data || data === '[DONE]') return null
-  return data
-}
-
-async function readJsonServerSentEvents(response: Response, onEvent: (event: Record<string, unknown>) => void | Promise<void>): Promise<void> {
-  if (!response.body) throw new Error('接口未返回可读取的流式响应')
-
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  let hasDataLine = false
-
-  const processBlock = async (block: string) => {
-    if (block.split(/\r?\n/).some((line) => line.startsWith('data:'))) hasDataLine = true
-    const data = parseServerSentEventBlock(block)
-    if (!data) return
-
-    let event: unknown
-    try {
-      event = JSON.parse(data)
-    } catch {
-      throw new Error(appendStreamingFormatHint(data))
-    }
-    if (!isRecordValue(event)) return
-
-    const errorMessage = getStreamEventErrorMessage(event)
-    if (errorMessage) throw new Error(errorMessage)
-
-    await onEvent(event)
-  }
-
-  while (true) {
-    const { value, done } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-
-    let separatorIndex = buffer.search(/\r?\n\r?\n/)
-    while (separatorIndex >= 0) {
-      const block = buffer.slice(0, separatorIndex)
-      const separator = buffer.match(/\r?\n\r?\n/)?.[0] ?? '\n\n'
-      buffer = buffer.slice(separatorIndex + separator.length)
-      await processBlock(block)
-      separatorIndex = buffer.search(/\r?\n\r?\n/)
-    }
-  }
-
-  buffer += decoder.decode()
-  if (buffer.trim()) await processBlock(buffer)
-  if (!hasDataLine) throw new Error(appendStreamingFormatHint('未从流式响应中解析到有效的 data 事件'))
-}
-
 function createResponsesImageTool(
   params: TaskParams,
   isEdit: boolean,
@@ -251,11 +182,12 @@ function createResponsesInput(prompt: string, inputImageDataUrls: string[], addP
   ]
 }
 
-function parseResponsesImageResults(payload: ResponsesApiResponse, fallbackMime: string): Array<{
+async function parseResponsesImageResults(payload: ResponsesApiResponse, fallbackMime: string, signal?: AbortSignal): Promise<Array<{
   image: string
   actualParams?: Partial<TaskParams>
   revisedPrompt?: string
-}> {
+  rawImageUrl?: string
+}>> {
   const output = payload.output
   if (!Array.isArray(output) || !output.length) {
     const err = new Error('接口未返回图片数据')
@@ -263,19 +195,30 @@ function parseResponsesImageResults(payload: ResponsesApiResponse, fallbackMime:
     throw err
   }
 
-  const results: Array<{ image: string; actualParams?: Partial<TaskParams>; revisedPrompt?: string }> = []
+  const results: Array<{ image: string; actualParams?: Partial<TaskParams>; revisedPrompt?: string; rawImageUrl?: string }> = []
+  const rawImageUrls: string[] = []
 
-  for (const item of output) {
-    if (item?.type !== 'image_generation_call') continue
+  try {
+    for (const item of output) {
+      if (item?.type !== 'image_generation_call') continue
 
-    const b64 = getResponsesImageResultBase64(item.result)
-    if (b64) {
-      results.push({
-        image: normalizeBase64Image(b64, fallbackMime),
-        actualParams: mergeActualParams(pickActualParams(item)),
-        revisedPrompt: typeof item.revised_prompt === 'string' ? item.revised_prompt : undefined,
-      })
+      const source = getResponsesImageResultSource(item.result)
+      if (source?.kind === 'url' && isHttpUrl(source.value)) rawImageUrls.push(source.value)
+      const image = await resolveResponsesImageResultDataUrl(item.result, fallbackMime, signal)
+      if (image) {
+        results.push({
+          image,
+          actualParams: mergeActualParams(pickActualParams(item)),
+          revisedPrompt: typeof item.revised_prompt === 'string' ? item.revised_prompt : undefined,
+          ...(source?.kind === 'url' && isHttpUrl(source.value) ? { rawImageUrl: source.value } : {}),
+        })
+      }
     }
+  } catch (err) {
+    if (rawImageUrls.length > 0 && err instanceof Error) {
+      ;(err as Error & { rawImageUrls?: string[] }).rawImageUrls = rawImageUrls
+    }
+    throw err
   }
 
   if (!results.length) {
@@ -285,24 +228,6 @@ function parseResponsesImageResults(payload: ResponsesApiResponse, fallbackMime:
   }
 
   return results
-}
-
-function getResponsesImageResultBase64(result: ResponsesOutputItem['result']): string | undefined {
-  const b64 = typeof result === 'string'
-    ? result
-    : result && typeof result === 'object'
-    ? typeof result.b64_json === 'string'
-      ? result.b64_json
-      : typeof result.base64 === 'string'
-      ? result.base64
-      : typeof result.image === 'string'
-      ? result.image
-      : typeof result.data === 'string'
-      ? result.data
-      : ''
-    : ''
-
-  return b64.trim() ? b64 : undefined
 }
 
 async function parseImagesApiResponse(payload: ImageApiResponse, mime: string, signal?: AbortSignal): Promise<CallApiResult> {
@@ -399,10 +324,10 @@ async function parseImagesApiStreamResponse(
     if (type === 'image_generation.completed' || type === 'image_edit.completed') {
       completedItems.push(eventToImageResponseItem(event))
     }
-  })
+  }, { signals: [signal] })
 
   if (resultPayload) {
-    return parseImagesApiResponse(resultPayload, mime)
+    return parseImagesApiResponse(resultPayload, mime, signal)
   }
 
   if (!completedItems.length) {
@@ -459,6 +384,7 @@ async function parseResponsesApiStreamResponse(
   response: Response,
   mime: string,
   onPartialImage?: CallApiOptions['onPartialImage'],
+  signal?: AbortSignal,
 ): Promise<CallApiResult> {
   let completedPayload: ResponsesApiResponse | null = null
   const outputItems: ResponsesOutputItem[] = []
@@ -476,34 +402,48 @@ async function parseResponsesApiStreamResponse(
       return
     }
 
+    if (type === 'response.image_generation_call.completed') {
+      const item = getImageGenerationItemFromEvent(event)
+      if (item) upsertResponsesOutputItems(outputItems, [item], [getNumberValue(event, 'output_index')])
+    }
+
     const payload = getResponsesStreamPayload(event)
     if (!payload) return
 
-    if (type === 'response.output_item.done' && Array.isArray(payload.output)) {
-      outputItems.push(...payload.output)
-      return
+    if (Array.isArray(payload.output)) {
+      const indices = type === 'response.completed'
+        ? payload.output.map((_, idx) => idx)
+        : [getNumberValue(event, 'output_index')]
+      upsertResponsesOutputItems(outputItems, payload.output, indices)
     }
 
-    completedPayload = payload
-  })
+    if (type === 'response.completed' || isRecordValue(event.response)) {
+      completedPayload = {
+        ...payload,
+        output: outputItems.length ? [...outputItems] : payload.output,
+      }
+    }
+  }, { signals: [signal] })
 
   const payload = completedPayload ?? (outputItems.length ? { output: outputItems } : null)
   if (!payload) throw new Error('流式接口未返回最终图片数据')
 
-  let imageResults: ReturnType<typeof parseResponsesImageResults>
+  let imageResults
   try {
-    imageResults = parseResponsesImageResults(payload, mime)
+    imageResults = await parseResponsesImageResults(payload, mime, signal)
   } catch (err) {
-    const collectedImageItems = outputItems.filter((item) => getResponsesImageResultBase64(item.result))
+    const collectedImageItems = outputItems.filter((item) => getResponsesImageResultSource(item.result))
     if (collectedImageItems.length === 0) throw err
-    imageResults = parseResponsesImageResults({ output: collectedImageItems }, mime)
+    imageResults = await parseResponsesImageResults({ output: collectedImageItems }, mime, signal)
   }
   const actualParams = mergeActualParams(imageResults[0]?.actualParams ?? {})
+  const rawImageUrls = imageResults.flatMap((result) => result.rawImageUrl ? [result.rawImageUrl] : [])
   return {
     images: imageResults.map((result) => result.image),
     actualParams,
     actualParamsList: imageResults.map((result) => mergeActualParams(result.actualParams ?? {})),
     revisedPrompts: imageResults.map((result) => result.revisedPrompt),
+    ...(rawImageUrls.length ? { rawImageUrls } : {}),
   }
 }
 
@@ -854,6 +794,25 @@ async function createCustomMultipartBody(mapping: CustomProviderSubmitMapping, o
   return formData
 }
 
+function isAbortError(err: unknown): boolean {
+  return (typeof DOMException !== 'undefined' && err instanceof DOMException && err.name === 'AbortError')
+    || (err instanceof Error && err.name === 'AbortError')
+}
+
+async function tryExtractCustomImages(
+  payload: unknown,
+  result: CustomProviderResultMapping,
+  mime: string,
+  signal?: AbortSignal,
+): Promise<CallApiResult | null> {
+  try {
+    return await extractCustomImages(payload, result, mime, signal)
+  } catch (err) {
+    if (signal?.aborted || isAbortError(err)) throw err
+    return null
+  }
+}
+
 async function extractCustomImages(payload: unknown, result: CustomProviderResultMapping, mime: string, signal?: AbortSignal): Promise<CallApiResult> {
   const images: string[] = []
   const imageUrls = (result.imageUrlPaths ?? []).flatMap((path) =>
@@ -973,13 +932,11 @@ async function pollCustomTaskResult(
       throw new Error(typeof message === 'string' && message.trim() ? message : '异步任务失败')
     }
     if (state === 'success') {
-      try {
-        return await extractCustomImages(taskPayload, poll.result, mime, signal)
-      } catch (err) {
-        if (!signal?.aborted && isRecoverablePollingError(err)) continue
-        throw err
-      }
+      // 状态已成功：抽图/下载失败直接抛出，避免 recoverable 网络错误导致无限轮询
+      return await extractCustomImages(taskPayload, poll.result, mime, signal)
     }
+    const extracted = await tryExtractCustomImages(taskPayload, poll.result, mime, signal)
+    if (extracted) return extracted
   }
 }
 
@@ -1132,14 +1089,15 @@ async function callResponsesImageApiSingle(opts: CallApiOptions, profile: ApiPro
     }
 
     if (profile.streamImages && isEventStreamResponse(response)) {
-      return parseResponsesApiStreamResponse(response, mime, opts.onPartialImage)
+      return parseResponsesApiStreamResponse(response, mime, opts.onPartialImage, controller.signal)
     }
 
     const payload = await response.json() as ResponsesApiResponse
-    const imageResults = parseResponsesImageResults(payload, mime)
+    const imageResults = await parseResponsesImageResults(payload, mime, controller.signal)
     const actualParams = mergeActualParams(
       imageResults[0]?.actualParams ?? {},
     )
+    const rawImageUrls = imageResults.flatMap((result) => result.rawImageUrl ? [result.rawImageUrl] : [])
     return {
       images: imageResults.map((result) => result.image),
       actualParams,
@@ -1147,6 +1105,7 @@ async function callResponsesImageApiSingle(opts: CallApiOptions, profile: ApiPro
         mergeActualParams(result.actualParams ?? {}),
       ),
       revisedPrompts: imageResults.map((result) => result.revisedPrompt),
+      ...(rawImageUrls.length ? { rawImageUrls } : {}),
     }
   } finally {
     clearTimeout(timeoutId)

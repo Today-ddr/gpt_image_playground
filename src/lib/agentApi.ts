@@ -1,7 +1,13 @@
 import { DEFAULT_AGENT_MAX_TOOL_ROUNDS, DEFAULT_STREAM_PARTIAL_IMAGES, type ApiProfile, type AppSettings, type ResponsesApiResponse, type ResponsesOutputItem, type TaskParams } from '../types'
 import { buildApiUrl, readClientDevProxyConfig, shouldUseApiProxy, withApiProxyHeaders } from './devProxy'
-import { appendStreamingFormatHint, maybeAppendImageToolDroppedHint, maybeAppendStreamingHint, getApiErrorMessage, MIME_MAP, normalizeBase64Image, pickActualParams } from './imageApiShared'
+import { maybeAppendImageToolDroppedHint, maybeAppendStreamingHint, getApiErrorMessage, MIME_MAP, normalizeBase64Image, pickActualParams } from './imageApiShared'
 import { getImageGenerationModel } from './imageModels'
+import { readJsonServerSentEvents, throwIfAborted } from './jsonServerSentEvents'
+import {
+  getImageGenerationItemFromEvent,
+  resolveResponsesImageResultDataUrl,
+  upsertResponsesOutputItems,
+} from './responsesImageResult'
 
 export interface AgentApiResultImage {
   toolCallId?: string
@@ -292,19 +298,6 @@ function applyUrlCitations(text: string, annotations: ResponseTextAnnotation[] |
   return output
 }
 
-function getStreamEventErrorMessage(event: Record<string, unknown>): string | null {
-  const error = event.error
-  if (isRecordValue(error)) {
-    const message = getStringValue(error, 'message')
-    if (message) return message
-  }
-  if (typeof error === 'string' && error.trim()) return error
-
-  const type = getStringValue(event, 'type')
-  if (type?.endsWith('.failed')) return getStringValue(event, 'message') ?? 'Agent 流式请求失败'
-  return null
-}
-
 function getErrorMessageFromValue(value: unknown): string | null {
   if (typeof value === 'string' && value.trim()) return value.trim()
   if (!isRecordValue(value)) return null
@@ -330,91 +323,6 @@ function getImageToolFailureFromOutputItem(event: Record<string, unknown>, item?
   return {
     toolCallId,
     error,
-  }
-}
-
-function parseServerSentEventBlock(block: string): string | null {
-  const dataLines: string[] = []
-  for (const line of block.split(/\r?\n/)) {
-    if (!line || line.startsWith(':')) continue
-    if (!line.startsWith('data:')) continue
-    dataLines.push(line.slice(5).replace(/^ /, ''))
-  }
-
-  const data = dataLines.join('\n').trim()
-  if (!data || data === '[DONE]') return null
-  return data
-}
-
-function getAbortedSignal(signals: Array<AbortSignal | undefined>) {
-  return signals.find((signal) => signal?.aborted)
-}
-
-function throwIfAborted(...signals: Array<AbortSignal | undefined>) {
-  const signal = getAbortedSignal(signals)
-  if (!signal) return
-  throw signal.reason instanceof Error ? signal.reason : new DOMException('请求已停止', 'AbortError')
-}
-
-async function readJsonServerSentEvents(response: Response, onEvent: (event: Record<string, unknown>) => void | Promise<void>, signals: Array<AbortSignal | undefined> = []): Promise<void> {
-  if (!response.body) throw new Error('接口未返回可读取的流式响应')
-
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  let hasDataLine = false
-  const cancelReader = () => {
-    void reader.cancel().catch(() => undefined)
-  }
-  throwIfAborted(...signals)
-  for (const signal of signals) signal?.addEventListener('abort', cancelReader, { once: true })
-
-  const processBlock = async (block: string) => {
-    if (block.split(/\r?\n/).some((line) => line.startsWith('data:'))) hasDataLine = true
-    const data = parseServerSentEventBlock(block)
-    if (!data) return
-
-    let event: unknown
-    try {
-      event = JSON.parse(data)
-    } catch {
-      throw new Error(appendStreamingFormatHint(data))
-    }
-    if (!isRecordValue(event)) return
-
-    const errorMessage = getStreamEventErrorMessage(event)
-    if (errorMessage) throw new Error(errorMessage)
-
-    throwIfAborted(...signals)
-    await onEvent(event)
-    await Promise.resolve()
-    throwIfAborted(...signals)
-  }
-
-  try {
-    while (true) {
-      throwIfAborted(...signals)
-      const { value, done } = await reader.read()
-      throwIfAborted(...signals)
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-
-      let separatorIndex = buffer.search(/\r?\n\r?\n/)
-      while (separatorIndex >= 0) {
-        const block = buffer.slice(0, separatorIndex)
-        const separator = buffer.match(/\r?\n\r?\n/)?.[0] ?? '\n\n'
-        buffer = buffer.slice(separatorIndex + separator.length)
-        await processBlock(block)
-        separatorIndex = buffer.search(/\r?\n\r?\n/)
-      }
-    }
-
-    buffer += decoder.decode()
-    throwIfAborted(...signals)
-    if (buffer.trim()) await processBlock(buffer)
-    if (!hasDataLine) throw new Error(appendStreamingFormatHint('未从流式响应中解析到有效的 data 事件'))
-  } finally {
-    for (const signal of signals) signal?.removeEventListener('abort', cancelReader)
   }
 }
 
@@ -456,75 +364,27 @@ function parseAgentConversationTitleXml(text: string) {
   return `${chars.slice(0, AGENT_TITLE_MAX_LENGTH - 3).join('')}...`
 }
 
-function extractImages(payload: ResponsesApiResponse, fallbackMime: string): AgentApiResultImage[] {
-  const images: AgentApiResultImage[] = []
-
-  for (const item of payload.output ?? []) {
-    if (item.type !== 'image_generation_call') continue
-
-    const result = item.result
-    if (typeof result === 'string' && result.trim()) {
-      images.push({
-        toolCallId: typeof item.id === 'string' ? item.id : undefined,
-        action: typeof item.action === 'string' ? item.action : undefined,
-        dataUrl: normalizeBase64Image(result, fallbackMime),
-        actualParams: pickActualParams(item),
-        revisedPrompt: typeof item.revised_prompt === 'string' ? item.revised_prompt : undefined,
-      })
-      continue
-    }
-
-    if (result && typeof result === 'object') {
-      const b64 = typeof result.b64_json === 'string'
-        ? result.b64_json
-        : typeof result.base64 === 'string'
-        ? result.base64
-        : typeof result.image === 'string'
-        ? result.image
-        : typeof result.data === 'string'
-        ? result.data
-        : ''
-      if (b64.trim()) {
-        images.push({
-          toolCallId: typeof item.id === 'string' ? item.id : undefined,
-          action: typeof item.action === 'string' ? item.action : undefined,
-          dataUrl: normalizeBase64Image(b64, fallbackMime),
-          actualParams: pickActualParams(item),
-          revisedPrompt: typeof item.revised_prompt === 'string' ? item.revised_prompt : undefined,
-        })
-      }
-    }
-  }
-
-  return images
-}
-
-function extractImageFromOutputItem(item: ResponsesOutputItem, fallbackMime: string): AgentApiResultImage | null {
+async function extractImageFromOutputItem(item: ResponsesOutputItem, fallbackMime: string, signal?: AbortSignal): Promise<AgentApiResultImage | null> {
   if (item.type !== 'image_generation_call') return null
 
-  const result = item.result
-  const b64 = typeof result === 'string'
-    ? result
-    : result && typeof result === 'object'
-    ? typeof result.b64_json === 'string'
-      ? result.b64_json
-      : typeof result.base64 === 'string'
-      ? result.base64
-      : typeof result.image === 'string'
-      ? result.image
-      : typeof result.data === 'string'
-      ? result.data
-      : ''
-    : ''
-
-  if (!b64.trim()) return null
+  const dataUrl = await resolveResponsesImageResultDataUrl(item.result, fallbackMime, signal)
+  if (!dataUrl) return null
   return {
     toolCallId: typeof item.id === 'string' ? item.id : undefined,
     action: typeof item.action === 'string' ? item.action : undefined,
-    dataUrl: normalizeBase64Image(b64, fallbackMime),
+    dataUrl,
     actualParams: pickActualParams(item),
     revisedPrompt: typeof item.revised_prompt === 'string' ? item.revised_prompt : undefined,
   }
+}
+
+async function extractImages(payload: ResponsesApiResponse, fallbackMime: string, signal?: AbortSignal): Promise<AgentApiResultImage[]> {
+  const images: AgentApiResultImage[] = []
+  for (const item of payload.output ?? []) {
+    const image = await extractImageFromOutputItem(item, fallbackMime, signal)
+    if (image) images.push(image)
+  }
+  return images
 }
 
 function getStreamResponsePayload(event: Record<string, unknown>): ResponsesApiResponse | null {
@@ -554,26 +414,20 @@ async function parseAgentStreamResponse(
   let streamedText = ''
 
   const publishOutputItems = (items: ResponsesOutputItem[], outputIndices?: Array<number | undefined>) => {
-    for (let i = 0; i < items.length; i += 1) {
-      const item = items[i]
-      const outputIndex = outputIndices?.[i]
-      let index = item.id ? outputItems.findIndex((existing) => existing.id === item.id) : -1
-      // `response.completed` snapshots can omit item ids; match by output slot before appending.
-      if (index < 0 && !item.id && typeof outputIndex === "number" && outputIndex >= 0 && outputIndex < outputItems.length) {
-        const candidate = outputItems[outputIndex]
-        if (candidate?.type === item.type) index = outputIndex
-      }
-      if (index < 0 && !item.id && item.type) {
-        // Fallback for snapshots that do not expose output indices.
-        const sameTypeIndices = outputItems
-          .map((existing, idx) => existing.type === item.type ? idx : -1)
-          .filter((idx) => idx >= 0)
-        if (sameTypeIndices.length === 1) index = sameTypeIndices[0]
-      }
-      if (index >= 0) outputItems[index] = item
-      else outputItems.push(item)
-    }
+    upsertResponsesOutputItems(outputItems, items, outputIndices)
     onOutputItems?.([...outputItems])
+  }
+
+  const completedToolCallIds = new Set<string>()
+  const emitCompletedImage = async (item: ResponsesOutputItem) => {
+    const pendingKey = typeof item.id === 'string' && item.id ? item.id : ''
+    if (pendingKey && completedToolCallIds.has(pendingKey)) return
+    const image = await extractImageFromOutputItem(item, mime, signal)
+    if (!image) return
+    const key = image.toolCallId || image.dataUrl
+    if (completedToolCallIds.has(key)) return
+    completedToolCallIds.add(key)
+    await onImageToolCompleted?.(image)
   }
 
   const publishWebSearchStatus = (event: Record<string, unknown>, status: string, actionType?: string) => {
@@ -637,6 +491,21 @@ async function parseAgentStreamResponse(
       return
     }
 
+    if (type === 'response.image_generation_call.completed') {
+      const item = getImageGenerationItemFromEvent(event)
+      if (item) {
+        publishOutputItems([item], [getNumberValue(event, 'output_index')])
+        const merged = (item.id ? outputItems.find((existing) => existing.id === item.id) : undefined) ?? item
+        const imageFailure = getImageToolFailureFromOutputItem(event, merged)
+        if (imageFailure) {
+          await onImageToolFailed?.(imageFailure)
+          return
+        }
+        await emitCompletedImage(merged)
+      }
+      return
+    }
+
     const payload = getStreamResponsePayload(event)
     if (!payload) return
 
@@ -659,21 +528,23 @@ async function parseAgentStreamResponse(
 
     if (type === 'response.output_item.done') {
       const item = payload.output?.[0]
-      const imageFailure = getImageToolFailureFromOutputItem(event, item)
+      const merged = (item?.id ? outputItems.find((existing) => existing.id === item.id) : undefined) ?? item
+      const imageFailure = getImageToolFailureFromOutputItem(event, merged)
       if (imageFailure) {
         await onImageToolFailed?.(imageFailure)
         return
       }
-
-      const image = item ? extractImageFromOutputItem(item, mime) : null
-      if (image) await onImageToolCompleted?.(image)
+      if (merged) await emitCompletedImage(merged)
       return
     }
 
     if (type === 'response.completed' || isRecordValue(event.response)) {
-      completedPayload = payload
+      completedPayload = {
+        ...payload,
+        output: outputItems.length ? [...outputItems] : payload.output,
+      }
     }
-  }, [signal, callerSignal])
+  }, { signals: [signal, callerSignal], failedEventFallback: 'Agent 流式请求失败' })
 
   throwIfAborted(signal, callerSignal)
   const payload: ResponsesApiResponse | null = completedPayload ?? (outputItems.length ? { output: outputItems } : null)
@@ -683,7 +554,7 @@ async function parseAgentStreamResponse(
   return {
     responseId: payload.id,
     text,
-    images: extractImages(payload, mime),
+    images: await extractImages(payload, mime, signal),
     outputItems: payload.output ?? [],
     rawResponsePayload: JSON.stringify(payload, null, 2),
   }
@@ -747,7 +618,7 @@ export async function callAgentResponsesApi(opts: {
     return {
       responseId: payload.id,
       text: extractText(payload),
-      images: extractImages(payload, mime),
+      images: await extractImages(payload, mime, controller.signal),
       outputItems: payload.output,
       rawResponsePayload: JSON.stringify(payload, null, 2),
     }
@@ -934,11 +805,10 @@ export async function callBatchImageSingle(opts: {
           return
         }
 
-        if (type === 'response.output_item.done') {
-          const payload = getStreamResponsePayload(event)
-          const item = payload?.output?.[0]
-          if (item) {
-            const img = extractImageFromOutputItem(item, mime)
+        if (type === 'response.output_item.done' || type === 'response.image_generation_call.completed') {
+          const item = getImageGenerationItemFromEvent(event) ?? getStreamResponsePayload(event)?.output?.[0]
+          if (item && !completedImage) {
+            const img = await extractImageFromOutputItem(item, mime, controller.signal)
             if (img) {
               completedImage = img
               await onImageToolCompleted?.(img)
@@ -951,14 +821,14 @@ export async function callBatchImageSingle(opts: {
           const payload = getStreamResponsePayload(event)
           if (payload) rawPayload = JSON.stringify(payload, null, 2)
           if (!completedImage && payload) {
-            const images = extractImages(payload, mime)
+            const images = await extractImages(payload, mime, controller.signal)
             if (images.length > 0) {
               completedImage = images[0]
               await onImageToolCompleted?.(completedImage)
             }
           }
         }
-      }, [controller.signal, signal])
+      }, { signals: [controller.signal, signal], failedEventFallback: 'Agent 流式请求失败' })
 
       return {
         batchItemId,
@@ -970,7 +840,7 @@ export async function callBatchImageSingle(opts: {
 
     // Non-streaming
     const payload = await response.json() as ResponsesApiResponse
-    const images = extractImages(payload, mime)
+    const images = await extractImages(payload, mime, controller.signal)
     const image = images[0] ?? null
     if (image) await onImageToolCompleted?.(image)
     return {

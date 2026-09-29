@@ -350,4 +350,117 @@ describe('callAgentResponsesApi', () => {
     expect(result.text).toBe("hi!")
     expect(outputItemSnapshots[outputItemSnapshots.length - 1]).toBe(1)
   })
+
+  it('keeps image results when the completed snapshot omits result', async () => {
+    const streamBody = [
+      'data: {"type":"response.output_item.done","item":{"id":"ig_1","type":"image_generation_call","result":"ZmluYWw=","size":"1024x1024"},"output_index":0}',
+      '',
+      'data: {"type":"response.completed","response":{"id":"resp_1","output":[{"type":"image_generation_call","status":"completed","result":""}]}}',
+      '',
+      'data: [DONE]',
+      '',
+    ].join('\n')
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(streamBody, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    }))
+    const completed: string[] = []
+    const profile = createDefaultOpenAIProfile({
+      apiKey: 'test-key',
+      apiMode: 'responses',
+      streamImages: true,
+    })
+
+    const result = await callAgentResponsesApi({
+      settings: DEFAULT_SETTINGS,
+      profile,
+      params: DEFAULT_PARAMS,
+      input: [{ role: 'user', content: [{ type: 'input_text', text: 'prompt' }] }],
+      onImageToolCompleted: (image) => {
+        completed.push(image.dataUrl)
+      },
+    })
+
+    expect(completed).toEqual(['data:image/png;base64,ZmluYWw='])
+    expect(result).toMatchObject({
+      responseId: 'resp_1',
+      images: [{
+        toolCallId: 'ig_1',
+        dataUrl: 'data:image/png;base64,ZmluYWw=',
+        actualParams: { size: '1024x1024' },
+      }],
+    })
+  })
+
+  it('reads image_generation_call.completed events and HTTP image results', async () => {
+    const streamBody = [
+      'data: {"type":"response.image_generation_call.completed","item_id":"ig_url","result":{"url":"https://cdn.example/a.png"}}',
+      '',
+      'data: {"type":"response.completed","response":{"id":"resp_1","output":[{"id":"ig_url","type":"image_generation_call","result":{"url":"https://cdn.example/a.png"}}]}}',
+      '',
+      'data: [DONE]',
+      '',
+    ].join('\n')
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      if (String(input) === 'https://cdn.example/a.png') {
+        return new Response(Uint8Array.from([1, 2, 3]), {
+          status: 200,
+          headers: { 'Content-Type': 'image/png' },
+        })
+      }
+      return new Response(streamBody, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      })
+    })
+    const profile = createDefaultOpenAIProfile({
+      apiKey: 'test-key',
+      apiMode: 'responses',
+      streamImages: true,
+    })
+
+    const result = await callAgentResponsesApi({
+      settings: DEFAULT_SETTINGS,
+      profile,
+      params: DEFAULT_PARAMS,
+      input: [{ role: 'user', content: [{ type: 'input_text', text: 'prompt' }] }],
+    })
+
+    expect(fetchMock).toHaveBeenCalledWith('https://cdn.example/a.png', expect.objectContaining({ cache: 'no-store' }))
+    expect(result.images).toEqual([{
+      toolCallId: 'ig_url',
+      dataUrl: 'data:image/png;base64,AQID',
+      actualParams: {},
+    }])
+  })
+
+  it('parses Agent streams that only use single newlines between events', async () => {
+    const streamBody = [
+      'data: {"type":"response.output_text.delta","delta":"Hi"}',
+      'data: {"type":"response.completed","response":{"id":"resp_1","output":[{"type":"message","content":[{"type":"output_text","text":"Hi"}]},{"type":"image_generation_call","id":"ig_1","result":"ZmluYWw="}]}}',
+      'data: [DONE]',
+    ].join('\n')
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(streamBody, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    }))
+    const profile = createDefaultOpenAIProfile({
+      apiKey: 'test-key',
+      apiMode: 'responses',
+      streamImages: true,
+    })
+
+    const result = await callAgentResponsesApi({
+      settings: DEFAULT_SETTINGS,
+      profile,
+      params: DEFAULT_PARAMS,
+      input: [{ role: 'user', content: [{ type: 'input_text', text: 'prompt' }] }],
+    })
+
+    expect(result).toMatchObject({
+      responseId: 'resp_1',
+      text: 'Hi',
+      images: [{ toolCallId: 'ig_1', dataUrl: 'data:image/png;base64,ZmluYWw=' }],
+    })
+  })
 })

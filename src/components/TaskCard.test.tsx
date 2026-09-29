@@ -98,6 +98,7 @@ async function getRetryButton(
     return {
       ...react,
       useEffect: () => {},
+      useLayoutEffect: () => {},
       useRef: (initial: unknown) => ({ current: initial }),
       useState: (initial: unknown) => [typeof initial === 'function' ? (initial as () => unknown)() : initial, () => {}],
     }

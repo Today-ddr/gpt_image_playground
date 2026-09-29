@@ -464,6 +464,8 @@ export interface ResponsesOutputItem {
     base64?: string
     image?: string
     data?: string
+    url?: string
+    image_url?: string
   }
   size?: string
   quality?: string
